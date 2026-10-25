@@ -231,6 +231,15 @@ QWidget *PropertyPanel::buildCompositionPage()
     v->addWidget(overlay);
     m_setupOnly << overlay;
 
+    // Masks on the composition: drawn on the input map, applied to everything that goes out.
+    auto *compMasks = new QGroupBox(tr("Composition masks"));
+    auto *cml = new QVBoxLayout(compMasks);
+    m_compMasks = new MaskEditor(m_doc);
+    m_compMasks->setTarget(kCompositionMasks);
+    cml->addWidget(m_compMasks);
+    v->addWidget(compMasks);
+    m_setupOnly << compMasks;
+
     auto *groups = new QGroupBox(tr("Layer groups"));
     auto *gl = new QVBoxLayout(groups);
     m_groupList = new QVBoxLayout;
@@ -320,6 +329,7 @@ void PropertyPanel::refreshComposition()
     setValue(m_overlayOpacity, qRound(p.overlayOpacity * 100.0));
     m_maskToPanels->setChecked(p.maskToPanels);
     m_compFx->setLayer(-1);
+    m_compMasks->refresh();
     if (int(p.groups.size()) != m_builtGroups)
         rebuildGroups();
 }
@@ -1525,7 +1535,7 @@ void PropertyPanel::refreshScreen()
     setValue(m_screenW, s->width);
     setValue(m_screenH, s->height);
     m_cabinets->setScreen(m_sel.screen);
-    m_masks->setScreen(m_sel.screen);
+    m_masks->setTarget(m_sel.screen);
     int di = m_display->findData(s->display);
     if (di < 0 && !s->display.isEmpty()) {
         m_display->addItem(tr("%1 (not connected)").arg(s->display), s->display);

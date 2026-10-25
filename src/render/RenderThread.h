@@ -277,6 +277,8 @@ private:
     QByteArray m_overlayKey;
     QRhiTexture *m_maskTex = nullptr;
     QByteArray m_maskKey;
+    QRhiTexture *m_compMaskTex = nullptr; // the composition's masks (null = none)
+    QByteArray m_compMaskKey;
     QRhiReadbackResult m_readback[kPreviewViews];
     bool m_readbackPending[kPreviewViews] = {};
     bool m_readbackDone[kPreviewViews] = {};

@@ -327,7 +327,7 @@ void RenderThread::syncMaskOverlays(QRhiResourceUpdateBatch *u)
             QJsonArray pts;
             for (const QPointF &pt : m.points)
                 pts << pt.x() << pt.y();
-            masks.append(QJsonArray{m.enabled, m.invert, m.feather, pts});
+            masks.append(QJsonArray{m.enabled, m.invert, m.smooth, m.feather, pts});
         }
         const QByteArray key = QJsonDocument(QJsonArray{s.width, s.height, masks}).toJson(QJsonDocument::Compact);
         ScreenOverlay &o = m_maskOverlays[i];
@@ -631,6 +631,8 @@ void RenderThread::run()
     m_maskOverlays.clear();
     delete m_maskTex;
     m_maskTex = nullptr;
+    delete m_compMaskTex;
+    m_compMaskTex = nullptr;
     m_yuv.release();
     m_quad.release();
     delete m_rhi;
@@ -1262,6 +1264,38 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
             mask.dst = QRectF(QPointF(), compSize);
             mask.texture = m_maskTex;
             mask.blend = RhiQuad::Blend::Multiply;
+            compDraws.append(mask);
+        }
+    }
+    {
+        // Composition masks: black over what they cover, before the panel overlay and the master.
+        QJsonArray masks;
+        for (const ProjectionMask &m : p.compMasks) {
+            QJsonArray pts;
+            for (const QPointF &pt : m.points)
+                pts << pt.x() << pt.y();
+            masks.append(QJsonArray{m.enabled, m.invert, m.smooth, m.feather, pts});
+        }
+        const QByteArray key =
+            QJsonDocument(QJsonArray{p.compWidth, p.compHeight, masks}).toJson(QJsonDocument::Compact);
+        if (key != m_compMaskKey) {
+            m_compMaskKey = key;
+            const QImage img = Patterns::maskOverlay(p.compMasks, p.compSize());
+            if (img.isNull()) {
+                if (m_compMaskTex) {
+                    m_quad.forgetTexture(m_compMaskTex);
+                    m_compMaskTex->deleteLater();
+                    m_compMaskTex = nullptr;
+                }
+            } else {
+                uploadImage(u, m_compMaskTex, img);
+            }
+        }
+        if (m_compMaskTex) {
+            RhiQuad::Params mask;
+            mask.target = compSize;
+            mask.dst = QRectF(QPointF(), compSize);
+            mask.texture = m_compMaskTex;
             compDraws.append(mask);
         }
     }

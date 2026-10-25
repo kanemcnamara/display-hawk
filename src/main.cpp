@@ -15,6 +15,8 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <QMouseEvent>
+#include "ui/CanvasView.h"
 #include "ui/OutputSetupWindow.h"
 #include "ui/OutputMonitor.h"
 #include "control/Osc.h"
@@ -1089,6 +1091,67 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         });
         check(masked && inverted && soft, "projection masks black out with soft edges");
         p.screens[0].masks.clear();
+
+        // Composition masks: a smooth ellipse cuts a hole in the composition (and so the outputs);
+        // then one drawn with the mouse on the input map.
+        {
+            const QSize comp = p.compSize();
+            const double w = comp.width(), h = comp.height();
+            const QRectF box(w * 0.25, h * 0.25, w * 0.5, h * 0.5);
+            ProjectionMask ellipse = ProjectionMask::ellipse(box);
+            ellipse.feather = 0;
+            const QPolygonF outline = ellipse.outline();
+            double worst = 0.0; // how far the curve strays from the true ellipse, relative to its radius
+            for (const QPointF &pt : outline) {
+                const double dx = (pt.x() - box.center().x()) / (box.width() / 2);
+                const double dy = (pt.y() - box.center().y()) / (box.height() / 2);
+                worst = qMax(worst, qAbs(qSqrt(dx * dx + dy * dy) - 1.0));
+            }
+            p.compMasks = {ellipse};
+            doc.notifyChanged(true);
+            const int mv = OutputMonitor::kView;
+            auto grey = [&](int view, double x, double y, const QSize &space) { return qGray(pixelAt(view, {x, y}, space).rgb()); };
+            const bool hole = waitFor([&] {
+                return grey(mv, w * 0.5, h * 0.5, comp) < 10 && grey(mv, w * 0.27, h * 0.27, comp) > 240
+                    && grey(mv, w * 0.1, h * 0.5, comp) > 240;
+            });
+            save(previews[mv], "composition-mask-ellipse");
+            const bool onOutput = waitFor([&] { return grey(1, 960, 540, screen) < 10 && grey(1, 100, 540, screen) > 240; });
+            check(worst < 0.015 && outline.size() > 8 && hole && onOutput,
+                  qPrintable(QStringLiteral("composition mask: a smooth ellipse cuts the composition and the outputs (curve within %1%)")
+                                 .arg(worst * 100.0, 0, 'f', 2)));
+
+            p.compMasks.clear();
+            doc.notifyChanged(true);
+            CanvasView *in = window.outputSetup()->inputView();
+            doc.setMaskDrawTarget(kCompositionMasks);
+            auto click = [&](const QPointF &canvasPt) {
+                const QPointF at = in->widgetPos(canvasPt);
+                QMouseEvent press(QEvent::MouseButtonPress, at, in->mapToGlobal(at), Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
+                QApplication::sendEvent(in, &press);
+                QMouseEvent release(QEvent::MouseButtonRelease, at, in->mapToGlobal(at), Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+                QApplication::sendEvent(in, &release);
+            };
+            const QPointF a(w * 0.1, h * 0.2), b(w * 0.5, h * 0.2), c(w * 0.3, h * 0.8);
+            click(a);
+            click(b);
+            click(c);
+            waitMs(100);
+            in->grab().save(QStringLiteral("%1/mask-drawing.png").arg(outDir));
+            click(a); // the first point again closes the shape
+            const bool drawn = p.compMasks.size() == 1 && p.compMasks[0].points.size() == 3
+                && (p.compMasks[0].points[1] - b).manhattanLength() < 6 && doc.maskDrawTarget() == -1
+                && doc.activeMaskScreen() == kCompositionMasks && doc.activeMask() == 0;
+            const bool cut = waitFor([&] { return grey(mv, w * 0.3, h * 0.4, comp) < 10 && grey(mv, w * 0.9, h * 0.9, comp) > 240; });
+            save(previews[mv], "composition-mask-drawn");
+            check(drawn && cut, "drawing a mask on the input map: click points, click the first one to close");
+            doc.select(Selection::composition());
+            waitMs(300);
+            window.outputSetup()->grab().save(QStringLiteral("%1/composition-masks-window.png").arg(outDir));
+            doc.setActiveMask(-1, -1);
+            p.compMasks.clear();
+            doc.notifyChanged(true);
+        }
         doc.setClip(0, 2, Clip::fromPattern(TestPattern::ColorBars));
 
         p.screens[0].slices = savedSlices;

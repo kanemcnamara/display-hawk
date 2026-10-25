@@ -323,11 +323,16 @@ void boxBlur(QImage &img, int radius)
 
 QImage maskOverlay(const Screen &screen)
 {
-    const QSize size = QSize(screen.width, screen.height).expandedTo(QSize(1, 1));
+    return maskOverlay(screen.masks, QSize(screen.width, screen.height));
+}
+
+QImage maskOverlay(const QVector<ProjectionMask> &masks, const QSize &canvas)
+{
+    const QSize size = canvas.expandedTo(QSize(1, 1));
     QImage blackout(size, QImage::Format_Grayscale8); // 255 = blacked out
     blackout.fill(0);
     bool any = false;
-    for (const ProjectionMask &m : screen.masks) {
+    for (const ProjectionMask &m : masks) {
         if (!m.enabled || m.points.size() < 3)
             continue;
         any = true;
@@ -338,7 +343,7 @@ QImage maskOverlay(const Screen &screen)
             p.setRenderHint(QPainter::Antialiasing);
             p.setPen(Qt::NoPen);
             p.setBrush(m.invert ? Qt::black : Qt::white);
-            p.drawPolygon(m.points);
+            p.drawPolygon(m.outline());
         }
         // Three box passes of radius r spread an edge over about 3r pixels.
         boxBlur(shape, qRound(m.feather / 3.0));

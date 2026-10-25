@@ -5,6 +5,7 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QJsonArray>
+#include <QtMath>
 #include <QUuid>
 
 QString testPatternName(TestPattern p)
@@ -113,7 +114,76 @@ QPointF catmullRom(const QPointF &p0, const QPointF &p1, const QPointF &p2, cons
     return 0.5 * ((2 * p1) + (-p0 + p2) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f2 + (-p0 + 3 * p1 - 3 * p2 + p3) * f3);
 }
 
+QJsonArray masksToJson(const QVector<ProjectionMask> &masks)
+{
+    QJsonArray arr;
+    for (const ProjectionMask &m : masks) {
+        QJsonArray pts;
+        for (const QPointF &pt : m.points)
+            pts << pt.x() << pt.y();
+        arr.append(QJsonObject{{"name", m.name}, {"enabled", m.enabled}, {"invert", m.invert}, {"smooth", m.smooth},
+                               {"feather", m.feather}, {"points", pts}});
+    }
+    return arr;
+}
+
+QVector<ProjectionMask> masksFromJson(const QJsonArray &arr)
+{
+    QVector<ProjectionMask> out;
+    for (const QJsonValue &mv : arr) {
+        const QJsonObject mo = mv.toObject();
+        ProjectionMask m;
+        m.name = mo["name"].toString(m.name);
+        m.enabled = mo["enabled"].toBool(true);
+        m.invert = mo["invert"].toBool(false);
+        m.smooth = mo["smooth"].toBool(false);
+        m.feather = qMax(0.0, mo["feather"].toDouble(20.0));
+        const QJsonArray pts = mo["points"].toArray();
+        for (int k = 0; k + 1 < pts.size(); k += 2)
+            m.points << QPointF(pts[k].toDouble(), pts[k + 1].toDouble());
+        if (m.points.size() >= 3)
+            out.append(m);
+    }
+    return out;
+}
+
 } // namespace
+
+QPolygonF ProjectionMask::outline() const
+{
+    const int n = int(points.size());
+    if (!smooth || n < 3)
+        return points;
+    // Closed Catmull-Rom: the curve passes through every point.
+    constexpr int kSteps = 16;
+    QPolygonF out;
+    out.reserve(n * kSteps);
+    for (int i = 0; i < n; ++i) {
+        const QPointF &p0 = points[(i + n - 1) % n], &p1 = points[i], &p2 = points[(i + 1) % n], &p3 = points[(i + 2) % n];
+        for (int k = 0; k < kSteps; ++k)
+            out << catmullRom(p0, p1, p2, p3, double(k) / kSteps);
+    }
+    return out;
+}
+
+ProjectionMask ProjectionMask::rectangle(const QRectF &r)
+{
+    ProjectionMask m;
+    m.points = QPolygonF({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+    return m;
+}
+
+ProjectionMask ProjectionMask::ellipse(const QRectF &r)
+{
+    // Catmull-Rom through 8 points on the ellipse stays within about 1% of it.
+    ProjectionMask m;
+    m.smooth = true;
+    for (int k = 0; k < 8; ++k) {
+        const double a = k * M_PI / 4.0;
+        m.points << QPointF(qRound(r.center().x() + r.width() / 2 * qCos(a)), qRound(r.center().y() + r.height() / 2 * qSin(a)));
+    }
+    return m;
+}
 
 QPointF Slice::outputPoint(double s, double t) const
 {
@@ -898,14 +968,7 @@ QJsonObject Project::toJson() const
                                          {"portCapacity", c.portCapacity},
                                          {"firstPort", c.firstPort},
                                          {"newLinePerPort", c.newLinePerPort}});
-        QJsonArray maskArr;
-        for (const ProjectionMask &m : s.masks) {
-            QJsonArray pts;
-            for (const QPointF &pt : m.points)
-                pts << pt.x() << pt.y();
-            maskArr.append(QJsonObject{{"name", m.name}, {"enabled", m.enabled}, {"invert", m.invert},
-                                       {"feather", m.feather}, {"points", pts}});
-        }
+        const QJsonArray maskArr = masksToJson(s.masks);
         screenArr.append(QJsonObject{{"name", s.name},
                                      {"width", s.width},
                                      {"height", s.height},
@@ -991,6 +1054,7 @@ QJsonObject Project::toJson() const
                                   {"serpentine", f.serpentine}, {"universe", f.universe}, {"address", f.address},
                                   {"order", int(f.order)}});
     root["fixtures"] = fixArr;
+    root["compMasks"] = masksToJson(compMasks);
     root["dmxOut"] = QJsonObject{{"enabled", dmxOut.enabled}, {"protocol", int(dmxOut.protocol)},
                                  {"target", dmxOut.target}, {"rate", dmxOut.rate}};
     root["timecode"] = QJsonObject{{"source", int(timecodeSource)}, {"fps", timecodeFps}};
@@ -1116,19 +1180,7 @@ Project Project::fromJson(const QJsonObject &root)
             c.newLinePerPort = lo["newLinePerPort"].toBool(false);
             s.cabinetLayouts.append(c);
         }
-        for (const QJsonValue &mv : o["masks"].toArray()) {
-            const QJsonObject mo = mv.toObject();
-            ProjectionMask m;
-            m.name = mo["name"].toString(m.name);
-            m.enabled = mo["enabled"].toBool(true);
-            m.invert = mo["invert"].toBool(false);
-            m.feather = qMax(0.0, mo["feather"].toDouble(20.0));
-            const QJsonArray pts = mo["points"].toArray();
-            for (int k = 0; k + 1 < pts.size(); k += 2)
-                m.points << QPointF(pts[k].toDouble(), pts[k + 1].toDouble());
-            if (m.points.size() >= 3)
-                s.masks.append(m);
-        }
+        s.masks = masksFromJson(o["masks"].toArray());
         p.screens.append(s);
     }
 
@@ -1207,6 +1259,7 @@ Project Project::fromJson(const QJsonObject &root)
         c.time = o["time"].toDouble(-1.0);
         p.cues.append(c);
     }
+    p.compMasks = masksFromJson(root["compMasks"].toArray());
     for (const QJsonValue &v : root["fixtures"].toArray()) {
         const QJsonObject o = v.toObject();
         PixelFixture f;

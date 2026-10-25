@@ -155,15 +155,25 @@ struct Slice {
     QPolygonF inputPolygon() const;
 };
 
-// A projection mask on a screen: a polygon (screen pixels) whose inside is blacked out, or with
-// `invert` everything outside it, with a soft edge `feather` pixels wide.
+// A mask: a free-form shape whose inside is blacked out, or with `invert` everything outside it,
+// with a soft edge `feather` pixels wide. On a screen (projection masks, screen pixels) or on the
+// composition (composition pixels: odd LED shapes, content cut to a shape). The points are the
+// corners of a polygon, or with `smooth` the control points of a closed curve through them.
 struct ProjectionMask {
     QString name = QStringLiteral("Mask");
     bool enabled = true;
     bool invert = false;
+    bool smooth = false;
     double feather = 20.0;
     QPolygonF points;
+
+    // The shape as drawn: the points, or the smooth curve through them, as a polygon.
+    QPolygonF outline() const;
+    static ProjectionMask rectangle(const QRectF &r);
+    static ProjectionMask ellipse(const QRectF &r); // a smooth curve through 8 points
 };
+// The mask list of the composition, where the Document's mask targets name a screen by index.
+constexpr int kCompositionMasks = -2;
 
 // How a wall's cabinets are laid out on a processor's output canvas, one slice per fitted cabinet.
 enum class CabinetArrange { WallShape = 0, PackRows, PackColumns };
@@ -506,6 +516,7 @@ struct Project {
     QVector<Deck> decks; // empty = one deck with every column
     QVector<Cue> cues;
     QVector<PixelFixture> fixtures;
+    QVector<ProjectionMask> compMasks; // over the composition, after effects, before the master
     DmxOutputSettings dmxOut;
     TimecodeSource timecodeSource = TimecodeSource::Off;
     double timecodeFps = 25.0; // for showing and typing cue times (incoming timecode reports its own)

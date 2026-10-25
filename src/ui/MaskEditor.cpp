@@ -21,54 +21,89 @@ MaskEditor::MaskEditor(Document *doc, QWidget *parent)
     m_list = new QVBoxLayout;
     m_list->setSpacing(4);
     v->addLayout(m_list);
-    auto *add = new QPushButton(tr("Add mask"));
-    add->setToolTip(tr("Black out part of this output (or everything outside a shape) with a soft edge"));
-    v->addWidget(add);
-    auto *help = new QLabel(tr("Edit a mask to drag its points on the output map; double-click an edge to add a "
-                               "point, Alt+click a point to remove it, drag inside to move the whole mask."));
+    m_draw = new QPushButton(tr("Draw"));
+    m_draw->setCheckable(true);
+    m_draw->setToolTip(tr("Click points on the map; click the first point, double-click or press Enter to close "
+                          "the shape. Backspace removes the last point, Esc cancels."));
+    auto *rect = new QPushButton(tr("Rectangle"));
+    auto *ellipse = new QPushButton(tr("Ellipse"));
+    auto *buttons = new QHBoxLayout;
+    buttons->addWidget(new QLabel(tr("Add mask:")));
+    buttons->addWidget(m_draw);
+    buttons->addWidget(rect);
+    buttons->addWidget(ellipse);
+    buttons->addStretch();
+    v->addLayout(buttons);
+    auto *help = new QLabel(tr("Edit a mask to drag its points on the map; double-click an edge to add a point, "
+                               "Alt+click a point to remove it, drag inside to move the whole mask. Smooth turns the "
+                               "points into a curve through them."));
     help->setWordWrap(true);
     help->setEnabled(false);
     v->addWidget(help);
 
-    connect(add, &QPushButton::clicked, this, [this] {
-        Project &p = m_doc->project();
-        if (m_screen < 0 || m_screen >= p.screens.size())
+    auto addShape = [this](bool round) {
+        const QSizeF size = canvasSize();
+        if (size.isEmpty())
             return;
-        Screen &s = p.screens[m_screen];
-        ProjectionMask m;
-        m.name = tr("Mask %1").arg(s.masks.size() + 1);
-        const QRectF r(s.width / 4.0, s.height / 4.0, s.width / 2.0, s.height / 2.0);
-        m.points = QPolygonF({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
-        s.masks.append(m);
-        m_doc->notifyChanged(true);
-        m_doc->setActiveMask(m_screen, int(s.masks.size()) - 1);
+        const QRectF r(size.width() / 4.0, size.height() / 4.0, size.width() / 2.0, size.height() / 2.0);
+        ProjectionMask m = round ? ProjectionMask::ellipse(r) : ProjectionMask::rectangle(r);
+        if (m_target == kCompositionMasks)
+            m.feather = 0.0; // LED shapes want hard edges; projection masks a soft one
+        m_doc->addMask(m_target, m);
+    };
+    connect(rect, &QPushButton::clicked, this, [addShape] { addShape(false); });
+    connect(ellipse, &QPushButton::clicked, this, [addShape] { addShape(true); });
+    connect(m_draw, &QPushButton::toggled, this, [this](bool on) {
+        if (m_refreshing)
+            return;
+        m_doc->setActiveMask(-1, -1);
+        m_doc->setMaskDrawTarget(on ? m_target : -1);
     });
     connect(m_doc, &Document::selectionChanged, this, &MaskEditor::refresh);
 }
 
-void MaskEditor::setScreen(int screen)
+QSizeF MaskEditor::canvasSize() const
 {
-    if (screen != m_screen && m_doc->activeMaskScreen() != screen)
-        m_doc->setActiveMask(-1, -1); // stop editing another screen's mask
-    m_screen = screen;
+    const Project &p = m_doc->project();
+    if (m_target == kCompositionMasks)
+        return QSizeF(p.compSize());
+    if (m_target >= 0 && m_target < p.screens.size())
+        return QSizeF(p.screens[m_target].width, p.screens[m_target].height);
+    return {};
+}
+
+void MaskEditor::setTarget(int target)
+{
+    if (target != m_target) {
+        // Stop editing or drawing another target's mask.
+        if (m_doc->activeMaskScreen() == m_target && m_target != -1)
+            m_doc->setActiveMask(-1, -1);
+        if (m_doc->maskDrawTarget() == m_target && m_target != -1)
+            m_doc->setMaskDrawTarget(-1);
+    }
+    m_target = target;
     refresh();
 }
 
 void MaskEditor::edit(int index, const std::function<void(ProjectionMask &)> &fn)
 {
-    Project &p = m_doc->project();
-    if (m_refreshing || m_screen < 0 || m_screen >= p.screens.size() || index < 0
-        || index >= p.screens[m_screen].masks.size())
+    QVector<ProjectionMask> *masks = m_doc->maskList(m_target);
+    if (m_refreshing || !masks || index < 0 || index >= masks->size())
         return;
-    fn(p.screens[m_screen].masks[index]);
+    fn((*masks)[index]);
     m_doc->notifyChanged();
 }
 
 void MaskEditor::refresh()
 {
-    const Project &p = m_doc->project();
-    const int count = m_screen >= 0 && m_screen < p.screens.size() ? int(p.screens[m_screen].masks.size()) : 0;
-    if (count != m_builtCount || m_screen != m_builtScreen) {
+    const QVector<ProjectionMask> *masks = m_doc->maskList(m_target);
+    const int count = masks ? int(masks->size()) : 0;
+    {
+        m_refreshing = true;
+        m_draw->setChecked(m_target != -1 && m_doc->maskDrawTarget() == m_target);
+        m_refreshing = false;
+    }
+    if (count != m_builtCount || m_target != m_builtTarget) {
         rebuild();
         return;
     }
@@ -88,9 +123,9 @@ void MaskEditor::rebuild()
         delete item;
     }
     m_updaters.clear();
-    const Project &p = m_doc->project();
-    m_builtScreen = m_screen;
-    m_builtCount = m_screen >= 0 && m_screen < p.screens.size() ? int(p.screens[m_screen].masks.size()) : 0;
+    const QVector<ProjectionMask> *masks = m_doc->maskList(m_target);
+    m_builtTarget = m_target;
+    m_builtCount = masks ? int(masks->size()) : 0;
     m_refreshing = true;
     for (int i = 0; i < m_builtCount; ++i) {
         auto *row = new QWidget;
@@ -101,6 +136,8 @@ void MaskEditor::rebuild()
         enabled->setToolTip(tr("On"));
         auto *invert = new QCheckBox(tr("Invert"));
         invert->setToolTip(tr("Black out everything outside the shape instead of inside it"));
+        auto *smooth = new QCheckBox(tr("Smooth"));
+        smooth->setToolTip(tr("A curve through the points instead of straight edges"));
         auto *feather = new QDoubleSpinBox;
         feather->setRange(0, 500);
         feather->setDecimals(0);
@@ -109,13 +146,14 @@ void MaskEditor::rebuild()
         auto *editBtn = new QToolButton;
         editBtn->setText(tr("Edit"));
         editBtn->setCheckable(true);
-        editBtn->setToolTip(tr("Edit this mask's points on the output map"));
+        editBtn->setToolTip(tr("Edit this mask's points on the map"));
         auto *remove = new QToolButton;
         remove->setText(QStringLiteral("✕"));
         remove->setAutoRaise(true);
         h->addWidget(enabled);
         h->addWidget(name, 1);
         h->addWidget(invert);
+        h->addWidget(smooth);
         h->addWidget(feather);
         h->addWidget(editBtn);
         h->addWidget(remove);
@@ -123,31 +161,35 @@ void MaskEditor::rebuild()
         connect(name, &QLineEdit::textEdited, this, [this, i](const QString &t) { edit(i, [&](ProjectionMask &m) { m.name = t; }); });
         connect(enabled, &QCheckBox::toggled, this, [this, i](bool on) { edit(i, [&](ProjectionMask &m) { m.enabled = on; }); });
         connect(invert, &QCheckBox::toggled, this, [this, i](bool on) { edit(i, [&](ProjectionMask &m) { m.invert = on; }); });
+        connect(smooth, &QCheckBox::toggled, this, [this, i](bool on) { edit(i, [&](ProjectionMask &m) { m.smooth = on; }); });
         connect(feather, &QDoubleSpinBox::valueChanged, this, [this, i](double v) { edit(i, [&](ProjectionMask &m) { m.feather = v; }); });
         connect(editBtn, &QToolButton::toggled, this, [this, i](bool on) {
-            if (!m_refreshing)
-                m_doc->setActiveMask(on ? m_screen : -1, on ? i : -1);
+            if (m_refreshing)
+                return;
+            m_doc->setMaskDrawTarget(-1);
+            m_doc->setActiveMask(on ? m_target : -1, on ? i : -1);
         });
         connect(remove, &QToolButton::clicked, this, [this, i] {
-            Project &p = m_doc->project();
-            if (m_screen < 0 || m_screen >= p.screens.size() || i >= p.screens[m_screen].masks.size())
+            QVector<ProjectionMask> *list = m_doc->maskList(m_target);
+            if (!list || i >= list->size())
                 return;
             m_doc->setActiveMask(-1, -1);
-            p.screens[m_screen].masks.removeAt(i);
+            list->removeAt(i);
             m_doc->notifyChanged(true);
         });
         auto update = [=] {
-            const Project &pr = m_doc->project();
-            if (m_screen < 0 || m_screen >= pr.screens.size() || i >= pr.screens[m_screen].masks.size())
+            const QVector<ProjectionMask> *list = m_doc->maskList(m_target);
+            if (!list || i >= list->size())
                 return;
-            const ProjectionMask &m = pr.screens[m_screen].masks[i];
+            const ProjectionMask &m = (*list)[i];
             if (name->text() != m.name)
                 name->setText(m.name);
-            const QSignalBlocker b1(enabled), b2(invert), b3(feather), b4(editBtn);
+            const QSignalBlocker b1(enabled), b2(invert), b3(feather), b4(editBtn), b5(smooth);
             enabled->setChecked(m.enabled);
             invert->setChecked(m.invert);
+            smooth->setChecked(m.smooth);
             feather->setValue(m.feather);
-            editBtn->setChecked(m_doc->activeMaskScreen() == m_screen && m_doc->activeMask() == i);
+            editBtn->setChecked(m_doc->activeMaskScreen() == m_target && m_doc->activeMask() == i);
         };
         update();
         m_updaters.append(update);

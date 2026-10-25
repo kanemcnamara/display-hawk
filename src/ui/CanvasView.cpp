@@ -54,6 +54,12 @@ CanvasView::CanvasView(Document *doc, RenderEngine *engine, Mode mode, QWidget *
     setAttribute(Qt::WA_OpaquePaintEvent);
     connect(m_doc, &Document::changed, this, qOverload<>(&QWidget::update));
     connect(m_doc, &Document::selectionChanged, this, qOverload<>(&QWidget::update));
+    connect(m_doc, &Document::selectionChanged, this, [this] {
+        if (!drawingMask() && !m_drawPoints.isEmpty()) {
+            m_drawPoints.clear(); // drawing was stopped elsewhere (the mask editor)
+            unsetCursor();
+        }
+    });
     connect(m_engine, &RenderEngine::previewReady, this, &CanvasView::onPreview);
 }
 
@@ -277,13 +283,48 @@ QPolygonF CanvasView::selectedWarp() const
     return sl.isMeshed() ? QPolygonF(sl.mesh) : sl.warp;
 }
 
+int CanvasView::maskTarget() const
+{
+    return m_mode == InputMap ? kCompositionMasks : m_screen;
+}
+
 ProjectionMask *CanvasView::activeMask()
 {
-    Project &p = m_doc->project();
-    const int s = m_doc->activeMaskScreen(), m = m_doc->activeMask();
-    if (m_mode != OutputMap || s != m_screen || s < 0 || s >= p.screens.size() || m < 0 || m >= p.screens[s].masks.size())
+    if (m_doc->activeMaskScreen() != maskTarget())
         return nullptr;
-    return &p.screens[s].masks[m];
+    QVector<ProjectionMask> *masks = m_doc->maskList(maskTarget());
+    const int m = m_doc->activeMask();
+    return masks && m >= 0 && m < masks->size() ? &(*masks)[m] : nullptr;
+}
+
+bool CanvasView::drawingMask() const
+{
+    return m_doc->maskDrawTarget() != -1 && m_doc->maskDrawTarget() == maskTarget();
+}
+
+void CanvasView::finishDrawing()
+{
+    const int target = maskTarget();
+    if (m_drawPoints.size() >= 3) {
+        ProjectionMask m;
+        m.points = m_drawPoints;
+        if (target == kCompositionMasks)
+            m.feather = 0.0; // LED shapes want hard edges
+        m_drawPoints.clear();
+        m_doc->setMaskDrawTarget(-1);
+        m_doc->addMask(target, m); // and edit it straight away
+    } else {
+        cancelDrawing();
+    }
+    unsetCursor();
+}
+
+void CanvasView::cancelDrawing()
+{
+    m_drawPoints.clear();
+    m_doc->setMaskDrawTarget(-1);
+    unsetCursor();
+    update();
 }
 
 int CanvasView::hitMaskPoint(const QPointF &pos)
@@ -505,25 +546,54 @@ void CanvasView::paintEvent(QPaintEvent *)
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
 
-    // Projection masks: dashed outlines; the one being edited gets point handles.
-    if (m_mode == OutputMap && validScreen) {
+    // Masks (the screen's on the output map, the composition's on the input map): dashed outlines;
+    // the one being edited gets point handles (and its control polygon when smooth).
+    if (validScreen) {
         painter.setRenderHint(QPainter::Antialiasing);
-        const Screen &sc = p.screens[m_screen];
-        for (int i = 0; i < sc.masks.size(); ++i) {
-            const ProjectionMask &m = sc.masks[i];
-            const bool active = m_doc->activeMaskScreen() == m_screen && m_doc->activeMask() == i;
+        const QVector<ProjectionMask> *masks = m_doc->maskList(maskTarget());
+        for (int i = 0; masks && i < masks->size(); ++i) {
+            const ProjectionMask &m = (*masks)[i];
+            const bool active = m_doc->activeMaskScreen() == maskTarget() && m_doc->activeMask() == i;
             QColor c(80, 220, 255);
             if (!m.enabled)
                 c.setAlpha(100);
             painter.setPen(QPen(c, active ? 2 : 1, active ? Qt::SolidLine : Qt::DashLine));
-            painter.drawPolygon(toWidget(m.points));
+            painter.drawPolygon(toWidget(m.outline()));
             if (active) {
+                if (m.smooth) {
+                    QColor faint = c;
+                    faint.setAlpha(90);
+                    painter.setPen(QPen(faint, 1, Qt::DotLine));
+                    painter.drawPolygon(toWidget(m.points));
+                }
                 painter.setPen(QPen(Qt::black, 1));
                 painter.setBrush(c);
                 for (const QPointF &pt : m.points)
                     painter.drawRect(QRectF(toWidget(pt) - QPointF(kHandleSize / 2, kHandleSize / 2), QSizeF(kHandleSize, kHandleSize)));
                 painter.setBrush(Qt::NoBrush);
             }
+        }
+        if (drawingMask()) {
+            const QColor c(255, 220, 60);
+            QPolygonF pts = toWidget(m_drawPoints);
+            if (!pts.isEmpty() && underMouse())
+                pts << m_lastPos; // rubber band to the cursor
+            painter.setPen(QPen(c, 2));
+            painter.drawPolyline(pts);
+            painter.setPen(QPen(Qt::black, 1));
+            painter.setBrush(c);
+            for (int k = 0; k < m_drawPoints.size(); ++k) {
+                const double size = k == 0 && m_drawPoints.size() >= 3 ? kHandleSize * 1.6 : kHandleSize; // close here
+                painter.drawEllipse(toWidget(m_drawPoints[k]), size / 2, size / 2);
+            }
+            painter.setBrush(Qt::NoBrush);
+            // The instructions on a strip of their own along the top, clear of the canvas labels.
+            const QRectF strip(0, 0, width(), 22);
+            painter.fillRect(strip, QColor(40, 34, 10, 230));
+            painter.setPen(c);
+            painter.drawText(strip.adjusted(8, 0, -8, 0), Qt::AlignLeft | Qt::AlignVCenter,
+                             tr("Drawing a mask: click to add points; click the first point, double-click or press "
+                                "Enter to close. Backspace removes a point, Esc cancels."));
         }
         painter.setRenderHint(QPainter::Antialiasing, false);
     }
@@ -640,6 +710,27 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
         setCursor(Qt::ClosedHandCursor);
         return;
     }
+    if (drawingMask()) {
+        if (e->button() == Qt::RightButton) {
+            cancelDrawing();
+            return;
+        }
+        if (e->button() != Qt::LeftButton)
+            return;
+        // Clicking the first point closes the shape; anything else adds a point.
+        if (m_drawPoints.size() >= 3) {
+            const QPointF first = toWidget(m_drawPoints.first());
+            if (qAbs(first.x() - e->position().x()) <= kHandleSize && qAbs(first.y() - e->position().y()) <= kHandleSize) {
+                finishDrawing();
+                return;
+            }
+        }
+        const QPointF c = toCanvas(e->position());
+        m_drawPoints << QPointF(qRound(c.x()), qRound(c.y()));
+        setCursor(Qt::CrossCursor);
+        update();
+        return;
+    }
     if (e->button() != Qt::LeftButton)
         return;
 
@@ -654,7 +745,7 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
             }
             return;
         }
-        if (k >= 0 || mask->points.containsPoint(toCanvas(e->position()), Qt::OddEvenFill)) {
+        if (k >= 0 || mask->outline().containsPoint(toCanvas(e->position()), Qt::OddEvenFill)) {
             m_drag = k >= 0 ? MaskPoint : MaskMove;
             m_handle = k;
             m_startWarp = mask->points;
@@ -708,6 +799,8 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
 void CanvasView::mouseMoveEvent(QMouseEvent *e)
 {
     const QPointF pos = e->position();
+    if (drawingMask())
+        update(); // the rubber band follows the cursor
     if (m_drag == Pan) {
         m_pan += pos - m_lastPos;
         update();
@@ -748,6 +841,12 @@ void CanvasView::mouseReleaseEvent(QMouseEvent *)
 
 void CanvasView::mouseDoubleClickEvent(QMouseEvent *e)
 {
+    if (drawingMask()) {
+        if (m_drawPoints.size() >= 2 && m_drawPoints.last() == m_drawPoints[m_drawPoints.size() - 2])
+            m_drawPoints.removeLast();
+        finishDrawing();
+        return;
+    }
     // Editing a mask: a double-click near one of its edges adds a point there.
     if (ProjectionMask *mask = activeMask()) {
         const QPointF c = toCanvas(e->position());
@@ -805,11 +904,33 @@ bool CanvasView::event(QEvent *e)
             return true;
         }
     }
+    // While drawing, Enter, Esc and Backspace belong to the drawing, not to window shortcuts
+    // (Backspace is Delete on macOS).
+    if (e->type() == QEvent::ShortcutOverride && drawingMask()) {
+        const int key = static_cast<QKeyEvent *>(e)->key();
+        if (key == Qt::Key_Return || key == Qt::Key_Enter || key == Qt::Key_Escape || key == Qt::Key_Backspace) {
+            e->accept();
+            return true;
+        }
+    }
     return QWidget::event(e);
 }
 
 void CanvasView::keyPressEvent(QKeyEvent *e)
 {
+    if (drawingMask()) {
+        switch (e->key()) {
+        case Qt::Key_Return:
+        case Qt::Key_Enter: finishDrawing(); return;
+        case Qt::Key_Escape: cancelDrawing(); return;
+        case Qt::Key_Backspace:
+            if (!m_drawPoints.isEmpty())
+                m_drawPoints.removeLast();
+            update();
+            return;
+        default: break;
+        }
+    }
     const Selection sel = m_doc->selection();
     const int step = (e->modifiers() & Qt::ShiftModifier) ? 10 : 1;
     QPoint delta;

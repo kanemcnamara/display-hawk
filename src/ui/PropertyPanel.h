@@ -167,6 +167,7 @@ private:
     QLabel *m_screenInfo;
     CabinetLayoutEditor *m_cabinets;
     MaskEditor *m_masks;
+    MaskEditor *m_compMasks;
 
     // Slice
     QLineEdit *m_sliceName;

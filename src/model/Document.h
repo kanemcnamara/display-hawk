@@ -48,10 +48,17 @@ public:
     void notifyMediaChanged();
 
     Selection selection() const { return m_selection; }
-    // The projection mask whose points the output map edits (-1 = none).
+    // Masks are edited on a target: a screen (index) or the composition (kCompositionMasks).
+    QVector<ProjectionMask> *maskList(int target);
+    // The mask whose points the map edits (target -1 = none).
     int activeMaskScreen() const { return m_maskScreen; }
     int activeMask() const { return m_mask; }
-    void setActiveMask(int screen, int mask);
+    void setActiveMask(int target, int mask);
+    // Drawing a new mask point by point on the target's map (-1 = not drawing).
+    int maskDrawTarget() const { return m_drawTarget; }
+    void setMaskDrawTarget(int target);
+    // Adds a finished mask to the target and makes it the one being edited. Returns its index.
+    int addMask(int target, const ProjectionMask &mask);
     void select(const Selection &sel);
 
     LedWall *selectedWall();
@@ -155,6 +162,7 @@ private:
     void startColumn(int column);
     int m_maskScreen = -1;
     int m_mask = -1;
+    int m_drawTarget = -1;
     QString m_filePath;
     bool m_modified = false;
     QJsonObject m_savedJson;

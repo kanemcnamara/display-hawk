@@ -18,6 +18,8 @@ public:
     void setScreenIndex(int index);
     int screenIndex() const { return m_screen; }
     void resetView();
+    // Where a canvas point (composition or screen pixels) is in the widget, for tests.
+    QPointF widgetPos(const QPointF &canvas) const { return toWidget(canvas); }
 
 signals:
     void statusMessage(const QString &text);
@@ -74,8 +76,14 @@ private:
     enum DragKind { NoDrag, Pan, Move, Resize, Corner, MaskPoint, MaskMove };
     static constexpr int kCornerHandle = 100; // hitHandle() result for corner-pin corner k: 100 + k
     QPolygonF selectedWarp() const; // corner pin or mesh points of the selected slice on this output map
-    ProjectionMask *activeMask();    // the mask being edited on this output map, if any
+    int maskTarget() const;          // whose masks this map shows: the composition or its screen
+    ProjectionMask *activeMask();    // the mask being edited on this map, if any
     int hitMaskPoint(const QPointF &pos);
+    // Drawing a new mask point by point (while the document's draw target is this map's).
+    bool drawingMask() const;
+    void finishDrawing();
+    void cancelDrawing();
+    QPolygonF m_drawPoints;
     DragKind m_drag = NoDrag;
     int m_handle = -1;
     Selection m_dragSel;

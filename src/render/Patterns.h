@@ -22,5 +22,7 @@ QImage outputOverlay(const Project &project, const Screen &screen);
 // The screen's projection masks as black with alpha (1 = blacked out), feathered; null if none
 // are enabled.
 QImage maskOverlay(const Screen &screen);
+// The same for any mask list on a canvas of `size` (the composition's masks).
+QImage maskOverlay(const QVector<ProjectionMask> &masks, const QSize &size);
 
 } // namespace Patterns

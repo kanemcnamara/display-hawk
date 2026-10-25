@@ -135,6 +135,38 @@ void Document::select(const Selection &sel)
     emit selectionChanged();
 }
 
+QVector<ProjectionMask> *Document::maskList(int target)
+{
+    if (target == kCompositionMasks)
+        return &m_project.compMasks;
+    if (target >= 0 && target < m_project.screens.size())
+        return &m_project.screens[target].masks;
+    return nullptr;
+}
+
+void Document::setMaskDrawTarget(int target)
+{
+    if (target == m_drawTarget)
+        return;
+    m_drawTarget = target;
+    emit selectionChanged();
+}
+
+int Document::addMask(int target, const ProjectionMask &mask)
+{
+    QVector<ProjectionMask> *list = maskList(target);
+    if (!list)
+        return -1;
+    ProjectionMask m = mask;
+    if (m.name == QLatin1String("Mask"))
+        m.name = tr("Mask %1").arg(list->size() + 1);
+    list->append(m);
+    notifyChanged(true);
+    commitUndo();
+    setActiveMask(target, int(list->size()) - 1);
+    return int(list->size()) - 1;
+}
+
 void Document::setActiveMask(int screen, int mask)
 {
     if (screen == m_maskScreen && mask == m_mask)
@@ -146,9 +178,10 @@ void Document::setActiveMask(int screen, int mask)
 
 void Document::validateSelection()
 {
-    if (m_maskScreen >= m_project.screens.size()
-        || (m_maskScreen >= 0 && m_mask >= m_project.screens[m_maskScreen].masks.size()))
+    if (const QVector<ProjectionMask> *masks = maskList(m_maskScreen); !masks || m_mask < 0 || m_mask >= masks->size())
         m_maskScreen = m_mask = -1;
+    if (m_drawTarget != -1 && !maskList(m_drawTarget))
+        m_drawTarget = -1;
     Selection &s = m_selection;
     bool ok = true;
     switch (s.kind) {
