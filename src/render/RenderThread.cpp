@@ -2,6 +2,7 @@
 
 #include "media/Ndi.h"
 #include "render/Patterns.h"
+#include "render/TextRenderer.h"
 #include "ui/OutputWindow.h"
 
 #include <QJsonArray>
@@ -369,7 +370,11 @@ void RenderThread::run()
         m_initDone.release();
         return;
     }
-    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi) || !m_blend.init(m_rhi)) {
+    m_gen.onTextureRelease = [this](QRhiTexture *tex) {
+        m_quad.forgetTexture(tex);
+        m_fx.forgetTexture(tex);
+    };
+    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi) || !m_blend.init(m_rhi) || !m_gen.init(m_rhi)) {
         m_initError = tr("Could not load shaders.");
         delete m_rhi;
         m_rhi = nullptr;
@@ -481,6 +486,7 @@ void RenderThread::run()
         m_fx.forgetTexture(ls.target.tex);
     m_fx.release();
     m_blend.release();
+    m_gen.release();
     releaseMixer(m_compMix, false);
     for (Mixer &gm : m_groupMix)
         releaseMixer(gm, false);
@@ -768,6 +774,64 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
         draws.append(qp);
         return;
     }
+    if (clip.source == ContentSource::Text) {
+        // Rendered on the CPU when it changes; scrolling repeats the picture with an offset.
+        const QSize size = target.size().expandedTo(QSize(1, 1));
+        const QByteArray key = TextRenderer::key(clip, size);
+        if (key != ct.patternKey || !ct.tex) {
+            uploadImage(u, ct.tex, TextRenderer::render(clip, size));
+            ct.patternKey = key;
+        }
+        if (!ct.tex)
+            return;
+        qp.texture = ct.tex;
+        const QSizeF tile = ct.tex->pixelSize();
+        const double t = m_clock.elapsed() / 1000.0;
+        const double travel = t * clip.textSpeed;
+        switch (clip.textMotion) {
+        case TextMotion::Still:
+        case TextMotion::Blink:
+            qp.dst = target;
+            if (clip.textMotion == TextMotion::Blink && std::fmod(t * qMax(0.05, clip.textSpeed / 100.0), 1.0) >= 0.5)
+                return; // off half the time (speed 100 = once a second)
+            draws.append(qp);
+            return;
+        case TextMotion::ScrollLeft:
+        case TextMotion::ScrollRight: {
+            const double offset = std::fmod(travel, tile.width());
+            double x = clip.textMotion == TextMotion::ScrollLeft ? target.x() - offset : target.x() + offset - tile.width();
+            for (; x < target.right() + 1; x += tile.width()) {
+                qp.dst = QRectF(x, target.y(), tile.width(), target.height());
+                draws.append(qp);
+            }
+            return;
+        }
+        case TextMotion::ScrollUp:
+        case TextMotion::ScrollDown: {
+            const double offset = std::fmod(travel, tile.height());
+            double y = clip.textMotion == TextMotion::ScrollUp ? target.y() - offset : target.y() + offset - tile.height();
+            for (; y < target.bottom() + 1; y += tile.height()) {
+                qp.dst = QRectF(target.x(), y, target.width(), tile.height());
+                draws.append(qp);
+            }
+            return;
+        }
+        }
+        return;
+    }
+    if (clip.source == ContentSource::Generator) {
+        // Drawn on the GPU at the target's size, every frame.
+        const int maxSize = qMin(m_rhi->resourceLimit(QRhi::TextureSizeMax), 8192);
+        const QSize size = target.size().boundedTo(QSize(maxSize, maxSize)).expandedTo(QSize(1, 1));
+        QRhiTexture *tex = m_gen.render(cb, clip, size, m_clock.elapsed() / 1000.0, m_clock.elapsed());
+        if (!tex)
+            return;
+        qp.texture = tex;
+        qp.texFlipY = m_rhi->isYUpInFramebuffer();
+        qp.dst = target;
+        draws.append(qp);
+        return;
+    }
     if (clip.source != ContentSource::TestPattern) { // files and live inputs
         if (ct.newMedia) {
             ct.newMedia = false;
@@ -900,6 +964,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     const QSize compSize = p.compSize().boundedTo(QSize(maxSize, maxSize));
     m_compSize = compSize;
     m_blend.newFrame();
+    m_gen.newFrame();
     mixBegin(m_compMix, p.background);
     const double timeSec = now / 1000.0;
     m_fx.setFrame(now, &p);
@@ -1244,6 +1309,7 @@ void RenderThread::collectGarbage(qint64 now)
     constexpr qint64 kIdleMs = 5000;
     m_lastGc = now;
     m_fx.collectGarbage(now, kIdleMs);
+    m_gen.collectGarbage(now, kIdleMs);
     for (auto it = m_groupMix.begin(); it != m_groupMix.end();) {
         if (now - it->lastUsed > kIdleMs) {
             releaseMixer(*it, true);

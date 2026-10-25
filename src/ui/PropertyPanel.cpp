@@ -6,6 +6,7 @@
 #include "render/RenderEngine.h"
 #include "model/CabinetMapping.h"
 #include "ui/CabinetLayoutEditor.h"
+#include "render/Generators.h"
 #include "ui/EffectChainEditor.h"
 #include "ui/MaskEditor.h"
 #include "ui/PanelGridEditor.h"
@@ -30,6 +31,8 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QFontComboBox>
+#include <QPlainTextEdit>
 #include <QSlider>
 #include <QDialog>
 #include <QFrame>
@@ -540,6 +543,22 @@ QWidget *PropertyPanel::buildClipPage()
     auto *addMedia = new QPushButton(tr("Load media file..."));
     ef->addRow(tr("Test pattern"), row({newPattern, addPattern}));
     ef->addRow(addMedia);
+    auto *addText = new QPushButton(tr("Add text"));
+    auto *newGenerator = new QComboBox;
+    for (const GeneratorDef &d : generatorDefs())
+        newGenerator->addItem(d.name, d.id);
+    auto *addGenerator = new QPushButton(tr("Add"));
+    ef->addRow(addText);
+    ef->addRow(tr("Generator"), row({newGenerator, addGenerator}));
+    connect(addText, &QPushButton::clicked, this, [this] {
+        const Selection s = m_doc->selection();
+        m_doc->setClip(s.layer, s.column, Clip::fromText(tr("Display Hawk")));
+    });
+    connect(addGenerator, &QPushButton::clicked, this, [this, newGenerator] {
+        const Selection s = m_doc->selection();
+        const QString id = newGenerator->currentData().toString();
+        m_doc->setClip(s.layer, s.column, Clip::fromGenerator(id, generatorDefaults(id)));
+    });
     ef->addRow(new QLabel(tr("Tip: drag video or image files onto the clip deck.")));
     m_clipStack->addWidget(empty);
 
@@ -548,7 +567,8 @@ QWidget *PropertyPanel::buildClipPage()
     m_clipName = new QLineEdit;
     m_source = new QComboBox;
     m_source->addItems({tr("Test pattern"), tr("Media file"), tr("Capture device (live)"), tr("NDI source (live)"),
-                        tr("%1 (live)").arg(TextureShare::technology().isEmpty() ? tr("Spout / Syphon") : TextureShare::technology())});
+                        tr("%1 (live)").arg(TextureShare::technology().isEmpty() ? tr("Spout / Syphon") : TextureShare::technology()),
+                        tr("Text"), tr("Generator")});
     m_input = new QComboBox;
     m_input->setToolTip(tr("Camera or capture card, or NDI source on the network"));
     auto *refreshInputs = new QPushButton(tr("Refresh"));
@@ -631,6 +651,101 @@ QWidget *PropertyPanel::buildClipPage()
     tl->addRow(tr("Scale / rotate"), row({m_clipScale, m_clipRotation}));
     tl->addRow(tr("Opacity"), row({m_clipOpacity, resetTransform}));
 
+    // Text clips.
+    auto *textBox = new QGroupBox(tr("Text"));
+    m_textBox = textBox;
+    auto *tx = new QFormLayout(textBox);
+    m_text = new QPlainTextEdit;
+    m_text->setFixedHeight(70);
+    m_font = new QFontComboBox;
+    m_fontSize = makeSpin(0, 2000, QStringLiteral(" px"));
+    m_fontSize->setSpecialValueText(tr("Fit"));
+    m_bold = new QCheckBox(tr("Bold"));
+    m_textColor = new QPushButton;
+    m_outlineColor = new QPushButton;
+    m_outlineWidth = makeDouble(0, 100, 1, QStringLiteral(" px"));
+    m_textBackground = new QPushButton;
+    m_textAlign = new QComboBox;
+    m_textAlign->addItems({tr("Left"), tr("Centre"), tr("Right")});
+    m_textMotion = new QComboBox;
+    for (int i = 0; i < kTextMotionCount; ++i)
+        m_textMotion->addItem(textMotionName(TextMotion(i)));
+    m_textSpeed = makeDouble(0, 5000, 0, QStringLiteral(" px/s"));
+    m_textSpeed->setToolTip(tr("Scrolling speed; for blinking, 100 = once a second"));
+    tx->addRow(m_text);
+    tx->addRow(tr("Font"), m_font);
+    tx->addRow(tr("Size"), row({m_fontSize, m_bold}));
+    tx->addRow(tr("Colour"), m_textColor);
+    tx->addRow(tr("Outline"), row({m_outlineColor, m_outlineWidth}));
+    tx->addRow(tr("Background"), m_textBackground);
+    tx->addRow(tr("Align"), m_textAlign);
+    tx->addRow(tr("Motion"), row({m_textMotion, m_textSpeed}));
+    connect(m_text, &QPlainTextEdit::textChanged, this, [this] {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.text = m_text->toPlainText(); });
+    });
+    connect(m_font, &QFontComboBox::currentFontChanged, this, [this](const QFont &f) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.fontFamily = f.family(); });
+    });
+    connect(m_fontSize, &QSpinBox::valueChanged, this, [this](int v) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.fontSize = v; });
+    });
+    connect(m_bold, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.bold = on; });
+    });
+    auto colourButton = [this](QPushButton *b, QColor Clip::*field, bool alpha) {
+        connect(b, &QPushButton::clicked, this, [this, field, alpha] {
+            const Clip *c = m_doc->selectedClip();
+            if (!c)
+                return;
+            const QColor col = QColorDialog::getColor(c->*field, this, QString(),
+                                                      alpha ? QColorDialog::ShowAlphaChannel : QColorDialog::ColorDialogOptions());
+            if (col.isValid())
+                editClip([&](Clip &x) { x.*field = col; });
+        });
+    };
+    colourButton(m_textColor, &Clip::solidColor, false);
+    colourButton(m_outlineColor, &Clip::outlineColor, false);
+    colourButton(m_textBackground, &Clip::textBackground, true);
+    connect(m_outlineWidth, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.outlineWidth = v; });
+    });
+    connect(m_textAlign, &QComboBox::activated, this, [this](int i) { editClip([&](Clip &c) { c.textAlign = i; }); });
+    connect(m_textMotion, &QComboBox::activated, this, [this](int i) { editClip([&](Clip &c) { c.textMotion = TextMotion(i); }); });
+    connect(m_textSpeed, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.textSpeed = v; });
+    });
+
+    // Generator clips.
+    auto *genBox = new QGroupBox(tr("Generator"));
+    m_genBox = genBox;
+    auto *gv = new QVBoxLayout(genBox);
+    auto *gf = new QFormLayout;
+    m_generator = new QComboBox;
+    for (const GeneratorDef &d : generatorDefs())
+        m_generator->addItem(d.name, d.id);
+    m_genColor1 = new QPushButton;
+    m_genColor2 = new QPushButton;
+    gf->addRow(tr("Generator"), m_generator);
+    gf->addRow(tr("Colours"), row({m_genColor1, m_genColor2}));
+    gv->addLayout(gf);
+    m_genParams = new QFormLayout;
+    gv->addLayout(m_genParams);
+    colourButton(m_genColor1, &Clip::solidColor, true);
+    colourButton(m_genColor2, &Clip::color2, true);
+    connect(m_generator, &QComboBox::activated, this, [this](int i) {
+        const QString id = m_generator->itemData(i).toString();
+        editClip([&](Clip &c) {
+            c.generator = id;
+            c.genParams = generatorDefaults(id);
+        });
+    });
+
     auto *cfx = new QGroupBox(tr("Clip effects"));
     auto *cfl = new QVBoxLayout(cfx);
     m_clipFx = new EffectChainEditor(m_doc);
@@ -642,6 +757,8 @@ QWidget *PropertyPanel::buildClipPage()
     cv->setContentsMargins(0, 0, 0, 0);
     m_clipStack->removeWidget(box);
     cv->addWidget(box);
+    cv->addWidget(textBox);
+    cv->addWidget(genBox);
     cv->addWidget(pb);
     cv->addWidget(tf);
     cv->addWidget(cfx);
@@ -802,6 +919,29 @@ void PropertyPanel::refreshClip()
     setButtonColor(m_solidColor, c->solidColor);
     setText(m_mediaPath, QFileInfo(c->mediaPath).fileName());
     m_mediaPath->setToolTip(c->mediaPath);
+    m_textBox->setVisible(c->source == ContentSource::Text);
+    m_genBox->setVisible(c->source == ContentSource::Generator);
+    if (c->source == ContentSource::Text) {
+        if (m_text->toPlainText() != c->text)
+            m_text->setPlainText(c->text);
+        if (!c->fontFamily.isEmpty() && m_font->currentFont().family() != c->fontFamily)
+            m_font->setCurrentFont(QFont(c->fontFamily));
+        setValue(m_fontSize, c->fontSize);
+        m_bold->setChecked(c->bold);
+        setButtonColor(m_textColor, c->solidColor);
+        setButtonColor(m_outlineColor, c->outlineColor);
+        setButtonColor(m_textBackground, c->textBackground);
+        setValue(m_outlineWidth, c->outlineWidth);
+        m_textAlign->setCurrentIndex(c->textAlign);
+        m_textMotion->setCurrentIndex(int(c->textMotion));
+        setValue(m_textSpeed, c->textSpeed);
+    }
+    if (c->source == ContentSource::Generator) {
+        m_generator->setCurrentIndex(qMax(0, m_generator->findData(c->generator)));
+        setButtonColor(m_genColor1, c->solidColor);
+        setButtonColor(m_genColor2, c->color2);
+        rebuildGeneratorParams(*c);
+    }
     m_trigger->setCurrentIndex(int(c->trigger));
     m_playMode->setCurrentIndex(int(c->playMode));
     setValue(m_speed, c->speed);
@@ -876,6 +1016,58 @@ void PropertyPanel::refreshClip()
             status = tr("Loading...");
     }
     m_mediaStatus->setText(status);
+}
+
+void PropertyPanel::rebuildGeneratorParams(const Clip &clip)
+{
+    const GeneratorDef *def = generatorDef(clip.generator);
+    if (clip.generator != m_builtGenerator) {
+        m_builtGenerator = clip.generator;
+        while (m_genParams->rowCount() > 0)
+            m_genParams->removeRow(0);
+        m_genSetters.clear();
+        for (int k = 0; def && k < def->params.size(); ++k) {
+            const EffectParamDef pd = def->params[k];
+            auto set = [this, k](double v) {
+                if (m_refreshing)
+                    return;
+                editClip([&](Clip &c) {
+                    while (c.genParams.size() <= k)
+                        c.genParams << generatorParam(c, int(c.genParams.size()));
+                    c.genParams[k] = v;
+                });
+            };
+            if (!pd.choices.isEmpty()) {
+                auto *combo = new QComboBox;
+                combo->addItems(pd.choices);
+                connect(combo, &QComboBox::activated, this, [set](int i) { set(i); });
+                m_genSetters << [combo](double v) { combo->setCurrentIndex(qRound(v)); };
+                m_genParams->addRow(pd.name, combo);
+            } else {
+                auto *slider = new QSlider(Qt::Horizontal);
+                slider->setRange(0, 1000);
+                auto *spin = makeDouble(pd.min, pd.max, pd.max - pd.min > 50 ? 0 : 2, pd.suffix);
+                connect(slider, &QSlider::valueChanged, this, [=](int s) {
+                    const QSignalBlocker b(spin);
+                    spin->setValue(pd.min + (pd.max - pd.min) * s / 1000.0);
+                    set(spin->value());
+                });
+                connect(spin, &QDoubleSpinBox::valueChanged, this, [=](double v) {
+                    const QSignalBlocker b(slider);
+                    slider->setValue(qRound((v - pd.min) / (pd.max - pd.min) * 1000.0));
+                    set(v);
+                });
+                m_genSetters << [slider, spin, pd](double v) {
+                    const QSignalBlocker b1(slider), b2(spin);
+                    spin->setValue(v);
+                    slider->setValue(qRound((v - pd.min) / (pd.max - pd.min) * 1000.0));
+                };
+                m_genParams->addRow(pd.name, row({slider, spin}));
+            }
+        }
+    }
+    for (int k = 0; k < m_genSetters.size(); ++k)
+        m_genSetters[k](generatorParam(clip, k));
 }
 
 void PropertyPanel::refreshPosition()

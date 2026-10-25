@@ -9,7 +9,12 @@
 #include <QString>
 #include <QVector>
 
-enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3, Share = 4 }; // Share: Spout / Syphon
+// Share: Spout / Syphon. Text and Generator are drawn by Display Hawk itself.
+enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3, Share = 4, Text = 5, Generator = 6 };
+// How a text clip moves: still (optionally blinking), or scrolling as a ticker or as credits.
+enum class TextMotion { Still = 0, ScrollLeft, ScrollRight, ScrollUp, ScrollDown, Blink };
+constexpr int kTextMotionCount = int(TextMotion::Blink) + 1;
+QString textMotionName(TextMotion m);
 enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid, MovingBars };
 constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
@@ -227,6 +232,24 @@ struct Clip {
     double volume = 1.0; // the clip's own audio level
     QColor solidColor = Qt::white;
     int gridSpacing = 64;
+    // Text clips: the text (lines), font, size in pixels (0 = as large as fits), colour (solidColor),
+    // outline, background, alignment (0 left, 1 centre, 2 right) and motion (speed in px/s, or Hz
+    // for blinking).
+    QString text;
+    QString fontFamily;
+    int fontSize = 0;
+    bool bold = true;
+    QColor outlineColor = Qt::black;
+    double outlineWidth = 0.0;
+    QColor textBackground = Qt::transparent;
+    int textAlign = 1;
+    TextMotion textMotion = TextMotion::Still;
+    double textSpeed = 200.0;
+    // Generator clips: which generator (render/Generators.h), its parameters, and a second colour
+    // (the first is solidColor).
+    QString generator;
+    QVector<double> genParams;
+    QColor color2 = Qt::black;
 
     bool isEmpty() const { return id.isEmpty(); }
     QString displayName() const;
@@ -235,6 +258,8 @@ struct Clip {
     static Clip fromCapture(const QString &deviceId, const QString &description);
     static Clip fromNdi(const QString &sourceName);
     static Clip fromShare(const QString &sourceName);
+    static Clip fromText(const QString &text);
+    static Clip fromGenerator(const QString &generatorId, const QVector<double> &params);
     bool isLive() const
     {
         return source == ContentSource::Capture || source == ContentSource::Ndi || source == ContentSource::Share;

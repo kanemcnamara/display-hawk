@@ -141,6 +141,13 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - Each playing media clip has its own decoder; it is released shortly after the clip stops (after any crossfade).
 
 
+### Text and generators
+
+Empty clip slots can hold **text** (*Add text*) or a **generator** as well as media, patterns and live inputs.
+
+- **Text**: any lines of text in any installed font, a size in pixels or *Fit* (as large as the layer's area allows), bold, colour, outline (colour and width), background (with transparency), alignment, and motion: still, blinking, scrolling left/right as a **ticker** (one line, repeating) or up/down as **credits**. Fitted into a wall like any clip.
+- **Generators**, drawn on the GPU at the area's resolution in two colours: Shapes (circle, square, triangle, star, ring, hexagon; size, rotation, spin, grid repeat, pulse), Lines (stripes: angle, count, width, speed), Gradient (linear, radial, angular, diamond; moving, mirrored), Plasma, Noise, Particles (drifting in any direction or out from the centre, twinkling), Starfield, Tunnel, Radar sweep and Moving checker.
+
 ### Mixing
 
 - **Blend modes** per layer (and group): Normal, Add, Screen, Multiply, Lighten, Darken (GPU blender) and Subtract, Difference, Exclusion, Overlay, Soft light, Hard light, Colour dodge, Colour burn, Hue, Saturation, Colour, Luminosity (a shader that reads everything below). **Mask** modes turn a layer into a mask for everything below it: *alpha*, *luma* or *inverse luma*.

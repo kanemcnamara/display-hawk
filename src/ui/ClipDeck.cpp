@@ -1,4 +1,6 @@
 #include "ui/ClipDeck.h"
+#include "render/Generators.h"
+#include "render/TextRenderer.h"
 #include <QLineEdit>
 #include <QTabBar>
 #include <QInputDialog>
@@ -520,7 +522,10 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
                        {"path", clip.mediaPath},
                        {"input", clip.inputId},
                        {"color", clip.solidColor.name()},
-                       {"spacing", clip.gridSpacing}};
+                       {"spacing", clip.gridSpacing},
+                       {"text", QString::fromUtf8(TextRenderer::key(clip, size))},
+                       {"generator", clip.generator},
+                       {"color2", clip.color2.name(QColor::HexArgb)}};
     if (clip.source == ContentSource::TestPattern && clip.pattern == TestPattern::PanelMap) {
         keyObj["walls"] = project.toJson()["walls"];
         keyObj["comp"] = QStringLiteral("%1x%2").arg(project.compWidth).arg(project.compHeight);
@@ -557,7 +562,34 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         m_thumbs.insert(key, pm);
         return pm;
     }
-    if (clip.source == ContentSource::TestPattern) {
+    if (clip.source == ContentSource::Text) {
+        Clip still = clip;
+        still.textMotion = TextMotion::Still;
+        img = TextRenderer::render(still, size);
+        QImage back(size, QImage::Format_ARGB32_Premultiplied);
+        back.fill(QColor(20, 20, 22));
+        QPainter bp(&back);
+        bp.drawImage(0, 0, img);
+        bp.end();
+        img = back;
+    } else if (clip.source == ContentSource::Generator) {
+        // Drawn on the GPU: a swatch of its colours with its name.
+        QImage swatch(size, QImage::Format_ARGB32_Premultiplied);
+        QPainter sp(&swatch);
+        QLinearGradient g(0, 0, size.width(), size.height());
+        g.setColorAt(0, clip.color2);
+        g.setColorAt(1, clip.solidColor);
+        sp.fillRect(swatch.rect(), g);
+        QFont f = sp.font();
+        f.setBold(true);
+        f.setPixelSize(13);
+        sp.setFont(f);
+        sp.setPen(Qt::white);
+        const GeneratorDef *def = generatorDef(clip.generator);
+        sp.drawText(swatch.rect(), Qt::AlignCenter, def ? def->name : clip.generator);
+        sp.end();
+        img = swatch;
+    } else if (clip.source == ContentSource::TestPattern) {
         // Generated at the real size (capped) so labels like the grid's resolution are truthful.
         const QSize genSize = project.compSize().boundedTo(QSize(3840, 2160));
         img = Patterns::generate(project, clip, genSize);

@@ -429,6 +429,8 @@ QString Clip::displayName() const
     case ContentSource::Capture: return QStringLiteral("Capture");
     case ContentSource::Ndi:
     case ContentSource::Share: return inputId;
+    case ContentSource::Text: return text.section(QLatin1Char('\n'), 0, 0).left(40);
+    case ContentSource::Generator: return generator;
     default: return testPatternName(pattern);
     }
 }
@@ -478,6 +480,41 @@ Clip Clip::fromPattern(TestPattern p)
     c.source = ContentSource::TestPattern;
     c.pattern = p;
     return c;
+}
+
+Clip Clip::fromText(const QString &text)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Text;
+    c.text = text;
+    c.scale = ScaleMode::Stretch;
+    return c;
+}
+
+Clip Clip::fromGenerator(const QString &generatorId, const QVector<double> &params)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Generator;
+    c.generator = generatorId;
+    c.genParams = params;
+    c.solidColor = QColor(0, 200, 255);
+    c.color2 = Qt::black;
+    return c;
+}
+
+QString textMotionName(TextMotion m)
+{
+    switch (m) {
+    case TextMotion::Still: return QStringLiteral("Still");
+    case TextMotion::ScrollLeft: return QStringLiteral("Scroll left (ticker)");
+    case TextMotion::ScrollRight: return QStringLiteral("Scroll right");
+    case TextMotion::ScrollUp: return QStringLiteral("Scroll up (credits)");
+    case TextMotion::ScrollDown: return QStringLiteral("Scroll down");
+    case TextMotion::Blink: return QStringLiteral("Blink");
+    }
+    return {};
 }
 
 Clip Clip::fromMedia(const QString &path)
@@ -561,6 +598,24 @@ static QJsonObject clipToJson(const Clip &c)
                        {"transform", QJsonArray{c.posX, c.posY, c.scaleBy, c.rotation, c.opacity}},
                        {"effects", effectsToJson(c.effects)},
                        {"beatSync", c.beatSync},
+                       {"text", c.text},
+                       {"font", c.fontFamily},
+                       {"fontSize", c.fontSize},
+                       {"bold", c.bold},
+                       {"outlineColor", c.outlineColor.name(QColor::HexArgb)},
+                       {"outlineWidth", c.outlineWidth},
+                       {"textBackground", c.textBackground.name(QColor::HexArgb)},
+                       {"textAlign", c.textAlign},
+                       {"textMotion", int(c.textMotion)},
+                       {"textSpeed", c.textSpeed},
+                       {"generator", c.generator},
+                       {"genParams", [&c] {
+                            QJsonArray a;
+                            for (double v : c.genParams)
+                                a << v;
+                            return a;
+                        }()},
+                       {"color2", c.color2.name(QColor::HexArgb)},
                        {"volume", c.volume},
                        {"solidColor", c.solidColor.name()},
                        {"gridSpacing", c.gridSpacing}};
@@ -596,6 +651,20 @@ static Clip clipFromJson(const QJsonObject &o)
     }
     c.effects = effectsFromJson(o["effects"].toArray());
     c.beatSync = qBound(0, o["beatSync"].toInt(0), 1024);
+    c.text = o["text"].toString();
+    c.fontFamily = o["font"].toString();
+    c.fontSize = qBound(0, o["fontSize"].toInt(0), 4000);
+    c.bold = o["bold"].toBool(true);
+    c.outlineColor = QColor(o["outlineColor"].toString(QStringLiteral("#ff000000")));
+    c.outlineWidth = qBound(0.0, o["outlineWidth"].toDouble(0.0), 200.0);
+    c.textBackground = QColor(o["textBackground"].toString(QStringLiteral("#00000000")));
+    c.textAlign = qBound(0, o["textAlign"].toInt(1), 2);
+    c.textMotion = TextMotion(qBound(0, o["textMotion"].toInt(0), kTextMotionCount - 1));
+    c.textSpeed = qBound(0.0, o["textSpeed"].toDouble(200.0), 10000.0);
+    c.generator = o["generator"].toString();
+    for (const QJsonValue &v : o["genParams"].toArray())
+        c.genParams << v.toDouble();
+    c.color2 = QColor(o["color2"].toString(QStringLiteral("#ff000000")));
     c.volume = qBound(0.0, o["volume"].toDouble(1.0), 2.0);
     c.solidColor = QColor(o["solidColor"].toString("#ffffff"));
     c.gridSpacing = qMax(4, o["gridSpacing"].toInt(64));

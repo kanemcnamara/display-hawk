@@ -3,6 +3,7 @@
 #include "model/Project.h"
 #include "render/BlendCompositor.h"
 #include "render/EffectRenderer.h"
+#include "render/GeneratorRenderer.h"
 #include "render/RenderEngine.h"
 #include "render/RhiQuad.h"
 #include "media/TextureShare.h"
@@ -187,6 +188,7 @@ private:
     QHash<QString, Mixer> m_groupMix; // layer groups, by group id
     QSize m_compSize;
     BlendCompositor m_blend;
+    GeneratorRenderer m_gen;
     Target m_compFinal;               // composition effects, then mask / overlay / master on top
     QRhiTexture *m_compOut = nullptr; // what screens and previews show: the mix or m_compFinal
     Target m_previewTarget[2];

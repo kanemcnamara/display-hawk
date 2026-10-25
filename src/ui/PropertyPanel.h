@@ -20,6 +20,9 @@ class QLineEdit;
 class QPushButton;
 class QSpinBox;
 class QSlider;
+class QPlainTextEdit;
+class QFontComboBox;
+class QFormLayout;
 class QStackedWidget;
 class QVBoxLayout;
 
@@ -91,6 +94,23 @@ private:
     QComboBox *m_playMode, *m_trigger;
     QDoubleSpinBox *m_speed, *m_inPoint, *m_outPoint;
     QSpinBox *m_beatSync;
+    // Text clips
+    QWidget *m_textBox;
+    QPlainTextEdit *m_text;
+    QFontComboBox *m_font;
+    QSpinBox *m_fontSize;
+    QCheckBox *m_bold;
+    QPushButton *m_textColor, *m_outlineColor, *m_textBackground;
+    QDoubleSpinBox *m_outlineWidth, *m_textSpeed;
+    QComboBox *m_textAlign, *m_textMotion;
+    // Generator clips
+    QWidget *m_genBox;
+    QComboBox *m_generator;
+    QPushButton *m_genColor1, *m_genColor2;
+    QFormLayout *m_genParams;
+    QString m_builtGenerator;
+    QVector<std::function<void(double)>> m_genSetters;
+    void rebuildGeneratorParams(const Clip &clip);
     QCheckBox *m_reverse;
     QSlider *m_position;
     QLabel *m_positionText;

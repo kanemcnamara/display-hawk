@@ -11,6 +11,7 @@
 #include "model/CabinetMapping.h"
 #include "model/Document.h"
 #include "render/Effects.h"
+#include "render/Generators.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
 #include "ui/ReportExporter.h"
@@ -1553,6 +1554,62 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
         doc.notifyChanged(true);
         doc.clearLayer(1);
+    }
+
+    // Generators and text.
+    {
+        Project &p = doc.project();
+        doc.clearLayer(1);
+        const int col = p.columns;
+        doc.addColumn();
+        p.layers[0].transitionMs = 0;
+        p.layers[0].blend = BlendMode::Normal;
+        p.layers[0].effects.clear();
+        p.compEffects.clear();
+        doc.setLayerPlayback(0, 1.0, false, false);
+        auto centre = [&] {
+            const QImage &img = previews[0];
+            return img.isNull() ? QColor() : QColor(img.pixel(img.width() / 2, img.height() / 2));
+        };
+
+        Clip text = Clip::fromText(QStringLiteral("HAWK"));
+        text.solidColor = Qt::white;
+        doc.setClip(0, col, text);
+        doc.triggerClip(0, col);
+        check(waitFor([&] { const int lit = litPercent(previews[0]); return lit > 3 && lit < 80; }), "text clip draws its text");
+        save(previews[0], "text-still");
+        p.layers[0].clips[col].textMotion = TextMotion::ScrollLeft;
+        p.layers[0].clips[col].textSpeed = 600;
+        doc.notifyChanged();
+        waitFor([&] { return litPercent(previews[0]) > 3; });
+        const QImage before = previews[0];
+        waitMs(400);
+        save(previews[0], "text-ticker");
+        check(litPercent(previews[0]) > 3 && previews[0] != before, "text ticker scrolls");
+
+        for (const GeneratorDef &d : generatorDefs()) {
+            Clip g = Clip::fromGenerator(d.id, generatorDefaults(d.id));
+            g.solidColor = Qt::white;
+            g.color2 = Qt::black;
+            doc.setClip(0, col, g);
+            doc.triggerClip(0, col);
+            const bool drawn = waitFor([&] { return litPercent(previews[0]) > 1; }, 3000);
+            const QImage a = previews[0];
+            waitMs(400);
+            const bool still = d.id == QLatin1String("shapes"); // the default shape does not move
+            save(previews[0], qPrintable(QStringLiteral("generator-%1").arg(d.id)));
+            check(drawn && (still || previews[0] != a),
+                  qPrintable(QStringLiteral("generator %1 draws and moves").arg(d.name)));
+        }
+        // Shapes: a red circle on black, half the height: red in the middle, black in the corner.
+        Clip circle = Clip::fromGenerator(QStringLiteral("shapes"), generatorDefaults(QStringLiteral("shapes")));
+        circle.solidColor = Qt::red;
+        circle.color2 = Qt::black;
+        doc.setClip(0, col, circle);
+        doc.triggerClip(0, col);
+        check(waitFor([&] { return near(centre(), 255, 0, 0) && qGray(QColor(previews[0].pixel(2, 2)).rgb()) < 10; }),
+              "shapes generator draws a circle in the clip's colours");
+        doc.clearLayer(0);
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
