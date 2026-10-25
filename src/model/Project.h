@@ -142,6 +142,17 @@ struct ControlMapping {
     QString midiText() const;
 };
 
+// Where Display Hawk sits in a lighting desk's DMX patch (Art-Net). Channels from `address`:
+// 1 master, 2 blackout, 3 column trigger, then per layer (bottom first): clip, opacity, bypass.
+struct DmxPatch {
+    bool enabled = false;
+    int universe = 0; // Art-Net Port-Address, 0..32767
+    int address = 1;  // first channel, 1..512
+    int layers = 4;   // how many layers the desk controls
+
+    int channelCount() const { return 3 + 3 * layers; }
+};
+
 struct Project {
     int compWidth = 1920;
     int compHeight = 1080;
@@ -156,6 +167,7 @@ struct Project {
     QVector<Layer> layers;
     double master = 1.0; // playback state
     QVector<ControlMapping> controls; // MIDI mappings for this show
+    DmxPatch dmx;
     bool blackout = false; // playback state
 
     QSize compSize() const { return QSize(compWidth, compHeight); }

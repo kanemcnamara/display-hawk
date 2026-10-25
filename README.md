@@ -1,4 +1,4 @@
-﻿# Display Hawk
+# Display Hawk
 
 Media server for LED walls on **macOS and Windows** (C++17, Qt 6, Qt RHI). The output-mapping core: a composition canvas, LED wall definitions, and screens/slices that map the composition onto physical outputs pixel-exactly.
 
@@ -21,9 +21,9 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 - **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
 - **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
 
-## Remote control: OSC and MIDI
+## Remote control: OSC, MIDI and Art-Net
 
-**Control → OSC & MIDI…** (Ctrl/Cmd+M).
+**Control → OSC, MIDI & Art-Net…** (Ctrl/Cmd+M).
 
 - **OSC** over UDP (off by default; default port 7400). Layers and columns count from 1, layer 1 is the bottom layer:
 
@@ -39,7 +39,18 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 
   Bundles and int/float/bool/double arguments are accepted, so TouchOSC, QLab, Companion, lighting desks or a few lines of Python all work.
 - **MIDI** from every connected controller (WinMM on Windows, CoreMIDI on macOS; choose devices in the dialog). Mappings are saved with the setup: add one and press **Learn**, then press a key or move a knob, or right-click a clip / column number in the Clip Deck → *MIDI learn*. Notes trigger and flip toggles; CCs drive faders, set toggles (≥ 64 = on) and trigger once as they pass halfway.
-- The dialog's monitor shows every incoming OSC and MIDI message.
+- **Art-Net (DMX)** from a lighting desk (UDP 6454; the patch is saved with the setup). Display Hawk answers ArtPoll, so it shows up in the desk's node list. From the start address:
+
+  | Channel | Function |
+  | --- | --- |
+  | +0 | Master (0-255) |
+  | +1 | Blackout (128 and up = on) |
+  | +2 | Column trigger (0 = nothing, n = trigger column n) |
+  | +3, +4, +5 | Layer 1 (bottom): clip (0 = stop, n = play column n), opacity, bypass (128 and up) |
+  | +6, +7, +8 | Layer 2, and so on for the number of layers patched |
+
+  Values act when they change, so the desk and the Display Hawk UI can both be used. When a desk first appears (or returns after 10 s of silence) its clip and column channels are taken as the starting point and only faders are applied, so a desk sitting at 0 does not stop every layer.
+- The dialog's monitor shows every incoming OSC and MIDI message, and DMX changes on the patched channels.
 
 ## Clip deck
 

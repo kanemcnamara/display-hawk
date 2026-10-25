@@ -4,7 +4,9 @@
 #include "control/Osc.h"
 #include "model/Project.h"
 
+#include <QElapsedTimer>
 #include <QHash>
+#include <QHostAddress>
 #include <QObject>
 
 class Document;
@@ -44,7 +46,15 @@ public:
     void handleOsc(const OscMessage &message, const QString &from = QString());
     void handleMidi(const MidiMessage &message);
 
+    // Art-Net DMX input: listens on UDP 6454 while the project's DMX patch is enabled.
+    bool artNetListening() const { return m_artnet != nullptr; }
+    QString artNetStatus() const;
+    QByteArray lastDmx() const { return m_dmxPrev; } // the patched universe, as last received
+    void setArtNetLocalOnly(bool localOnly);         // tests: 127.0.0.1 only
+    void handleArtNet(const QByteArray &packet, const QHostAddress &from);
+
     static QString oscReference();
+    static QStringList dmxChannelNames(const DmxPatch &patch);
 
 signals:
     void activity(const QString &line);  // for the monitor
@@ -57,10 +67,21 @@ private:
     enum class Mode { Press, Value };
     void apply(ControlAction action, int layer, int column, double value, Mode mode);
     void readDatagrams();
+    void syncArtNet();
+    void readArtNet();
+    void handleDmx(int universe, const QByteArray &data, const QString &from);
 
     Document *m_doc;
     QUdpSocket *m_socket = nullptr;
     MidiInput *m_midi;
     int m_learn = -1;
     QHash<int, int> m_lastCC; // (channel << 8 | controller) -> last value, for trigger edges
+
+    QUdpSocket *m_artnet = nullptr;
+    bool m_artnetLocalOnly = false;
+    QByteArray m_dmxPrev;       // previous values of the patched universe (change detection)
+    quint64 m_dmxPatchKey = 0;  // patch the previous values belong to
+    QElapsedTimer m_dmxClock;   // since the last packet for our universe
+    QString m_dmxFrom;
+    qint64 m_dmxPackets = 0;
 };

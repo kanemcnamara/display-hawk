@@ -26,6 +26,8 @@ qt_add_executable(DisplayHawk
     src/render/YuvConverter.cpp
     src/control/Osc.h
     src/control/Osc.cpp
+    src/control/ArtNet.h
+    src/control/ArtNet.cpp
     src/control/Midi.h
     src/control/Midi.cpp
     src/control/ControlRouter.h

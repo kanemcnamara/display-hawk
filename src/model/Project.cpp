@@ -1,4 +1,4 @@
-﻿#include "model/Project.h"
+#include "model/Project.h"
 
 #include <QFileInfo>
 #include <QJsonArray>
@@ -294,6 +294,10 @@ QJsonObject Project::toJson() const
                                       {"midiNumber", m.midiNumber}});
     }
     root["controls"] = controlArr;
+    root["dmx"] = QJsonObject{{"enabled", dmx.enabled},
+                              {"universe", dmx.universe},
+                              {"address", dmx.address},
+                              {"layers", dmx.layers}};
     return root;
 }
 
@@ -410,6 +414,12 @@ Project Project::fromJson(const QJsonObject &root)
         m.midiNumber = qBound(0, o["midiNumber"].toInt(), 127);
         p.controls.append(m);
     }
+
+    const QJsonObject dmx = root["dmx"].toObject();
+    p.dmx.enabled = dmx["enabled"].toBool(false);
+    p.dmx.universe = qBound(0, dmx["universe"].toInt(0), 32767);
+    p.dmx.address = qBound(1, dmx["address"].toInt(1), 512);
+    p.dmx.layers = qBound(1, dmx["layers"].toInt(4), 32);
 
     if (p.layers.isEmpty())
         p.layers.append(Layer());

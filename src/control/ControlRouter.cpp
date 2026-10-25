@@ -1,8 +1,10 @@
 #include "control/ControlRouter.h"
 
+#include "control/ArtNet.h"
 #include "model/Document.h"
 
 #include <QNetworkDatagram>
+#include <QNetworkInterface>
 #include <QSettings>
 #include <QUdpSocket>
 
@@ -40,6 +42,9 @@ ControlRouter::ControlRouter(Document *doc, QObject *parent)
                                                       : m_midi->availableDevices());
     if (s.value("osc/enabled", false).toBool())
         setOsc(true, s.value("osc/port", 7400).toInt(), nullptr, false);
+    // Art-Net follows the project: on while its DMX patch is enabled.
+    connect(m_doc, &Document::changed, this, &ControlRouter::syncArtNet);
+    syncArtNet();
 }
 
 ControlRouter::~ControlRouter() = default;
@@ -233,6 +238,163 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
         }
         break;
     }
+}
+
+// ---------------------------------------------------------------- Art-Net
+
+void ControlRouter::setArtNetLocalOnly(bool localOnly)
+{
+    m_artnetLocalOnly = localOnly;
+    delete m_artnet;
+    m_artnet = nullptr;
+    syncArtNet();
+}
+
+void ControlRouter::syncArtNet()
+{
+    const bool wanted = m_doc->project().dmx.enabled;
+    if (wanted == (m_artnet != nullptr))
+        return;
+    if (!wanted) {
+        delete m_artnet;
+        m_artnet = nullptr;
+        m_dmxPrev.clear();
+        qInfo("Art-Net input off");
+        emit oscStateChanged();
+        return;
+    }
+    m_artnet = new QUdpSocket(this);
+    // Shared, so other Art-Net software on this machine can listen too.
+    if (!m_artnet->bind(m_artnetLocalOnly ? QHostAddress::LocalHost : QHostAddress::AnyIPv4, ArtNet::kPort,
+                        QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+        const QString err = m_artnet->errorString();
+        qWarning("Art-Net: cannot listen on UDP %d: %s", ArtNet::kPort, qPrintable(err));
+        emit activity(QStringLiteral("Art-Net: cannot listen on UDP %1: %2").arg(ArtNet::kPort).arg(err));
+        delete m_artnet;
+        m_artnet = nullptr;
+    } else {
+        connect(m_artnet, &QUdpSocket::readyRead, this, &ControlRouter::readArtNet);
+        qInfo("Art-Net listening on UDP %d", ArtNet::kPort);
+    }
+    emit oscStateChanged();
+}
+
+void ControlRouter::readArtNet()
+{
+    while (m_artnet && m_artnet->hasPendingDatagrams()) {
+        const QNetworkDatagram d = m_artnet->receiveDatagram();
+        handleArtNet(d.data(), d.senderAddress());
+    }
+}
+
+void ControlRouter::handleArtNet(const QByteArray &packet, const QHostAddress &from)
+{
+    const quint16 op = ArtNet::opcode(packet);
+    if (op == ArtNet::kOpPoll && m_artnet) {
+        // Answer discovery from the interface on the poller's subnet, so consoles list us.
+        QHostAddress self = QHostAddress::LocalHost;
+        for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces())
+            for (const QNetworkAddressEntry &e : iface.addressEntries())
+                if (e.ip().protocol() == QAbstractSocket::IPv4Protocol && !e.ip().isLoopback()
+                    && from.isInSubnet(e.ip(), e.prefixLength()))
+                    self = e.ip();
+        const DmxPatch &patch = m_doc->project().dmx;
+        const QByteArray reply = ArtNet::buildPollReply(
+            self, patch.universe, QStringLiteral("Display Hawk"), QStringLiteral("Display Hawk media server"),
+            QStringLiteral("#0001 [%1] DMX %2 at %3").arg(m_dmxPackets, 4, 10, QLatin1Char('0'))
+                .arg(ArtNet::universeText(patch.universe)).arg(patch.address));
+        m_artnet->writeDatagram(reply, from, ArtNet::kPort);
+        return;
+    }
+    ArtNet::Dmx dmx;
+    if (op == ArtNet::kOpDmx && ArtNet::parseDmx(packet, dmx))
+        handleDmx(dmx.universe, dmx.data, from.toString());
+}
+
+void ControlRouter::handleDmx(int universe, const QByteArray &data, const QString &from)
+{
+    const DmxPatch patch = m_doc->project().dmx;
+    if (!patch.enabled || universe != patch.universe)
+        return;
+    ++m_dmxPackets;
+    // A changed patch starts from a fresh baseline: old values belong to other channels.
+    const quint64 key = quint64(patch.universe) << 32 | quint64(patch.address) << 16 | quint64(patch.layers);
+    if (key != m_dmxPatchKey)
+        m_dmxPrev.clear();
+    m_dmxPatchKey = key;
+    // A desk appearing (or returning after 10 s of silence) sets faders but fires no triggers: its
+    // current clip and column channels become the starting point. Some desks only send on change
+    // plus a keep-alive every ~4 s, so the silence window must be longer than that.
+    const bool baseline = m_dmxPrev.isEmpty() || !m_dmxClock.isValid() || m_dmxClock.elapsed() > 10000;
+    m_dmxClock.start();
+    m_dmxFrom = from;
+
+    auto value = [&](const QByteArray &d, int ch) {
+        const int i = patch.address - 1 + ch;
+        return i < d.size() ? int(quint8(d[i])) : -1;
+    };
+    QStringList changes;
+    const QStringList names = dmxChannelNames(patch);
+    auto changed = [&](int ch) {
+        const int now = value(data, ch);
+        if (now < 0 || (!m_dmxPrev.isEmpty() && value(m_dmxPrev, ch) == now))
+            return false;
+        changes << QStringLiteral("%1=%2").arg(names.value(ch)).arg(now);
+        return true;
+    };
+
+    // Value changes only, so the desk and the Display Hawk UI can both be used.
+    if (changed(0))
+        apply(ControlAction::Master, 0, 0, value(data, 0) / 255.0, Mode::Value);
+    if (changed(1))
+        apply(ControlAction::Blackout, 0, 0, value(data, 1) / 255.0, Mode::Value);
+    if (changed(2) && !baseline && value(data, 2) > 0)
+        apply(ControlAction::TriggerColumn, 0, value(data, 2) - 1, 1.0, Mode::Press);
+    for (int l = 0; l < patch.layers; ++l) {
+        const int base = 3 + 3 * l;
+        if (changed(base) && !baseline) {
+            const int v = value(data, base);
+            if (v == 0)
+                apply(ControlAction::ClearLayer, l, 0, 1.0, Mode::Press);
+            else
+                apply(ControlAction::TriggerClip, l, v - 1, 1.0, Mode::Press);
+        }
+        if (changed(base + 1))
+            apply(ControlAction::LayerOpacity, l, 0, value(data, base + 1) / 255.0, Mode::Value);
+        if (changed(base + 2))
+            apply(ControlAction::LayerBypass, l, 0, value(data, base + 2) / 255.0, Mode::Value);
+    }
+    if (!changes.isEmpty())
+        emit activity(QStringLiteral("DMX %1 from %2%3: %4")
+                          .arg(ArtNet::universeText(universe), from,
+                               baseline ? QStringLiteral(" (first packet: faders only)") : QString(),
+                               changes.join(QStringLiteral(", "))));
+    m_dmxPrev = data;
+}
+
+QString ControlRouter::artNetStatus() const
+{
+    const DmxPatch &patch = m_doc->project().dmx;
+    if (!patch.enabled)
+        return tr("Art-Net input is off.");
+    if (!m_artnet)
+        return tr("Not listening (UDP %1 unavailable).").arg(ArtNet::kPort);
+    if (!m_dmxClock.isValid())
+        return tr("Listening on UDP %1, waiting for universe %2.").arg(ArtNet::kPort).arg(ArtNet::universeText(patch.universe));
+    const qint64 age = m_dmxClock.elapsed();
+    return tr("Receiving universe %1 from %2 (%3 packets, last %4 ms ago).")
+        .arg(ArtNet::universeText(patch.universe), m_dmxFrom)
+        .arg(m_dmxPackets)
+        .arg(age);
+}
+
+QStringList ControlRouter::dmxChannelNames(const DmxPatch &patch)
+{
+    QStringList names{QStringLiteral("Master"), QStringLiteral("Blackout"), QStringLiteral("Column")};
+    for (int l = 1; l <= patch.layers; ++l)
+        names << QStringLiteral("L%1 clip").arg(l) << QStringLiteral("L%1 opacity").arg(l)
+              << QStringLiteral("L%1 bypass").arg(l);
+    return names;
 }
 
 QString ControlRouter::oscReference()

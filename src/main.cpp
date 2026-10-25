@@ -1,3 +1,4 @@
+#include "control/ArtNet.h"
 #include "control/ControlRouter.h"
 #include "model/Document.h"
 #include "render/RenderEngine.h"
@@ -10,6 +11,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QDialog>
+#include <QTabWidget>
 #include <QEventLoop>
 #include <functional>
 #include <QIcon>
@@ -353,14 +355,66 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.setMaster(1.0);
     }
 
+    // Art-Net: real ArtDmx packets on localhost, universe 3, patch at channel 10, two layers.
+    {
+        ControlRouter *router = window.controlRouter();
+        router->setArtNetLocalOnly(true);
+        doc.project().dmx = DmxPatch{true, 3, 10, 2};
+        doc.notifyChanged();
+        check(router->artNetListening(), "Art-Net listener starts");
+        QUdpSocket desk;
+        int sequence = 1;
+        auto sendDmx = [&](const QVector<int> &personality, int universe = 3) {
+            QByteArray data(512, '\0');
+            for (int i = 0; i < personality.size(); ++i)
+                data[9 + i] = char(personality[i]); // channel 10 onwards
+            desk.writeDatagram(ArtNet::buildDmx(universe, data, sequence++), QHostAddress::LocalHost, ArtNet::kPort);
+        };
+        const Project &p = doc.project();
+        doc.triggerColumn(0);
+        //        master blk col  L1clip L1op L1byp  L2clip L2op L2byp
+        sendDmx({255, 0, 0, 3, 255, 0, 0, 255, 0});
+        const bool first = waitFor([&] { return router->lastDmx().size() == 512; }, 3000);
+        check(first && p.master > 0.99 && p.layers[0].activeColumn == 0,
+              "Art-Net first packet sets faders but triggers nothing");
+        sendDmx({64, 0, 0, 4, 128, 0, 0, 255, 0}); // clip channel 3 -> 4: play column 4
+        check(waitFor([&] { return qAbs(p.master - 64 / 255.0) < 0.01 && p.layers[0].activeColumn == 3
+                                   && qAbs(p.layers[0].opacity - 128 / 255.0) < 0.01; }, 3000),
+              "Art-Net master, clip select and layer opacity");
+        sendDmx({64, 255, 2, 4, 128, 255, 0, 255, 0}); // clip channel unchanged: no retrigger
+        check(waitFor([&] { return p.blackout && p.layers[0].activeColumn == 1 && p.layers[0].bypass; }, 3000),
+              "Art-Net blackout, column trigger and bypass");
+        sendDmx({0, 0, 2, 4, 128, 255, 0, 255, 0}, 4); // another universe: ignored
+        waitMs(300);
+        check(p.master > 0.2, "Art-Net ignores other universes");
+        const QByteArray reply = ArtNet::buildPollReply(QHostAddress(QStringLiteral("10.1.2.3")), 3,
+                                                        QStringLiteral("Display Hawk"), QStringLiteral("long"), QString());
+        check(reply.size() == 239 && ArtNet::opcode(reply) == ArtNet::kOpPollReply && quint8(reply[10]) == 10
+                  && quint8(reply[13]) == 3 && reply.mid(26, 12) == "Display Hawk" && quint8(reply[190]) == 3,
+              "Art-Net poll reply layout");
+        doc.setBlackout(false);
+        doc.setLayerPlayback(0, 1.0, false, false);
+        doc.setMaster(1.0);
+        doc.project().dmx.enabled = false;
+        doc.notifyChanged();
+        check(!router->artNetListening(), "Art-Net listener stops with the patch");
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
     doc.notifyChanged();
     doc.select(Selection::ofWall(0));
     waitMs(300);
-    if (auto *dialog = window.findChild<QDialog *>())
+    if (auto *dialog = window.findChild<QDialog *>()) {
         dialog->grab().save(QStringLiteral("%1/osc-midi-window.png").arg(outDir));
+        if (auto *tabs = dialog->findChild<QTabWidget *>()) {
+            doc.project().dmx.enabled = false;
+            tabs->setCurrentIndex(2);
+            waitMs(300);
+            dialog->grab().save(QStringLiteral("%1/artnet-window.png").arg(outDir));
+        }
+    }
     window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));
     window.setLive(false);
     return ok ? 0 : 1;

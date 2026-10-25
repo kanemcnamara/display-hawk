@@ -10,6 +10,7 @@ class QLabel;
 class QListWidget;
 class QPlainTextEdit;
 class QSpinBox;
+class QTabWidget;
 class QTableWidget;
 
 // OSC and MIDI setup: OSC port, MIDI devices, MIDI mappings with learn, and a live monitor.
@@ -26,6 +27,8 @@ private:
     void refreshOsc();
     void refreshDevices();
     void refreshMappings();
+    void refreshDmx();
+    void refreshDmxValues();
     void addMapping(int action, int layer, int column);
 
     Document *m_doc;
@@ -39,5 +42,11 @@ private:
     QSpinBox *m_newLayer;
     QSpinBox *m_newColumn;
     QPlainTextEdit *m_monitor;
+    QTabWidget *m_tabs;
+    QCheckBox *m_dmxEnabled;
+    QSpinBox *m_dmxUniverse, *m_dmxAddress, *m_dmxLayers;
+    QLabel *m_dmxUniverseText;
+    QLabel *m_dmxStatus;
+    QTableWidget *m_dmxChannels;
     bool m_refreshing = false;
 };

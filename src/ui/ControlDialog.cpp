@@ -1,5 +1,6 @@
 #include "ui/ControlDialog.h"
 
+#include "control/ArtNet.h"
 #include "control/ControlRouter.h"
 #include "model/Document.h"
 
@@ -17,7 +18,9 @@
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTableWidget>
+#include <QTabWidget>
 #include <QTime>
+#include <QTimer>
 #include <QVBoxLayout>
 
 ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *parent)
@@ -25,7 +28,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     , m_doc(doc)
     , m_router(router)
 {
-    setWindowTitle(tr("OSC & MIDI"));
+    setWindowTitle(tr("OSC, MIDI & Art-Net"));
     resize(900, 720);
 
     // OSC
@@ -101,17 +104,92 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     m_monitor->setFont(mono);
     monl->addWidget(m_monitor);
 
-    auto *split = new QSplitter(Qt::Vertical);
-    split->addWidget(maps);
-    split->addWidget(mon);
-    split->setSizes({300, 160});
+    // Art-Net / DMX
+    auto *artnet = new QWidget;
+    auto *al = new QVBoxLayout(artnet);
+    auto *patchBox = new QGroupBox(tr("DMX patch (saved with the setup)"));
+    auto *pf = new QFormLayout(patchBox);
+    m_dmxEnabled = new QCheckBox(tr("Receive Art-Net (UDP 6454)"));
+    m_dmxUniverse = new QSpinBox;
+    m_dmxUniverse->setRange(0, 32767);
+    m_dmxUniverseText = new QLabel;
+    m_dmxAddress = new QSpinBox;
+    m_dmxAddress->setRange(1, 512);
+    m_dmxLayers = new QSpinBox;
+    m_dmxLayers->setRange(1, 32);
+    m_dmxStatus = new QLabel;
+    m_dmxStatus->setWordWrap(true);
+    auto *uniRow = new QHBoxLayout;
+    uniRow->addWidget(m_dmxUniverse);
+    uniRow->addWidget(m_dmxUniverseText, 1);
+    pf->addRow(m_dmxEnabled);
+    pf->addRow(tr("Universe (Port-Address)"), uniRow);
+    pf->addRow(tr("Start address"), m_dmxAddress);
+    pf->addRow(tr("Layers controlled"), m_dmxLayers);
+    pf->addRow(m_dmxStatus);
+    m_dmxChannels = new QTableWidget(0, 3);
+    m_dmxChannels->setHorizontalHeaderLabels({tr("DMX channel"), tr("Function"), tr("Value")});
+    m_dmxChannels->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    m_dmxChannels->verticalHeader()->hide();
+    m_dmxChannels->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    m_dmxChannels->setSelectionMode(QAbstractItemView::NoSelection);
+    auto *help = new QLabel(tr("Clip channels: 0 stops the layer, 1-255 plays that column. Column channel: 1-255 "
+                               "triggers that column. Bypass and blackout switch on at 128. Values act when they "
+                               "change, so the desk and this app can both be used; a desk's first packet sets "
+                               "faders only."));
+    help->setWordWrap(true);
+    al->addWidget(patchBox);
+    al->addWidget(m_dmxChannels, 1);
+    al->addWidget(help);
 
-    auto *top = new QHBoxLayout;
-    top->addWidget(osc, 3);
-    top->addWidget(midi, 2);
+    auto *oscPage = new QWidget;
+    auto *ol = new QVBoxLayout(oscPage);
+    ol->addWidget(osc);
+    ol->addStretch();
+    auto *midiPage = new QWidget;
+    auto *ml = new QVBoxLayout(midiPage);
+    ml->addWidget(midi);
+    ml->addWidget(maps, 1);
+    m_tabs = new QTabWidget;
+    m_tabs->addTab(oscPage, tr("OSC"));
+    m_tabs->addTab(midiPage, tr("MIDI"));
+    m_tabs->addTab(artnet, tr("Art-Net / DMX"));
+
+    auto *split = new QSplitter(Qt::Vertical);
+    split->addWidget(m_tabs);
+    split->addWidget(mon);
+    split->setSizes({520, 160});
     auto *v = new QVBoxLayout(this);
-    v->addLayout(top);
     v->addWidget(split, 1);
+
+    auto patchEdit = [this] {
+        if (m_refreshing)
+            return;
+        DmxPatch &p = m_doc->project().dmx;
+        p.enabled = m_dmxEnabled->isChecked();
+        p.universe = m_dmxUniverse->value();
+        p.address = m_dmxAddress->value();
+        p.layers = m_dmxLayers->value();
+        m_doc->notifyChanged();
+        refreshDmx();
+    };
+    connect(m_dmxEnabled, &QCheckBox::toggled, this, patchEdit);
+    connect(m_dmxUniverse, &QSpinBox::valueChanged, this, patchEdit);
+    connect(m_dmxAddress, &QSpinBox::valueChanged, this, patchEdit);
+    connect(m_dmxLayers, &QSpinBox::valueChanged, this, patchEdit);
+    // Live values while the dialog is open.
+    auto *dmxTimer = new QTimer(this);
+    dmxTimer->setInterval(200);
+    connect(dmxTimer, &QTimer::timeout, this, [this] {
+        if (isVisible() && m_tabs->currentIndex() == 2)
+            refreshDmxValues();
+    });
+    dmxTimer->start();
+    connect(m_doc, &Document::changed, this, [this] {
+        if (isVisible())
+            refreshDmx();
+    });
+    refreshDmx();
 
     connect(m_oscEnabled, &QCheckBox::toggled, this, [this](bool on) {
         if (m_refreshing)
@@ -174,6 +252,46 @@ void ControlDialog::refreshOsc()
             addresses << QStringLiteral("%1:%2").arg(a.toString()).arg(m_router->oscPort());
     m_oscStatus->setText(tr("Listening. Send to: %1").arg(addresses.isEmpty() ? QStringLiteral("127.0.0.1:%1").arg(m_router->oscPort())
                                                                                 : addresses.join(QStringLiteral(", "))));
+}
+
+void ControlDialog::refreshDmx()
+{
+    const DmxPatch &p = m_doc->project().dmx;
+    m_refreshing = true;
+    m_dmxEnabled->setChecked(p.enabled);
+    if (m_dmxUniverse->value() != p.universe)
+        m_dmxUniverse->setValue(p.universe);
+    if (m_dmxAddress->value() != p.address)
+        m_dmxAddress->setValue(p.address);
+    if (m_dmxLayers->value() != p.layers)
+        m_dmxLayers->setValue(p.layers);
+    m_refreshing = false;
+    m_dmxUniverseText->setText(tr("net.subnet.universe %1").arg(ArtNet::universeText(p.universe)));
+
+    const QStringList names = ControlRouter::dmxChannelNames(p);
+    if (m_dmxChannels->rowCount() != names.size()) {
+        m_dmxChannels->setRowCount(int(names.size()));
+        for (int i = 0; i < names.size(); ++i)
+            for (int c = 0; c < 3; ++c)
+                m_dmxChannels->setItem(i, c, new QTableWidgetItem);
+    }
+    for (int i = 0; i < names.size(); ++i) {
+        const int channel = p.address + i;
+        m_dmxChannels->item(i, 0)->setText(channel <= 512 ? QString::number(channel) : tr("%1 (past 512!)").arg(channel));
+        m_dmxChannels->item(i, 1)->setText(names[i]);
+    }
+    refreshDmxValues();
+}
+
+void ControlDialog::refreshDmxValues()
+{
+    const DmxPatch &p = m_doc->project().dmx;
+    const QByteArray dmx = m_router->lastDmx();
+    for (int i = 0; i < m_dmxChannels->rowCount(); ++i) {
+        const int index = p.address - 1 + i;
+        m_dmxChannels->item(i, 2)->setText(index < dmx.size() ? QString::number(quint8(dmx[index])) : QStringLiteral("-"));
+    }
+    m_dmxStatus->setText(m_router->artNetStatus());
 }
 
 void ControlDialog::refreshDevices()
