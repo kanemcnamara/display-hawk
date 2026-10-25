@@ -18,6 +18,7 @@ public:
     explicit EffectChainEditor(Document *doc, QWidget *parent = nullptr);
 
     void setLayer(int layer); // -1 = composition
+    void setClip(int layer, int column);
     void refresh();
 
 signals:
@@ -32,9 +33,11 @@ private:
 
     Document *m_doc;
     int m_layer = -1;
+    int m_column = -1; // >= 0: the chain of that clip
     QVBoxLayout *m_list;
     QStringList m_builtFor; // effect types the widgets were built for
     int m_builtLayer = -2;
+    int m_builtColumn = -2;
     bool m_refreshing = false;
     // Per effect, per parameter: pushes a value into the widgets without signals.
     QVector<QVector<std::function<void(double)>>> m_setters;

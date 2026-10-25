@@ -78,6 +78,14 @@ EffectChainEditor::EffectChainEditor(Document *doc, QWidget *parent)
 void EffectChainEditor::setLayer(int layer)
 {
     m_layer = layer;
+    m_column = -1;
+    refresh();
+}
+
+void EffectChainEditor::setClip(int layer, int column)
+{
+    m_layer = layer;
+    m_column = column;
     refresh();
 }
 
@@ -86,7 +94,13 @@ QVector<EffectInstance> *EffectChainEditor::chain()
     Project &p = m_doc->project();
     if (m_layer < 0)
         return &p.compEffects;
-    return m_layer < p.layers.size() ? &p.layers[m_layer].effects : nullptr;
+    if (m_layer >= p.layers.size())
+        return nullptr;
+    if (m_column >= 0)
+        return m_column < p.layers[m_layer].clips.size() && !p.layers[m_layer].clips[m_column].isEmpty()
+                   ? &p.layers[m_layer].clips[m_column].effects
+                   : nullptr;
+    return &p.layers[m_layer].effects;
 }
 
 void EffectChainEditor::edit(const std::function<void(QVector<EffectInstance> &)> &fn, bool structural)
@@ -113,7 +127,7 @@ void EffectChainEditor::refresh()
     if (c)
         for (const EffectInstance &e : std::as_const(*c))
             types << e.type;
-    if (types != m_builtFor || m_layer != m_builtLayer) {
+    if (types != m_builtFor || m_layer != m_builtLayer || m_column != m_builtColumn) {
         rebuild();
         return;
     }
@@ -141,6 +155,7 @@ void EffectChainEditor::rebuild()
     m_enabledSetters.clear();
     m_builtFor.clear();
     m_builtLayer = m_layer;
+    m_builtColumn = m_column;
     QVector<EffectInstance> *c = chain();
     if (!c)
         return;
@@ -305,6 +320,10 @@ void EffectChainEditor::rebuild()
                 h->addWidget(slider, 1);
                 h->addWidget(spin);
                 field = w;
+            }
+            if (m_column >= 0) { // clip effects: no remote control address yet
+                form->addRow(pd.name, field);
+                continue;
             }
             field->setToolTip(tr("OSC: %1 (0..1 spans the range)\nRight-click to learn a MIDI control")
                                   .arg(oscAddress(i, k)));

@@ -6,6 +6,7 @@
 
 class ClipGrid;
 class Document;
+class RenderEngine;
 class QPushButton;
 class QSlider;
 class QVBoxLayout;
@@ -18,7 +19,7 @@ class ClipDeck : public QWidget
 {
     Q_OBJECT
 public:
-    explicit ClipDeck(Document *doc, QWidget *parent = nullptr);
+    ClipDeck(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
 
 signals:
     // Right-click "MIDI learn" on a clip or column: ControlAction, layer and column (0-based).
@@ -49,7 +50,7 @@ class ClipGrid : public QWidget
 {
     Q_OBJECT
 public:
-    explicit ClipGrid(Document *doc, QWidget *parent = nullptr);
+    ClipGrid(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
     void updateSize();
 
 signals:
@@ -75,6 +76,7 @@ private:
     void browseInto(int layer, int column);
 
     Document *m_doc;
+    RenderEngine *m_engine;
     QHash<QByteArray, QPixmap> m_thumbs;
     QPair<int, int> m_pressCell{-1, -1};
     QPoint m_pressPos;

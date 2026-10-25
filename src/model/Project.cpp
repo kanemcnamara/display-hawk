@@ -183,6 +183,54 @@ QPolygonF Slice::inputPolygon() const
     return t.map(poly);
 }
 
+QString playModeName(PlayMode m)
+{
+    switch (m) {
+    case PlayMode::Loop: return QStringLiteral("Loop");
+    case PlayMode::Bounce: return QStringLiteral("Bounce (back and forth)");
+    case PlayMode::OnceHold: return QStringLiteral("Play once and hold");
+    case PlayMode::OnceClear: return QStringLiteral("Play once and clear");
+    }
+    return {};
+}
+
+QString triggerModeName(TriggerMode m)
+{
+    switch (m) {
+    case TriggerMode::Retrigger: return QStringLiteral("Retrigger (restart)");
+    case TriggerMode::Toggle: return QStringLiteral("Toggle (trigger again stops)");
+    case TriggerMode::Piano: return QStringLiteral("Piano (plays while held)");
+    }
+    return {};
+}
+
+QString transitionStyleName(TransitionStyle t)
+{
+    switch (t) {
+    case TransitionStyle::Crossfade: return QStringLiteral("Crossfade");
+    case TransitionStyle::WipeLeft: return QStringLiteral("Wipe left");
+    case TransitionStyle::WipeRight: return QStringLiteral("Wipe right");
+    case TransitionStyle::WipeUp: return QStringLiteral("Wipe up");
+    case TransitionStyle::WipeDown: return QStringLiteral("Wipe down");
+    case TransitionStyle::PushLeft: return QStringLiteral("Push left");
+    case TransitionStyle::PushRight: return QStringLiteral("Push right");
+    case TransitionStyle::PushUp: return QStringLiteral("Push up");
+    case TransitionStyle::PushDown: return QStringLiteral("Push down");
+    case TransitionStyle::Zoom: return QStringLiteral("Zoom in");
+    }
+    return {};
+}
+
+QString autopilotName(Autopilot a)
+{
+    switch (a) {
+    case Autopilot::Off: return QStringLiteral("Off");
+    case Autopilot::Next: return QStringLiteral("Next clip");
+    case Autopilot::Random: return QStringLiteral("Random clip");
+    }
+    return {};
+}
+
 QString cabinetArrangeName(CabinetArrange a)
 {
     switch (a) {
@@ -436,7 +484,14 @@ static QJsonObject clipToJson(const Clip &c)
                        {"mediaPath", c.mediaPath},
                        {"inputId", c.inputId},
                        {"scale", int(c.scale)},
-                       {"loop", c.loop},
+                       {"playMode", int(c.playMode)},
+                       {"speed", c.speed},
+                       {"reverse", c.reverse},
+                       {"in", c.inPoint},
+                       {"out", c.outPoint},
+                       {"trigger", int(c.trigger)},
+                       {"transform", QJsonArray{c.posX, c.posY, c.scaleBy, c.rotation, c.opacity}},
+                       {"effects", effectsToJson(c.effects)},
                        {"volume", c.volume},
                        {"solidColor", c.solidColor.name()},
                        {"gridSpacing", c.gridSpacing}};
@@ -454,7 +509,23 @@ static Clip clipFromJson(const QJsonObject &o)
     c.mediaPath = o["mediaPath"].toString();
     c.inputId = o["inputId"].toString();
     c.scale = ScaleMode(o["scale"].toInt(0));
-    c.loop = o["loop"].toBool(true);
+    // Older files: "loop" (true = loop, false = play once and hold).
+    c.playMode = o.contains("playMode") ? PlayMode(qBound(0, o["playMode"].toInt(), kPlayModeCount - 1))
+                                        : (o["loop"].toBool(true) ? PlayMode::Loop : PlayMode::OnceHold);
+    c.speed = qBound(0.05, o["speed"].toDouble(1.0), 8.0);
+    c.reverse = o["reverse"].toBool(false);
+    c.inPoint = qBound(0.0, o["in"].toDouble(0.0), 1.0);
+    c.outPoint = qBound(c.inPoint, o["out"].toDouble(1.0), 1.0);
+    c.trigger = TriggerMode(qBound(0, o["trigger"].toInt(0), kTriggerModeCount - 1));
+    const QJsonArray t = o["transform"].toArray();
+    if (t.size() == 5) {
+        c.posX = t[0].toDouble();
+        c.posY = t[1].toDouble();
+        c.scaleBy = qBound(0.01, t[2].toDouble(1.0), 20.0);
+        c.rotation = t[3].toDouble();
+        c.opacity = qBound(0.0, t[4].toDouble(1.0), 1.0);
+    }
+    c.effects = effectsFromJson(o["effects"].toArray());
     c.volume = qBound(0.0, o["volume"].toDouble(1.0), 2.0);
     c.solidColor = QColor(o["solidColor"].toString("#ffffff"));
     c.gridSpacing = qMax(4, o["gridSpacing"].toInt(64));
@@ -587,6 +658,9 @@ QJsonObject Project::toJson() const
                                     {"solo", l.solo},
                                     {"targetWall", l.targetWall},
                                     {"transitionMs", l.transitionMs},
+                                    {"transition", int(l.transition)},
+                                    {"autopilot", int(l.autopilot)},
+                                    {"autopilotSeconds", l.autopilotSeconds},
                                     {"activeColumn", l.activeColumn},
                                     {"effects", effectsToJson(l.effects)},
                                     {"clips", clipArr}});
@@ -759,6 +833,9 @@ Project Project::fromJson(const QJsonObject &root)
             l.solo = o["solo"].toBool(false);
             l.targetWall = o["targetWall"].toInt(-1);
             l.transitionMs = qMax(0, o["transitionMs"].toInt(0));
+            l.transition = TransitionStyle(qBound(0, o["transition"].toInt(0), kTransitionStyleCount - 1));
+            l.autopilot = Autopilot(qBound(0, o["autopilot"].toInt(0), 2));
+            l.autopilotSeconds = qBound(0.5, o["autopilotSeconds"].toDouble(10.0), 3600.0);
             l.activeColumn = o["activeColumn"].toInt(-1);
             l.effects = effectsFromJson(o["effects"].toArray());
             for (const QJsonValue &cv : o["clips"].toArray())
@@ -774,7 +851,7 @@ Project Project::fromJson(const QJsonObject &root)
         clip.pattern = TestPattern(c["pattern"].toInt(0));
         clip.mediaPath = c["mediaPath"].toString();
         clip.scale = ScaleMode(c["scale"].toInt(0));
-        clip.loop = c["loop"].toBool(true);
+        clip.playMode = c["loop"].toBool(true) ? PlayMode::Loop : PlayMode::OnceHold;
         clip.solidColor = QColor(c["solidColor"].toString("#ffffff"));
         clip.gridSpacing = qMax(4, c["gridSpacing"].toInt(64));
         Layer l;

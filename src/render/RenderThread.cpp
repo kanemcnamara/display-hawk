@@ -492,6 +492,9 @@ void RenderThread::run()
     for (LayerState &ls : m_layers)
         releaseTarget(ls.target);
     m_layers.clear();
+    for (ClipTarget &ct : m_clipTargets)
+        releaseTarget(ct.target);
+    m_clipTargets.clear();
     delete m_overlayTex;
     m_overlayTex = nullptr;
     releaseScreenOverlays();
@@ -905,7 +908,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         } else if (active) {
             st.current = *active; // pick up edits to the playing clip
         }
-        float mix = 1.0f;
+        float mix = 1.0f; // transition progress
         if (!st.previous.isEmpty()) {
             mix = st.duration > 0 ? float(now - st.since) / float(st.duration) : 1.0f;
             if (mix >= 1.0f) {
@@ -927,10 +930,26 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
         QVector<RhiQuad::Params> draws;
         const QRect target = p.targetRect(layer.targetWall);
+        // The transition style decides where the outgoing and incoming clips are while it runs.
+        Placement out, in;
+        const double w = target.width(), h = target.height(), m = mix;
+        const QRectF t(target);
+        switch (st.previous.isEmpty() ? TransitionStyle::Crossfade : layer.transition) {
+        case TransitionStyle::Crossfade: in.opacity = mix; break;
+        case TransitionStyle::WipeLeft: in.scissor = QRectF(t.right() - w * m, t.top(), w * m, h); break;
+        case TransitionStyle::WipeRight: in.scissor = QRectF(t.left(), t.top(), w * m, h); break;
+        case TransitionStyle::WipeUp: in.scissor = QRectF(t.left(), t.bottom() - h * m, w, h * m); break;
+        case TransitionStyle::WipeDown: in.scissor = QRectF(t.left(), t.top(), w, h * m); break;
+        case TransitionStyle::PushLeft: in.offset = {w * (1 - m), 0}; out.offset = {-w * m, 0}; break;
+        case TransitionStyle::PushRight: in.offset = {-w * (1 - m), 0}; out.offset = {w * m, 0}; break;
+        case TransitionStyle::PushUp: in.offset = {0, h * (1 - m)}; out.offset = {0, -h * m}; break;
+        case TransitionStyle::PushDown: in.offset = {0, -h * (1 - m)}; out.offset = {0, h * m}; break;
+        case TransitionStyle::Zoom: in.zoom = qMax(0.001, m); in.opacity = mix; break;
+        }
         if (!st.previous.isEmpty())
-            appendClipDraw(cb, draws, u, st.previous, target, compSize, 1.0f);
+            placeClip(cb, draws, u, st.previous, target, compSize, out, timeSec);
         if (!st.current.isEmpty())
-            appendClipDraw(cb, draws, u, st.current, target, compSize, mix);
+            placeClip(cb, draws, u, st.current, target, compSize, in, timeSec);
         m_quad.recordPass(cb, st.target.rt, Qt::transparent, draws, u);
         QRhiTexture *layerTex = m_fx.apply(cb, layer.id, st.target.tex, compSize, layer.effects,
                                            effectOverrides(layerIndex), timeSec);
@@ -1031,12 +1050,91 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         collectGarbage(now);
 }
 
+void RenderThread::transformDraws(QVector<RhiQuad::Params> &draws, int from, const QPointF &centre, double scale,
+                                  const QPointF &offset, double rotation, const QRectF &scissor)
+{
+    for (int i = from; i < draws.size(); ++i) {
+        RhiQuad::Params &qp = draws[i];
+        // Scale about the centre, then shift; a rotation turns about the moved centre.
+        const QPointF tl = centre + (qp.dst.topLeft() - centre) * scale + offset;
+        qp.dst = QRectF(tl, qp.dst.size() * scale);
+        if (qp.dstAngle != 0.0)
+            qp.pivot = centre + (qp.pivot - centre) * scale + offset;
+        if (rotation != 0.0) {
+            qp.dstAngle += rotation;
+            qp.pivot = centre + offset;
+        }
+        if (!scissor.isNull()) { // a wipe; zero width at its start
+            qp.clip = qp.clip.isEmpty() ? scissor.toRect() : qp.clip.intersected(scissor.toRect());
+            if (qp.clip.isEmpty())
+                qp.clip = QRect(-1, -1, 1, 1); // fully wiped: draws nothing (an empty clip means "no scissor")
+        }
+    }
+}
+
+void RenderThread::placeClip(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u,
+                             const Clip &clip, const QRect &target, const QSize &compSize, const Placement &placement,
+                             double timeSec)
+{
+    const QPointF centre = QRectF(target).center();
+    bool effects = false;
+    for (const EffectInstance &e : clip.effects)
+        effects = effects || e.enabled;
+
+    if (!effects) {
+        // Straight into the layer: the clip's own transform, then the transition's.
+        const int from = int(draws.size());
+        appendClipDraw(cb, draws, u, clip, target, compSize, float(clip.opacity) * placement.opacity);
+        transformDraws(draws, from, centre, clip.scaleBy, QPointF(clip.posX, clip.posY), clip.rotation, {});
+        transformDraws(draws, from, centre, placement.zoom, placement.offset, 0.0, placement.scissor);
+        return;
+    }
+
+    // With effects: the clip renders transformed into its own texture, the effects run on that,
+    // and the result goes into the layer with the transition's placement.
+    ClipTarget &ct = m_clipTargets[clip.id];
+    ct.lastUsed = m_clock.elapsed();
+    if (!ensureTarget(ct.target, compSize, false))
+        return;
+    QVector<RhiQuad::Params> own;
+    QRhiResourceUpdateBatch *ou = m_rhi->nextResourceUpdateBatch();
+    appendClipDraw(cb, own, ou, clip, target, compSize, float(clip.opacity));
+    transformDraws(own, 0, centre, clip.scaleBy, QPointF(clip.posX, clip.posY), clip.rotation, {});
+    m_quad.recordPass(cb, ct.target.rt, Qt::transparent, own, ou);
+    QRhiTexture *tex = m_fx.apply(cb, QStringLiteral("clip:") + clip.id, ct.target.tex, compSize, clip.effects, {}, timeSec);
+
+    RhiQuad::Params qp;
+    qp.target = compSize;
+    qp.dst = QRectF(QPointF(), compSize);
+    qp.texture = tex;
+    qp.texFlipY = m_rhi->isYUpInFramebuffer();
+    qp.blend = RhiQuad::Blend::Normal; // premultiplied
+    qp.opacity = placement.opacity;
+    qp.clip = target;
+    draws.append(qp);
+    transformDraws(draws, int(draws.size()) - 1, centre, placement.zoom, placement.offset, 0.0, placement.scissor);
+}
+
 void RenderThread::collectGarbage(qint64 now)
 {
     // Free textures of clips and layers that have not been drawn for a while.
     constexpr qint64 kIdleMs = 5000;
     m_lastGc = now;
     m_fx.collectGarbage(now, kIdleMs);
+    for (auto it = m_clipTargets.begin(); it != m_clipTargets.end();) {
+        if (now - it->lastUsed > kIdleMs) {
+            if (it->target.tex) {
+                m_quad.forgetTexture(it->target.tex);
+                m_fx.forgetTexture(it->target.tex);
+                it->target.rt->deleteLater();
+                it->target.rp->deleteLater();
+                it->target.tex->deleteLater();
+            }
+            it = m_clipTargets.erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = m_clipTex.begin(); it != m_clipTex.end();) {
         if (now - it->lastUsed > kIdleMs && !it->newMedia) {
             releaseClipTex(*it, true);

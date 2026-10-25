@@ -5,6 +5,7 @@
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "audio/AudioReactive.h"
+#include "control/AutopilotController.h"
 #include "control/ControlRouter.h"
 #include "ui/AudioReactiveDialog.h"
 #include "ui/CanvasView.h"
@@ -142,9 +143,10 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
 
     m_router = new ControlRouter(doc, this);
     m_audioReactive = new AudioReactive(doc, engine, this);
+    new AutopilotController(doc, engine, this); // clip ends: autopilot and "play once and clear"
     connect(m_router, &ControlRouter::liveRequested, this, [this](int state) { setLive(state < 0 ? !m_live : state == 1); });
 
-    auto *deck = new ClipDeck(doc);
+    auto *deck = new ClipDeck(doc, engine);
     connect(deck, &ClipDeck::midiLearnRequested, this, [this](int action, int layer, int column) {
         showControls();
         m_controlDialog->learnNew(action, layer, column);

@@ -127,6 +127,17 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - What is playing, layer opacity/bypass/solo and the master are *playback*: they are saved with the setup (so recovery and go-live-on-launch resume the show) but are never undo steps, and undo never changes what is playing.
 - Each playing media clip has its own decoder; it is released shortly after the clip stops (after any crossfade).
 
+
+### Clip playback
+
+Each clip (select it in the deck) has:
+
+- **Trigger**: *Retrigger* restarts it, *Toggle* stops it when triggered again, *Piano* plays it only while the mouse button, MIDI note or OSC value (1, then 0) is held.
+- **Playback** (movies): *At the end*: loop, bounce, play once and hold, or play once and clear the layer. *Speed* 0.05x to 8x, *Reverse*, *In / out* points (looping and play-once respect them), and a *Position* bar to scrub. Reverse and bounce need HAP movies (frame-exact); other formats play forwards and bounce loops. Playing movies show their progress (and in/out range) under their thumbnail in the deck.
+- **Transform**: position, scale, rotation and opacity within the layer's area.
+- **Clip effects**: an effect chain of its own, applied before the layer mixes the clip.
+
+Each layer has a **transition** time and **style** (crossfade, wipes, pushes in four directions, zoom), and **autopilot**: move to the next or a random clip when a movie reaches its end (or completes a loop), or after a set time for stills, patterns and live inputs.
 ## Using it
 
 - **Input map** (top): composition with walls (dashed) and slice inputs (orange). **Output map** (bottom): the selected screen with slice outputs. Red outlines = outside the canvas.

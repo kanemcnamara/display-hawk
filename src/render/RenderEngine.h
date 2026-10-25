@@ -84,6 +84,8 @@ public:
 
 signals:
     void mediaStateChanged();
+    // A playing media clip went round its loop (ended = false) or, playing once, reached its end.
+    void clipFinished(const QString &clipId, bool ended);
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);
     void statsUpdated(int fps, const QSize &compSize);
 

@@ -1,4 +1,7 @@
 #include "ui/ClipDeck.h"
+#include <QTimer>
+#include "render/RenderEngine.h"
+#include "media/MediaSource.h"
 
 #include "model/Document.h"
 #include "media/Ndi.h"
@@ -122,7 +125,7 @@ private:
 
 // ---------------------------------------------------------------- ClipDeck
 
-ClipDeck::ClipDeck(Document *doc, QWidget *parent)
+ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, QWidget *parent)
     : QWidget(parent)
     , m_doc(doc)
 {
@@ -169,7 +172,7 @@ ClipDeck::ClipDeck(Document *doc, QWidget *parent)
     m_rowLayout->setContentsMargins(0, kHeaderH, 0, 0);
     m_rowLayout->setSpacing(0);
     m_rowLayout->addStretch();
-    m_grid = new ClipGrid(doc);
+    m_grid = new ClipGrid(doc, engine);
     connect(m_grid, &ClipGrid::midiLearnRequested, this, &ClipDeck::midiLearnRequested);
     h->addWidget(left, 0, Qt::AlignTop);
     h->addWidget(m_grid, 0, Qt::AlignTop);
@@ -243,13 +246,25 @@ void ClipDeck::refresh()
 
 // ---------------------------------------------------------------- ClipGrid
 
-ClipGrid::ClipGrid(Document *doc, QWidget *parent)
+ClipGrid::ClipGrid(Document *doc, RenderEngine *engine, QWidget *parent)
     : QWidget(parent)
     , m_doc(doc)
+    , m_engine(engine)
 {
     setAcceptDrops(true);
     setMouseTracking(true);
     updateSize();
+    // Playing movies show their position under the thumbnail.
+    auto *timer = new QTimer(this);
+    timer->setInterval(100);
+    connect(timer, &QTimer::timeout, this, [this] {
+        for (const Layer &l : m_doc->project().layers)
+            if (const Clip *c = l.activeClip(); c && m_engine->mediaFor(c->id)) {
+                update();
+                return;
+            }
+    });
+    timer->start();
 }
 
 void ClipGrid::updateSize()
@@ -409,6 +424,17 @@ void ClipGrid::paintEvent(QPaintEvent *)
             if (active) {
                 painter.setPen(QPen(QColor(60, 220, 90), 3));
                 painter.drawRect(cell.adjusted(1, 1, -2, -2));
+                const MediaSource *m = m_engine->mediaFor(clip.id);
+                const double pos = m ? m->position() : -1.0;
+                if (pos >= 0.0) { // progress bar, with the in/out range shaded
+                    const QRect bar(cell.x() + 4, cell.bottom() - 21, cell.width() - 8, 4);
+                    painter.fillRect(bar, QColor(0, 0, 0, 160));
+                    painter.fillRect(QRect(bar.x() + int(bar.width() * clip.inPoint), bar.y(),
+                                           int(bar.width() * (clip.outPoint - clip.inPoint)), bar.height()),
+                                     QColor(70, 70, 80));
+                    painter.fillRect(QRect(bar.x(), bar.y(), int(bar.width() * qBound(0.0, pos, 1.0)), bar.height()),
+                                     QColor(60, 220, 90));
+                }
             }
             if (selected) {
                 painter.setPen(QPen(QColor(0, 170, 255), 1));
@@ -463,6 +489,8 @@ void ClipGrid::mouseReleaseEvent(QMouseEvent *)
 {
     if (m_moving && m_dropCell.first >= 0 && m_dropCell != m_pressCell)
         m_doc->moveClip(m_pressCell.first, m_pressCell.second, m_dropCell.first, m_dropCell.second);
+    else if (!m_moving && m_pressCell.first >= 0)
+        m_doc->releaseClip(m_pressCell.first, m_pressCell.second); // piano clips play while held
     m_moving = false;
     m_dropCell = {-1, -1};
     m_pressCell = {-1, -1};

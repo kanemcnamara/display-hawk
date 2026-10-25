@@ -19,6 +19,7 @@ class QLabel;
 class QLineEdit;
 class QPushButton;
 class QSpinBox;
+class QSlider;
 class QStackedWidget;
 
 // Inspector for whatever is selected: composition/content, LED wall, screen or slice.
@@ -86,7 +87,16 @@ private:
     QPushButton *m_solidColor;
     QLineEdit *m_mediaPath;
     QLabel *m_mediaStatus;
-    QCheckBox *m_loop;
+    QComboBox *m_playMode, *m_trigger;
+    QDoubleSpinBox *m_speed, *m_inPoint, *m_outPoint;
+    QCheckBox *m_reverse;
+    QSlider *m_position;
+    QLabel *m_positionText;
+    QDoubleSpinBox *m_clipX, *m_clipY, *m_clipScale, *m_clipRotation, *m_clipOpacity;
+    EffectChainEditor *m_clipFx;
+    QComboBox *m_transition, *m_autopilot;
+    QDoubleSpinBox *m_autopilotSeconds;
+    void refreshPosition();
     QDoubleSpinBox *m_clipVolume;
 
     // Wall

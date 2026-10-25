@@ -73,6 +73,24 @@ private:
     void appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u,
                         const Clip &clip, const QRect &target, const QSize &compSize, float opacity);
     void collectGarbage(qint64 now);
+    // Where a clip goes during a transition: shifted, zoomed about the layer's target, cut to a
+    // scissor rect (wipes), at an opacity.
+    struct Placement {
+        QPointF offset;
+        double zoom = 1.0;
+        QRectF scissor; // null = the whole target
+        float opacity = 1.0f;
+    };
+    void placeClip(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u,
+                   const Clip &clip, const QRect &target, const QSize &compSize, const Placement &placement,
+                   double timeSec);
+    static void transformDraws(QVector<RhiQuad::Params> &draws, int from, const QPointF &centre, double scale,
+                               const QPointF &offset, double rotation, const QRectF &scissor);
+    struct ClipTarget { // clips with effects render on their own first
+        Target target;
+        qint64 lastUsed = 0;
+    };
+    QHash<QString, ClipTarget> m_clipTargets;
     void renderPreviews(QRhiCommandBuffer *cb);
     void renderOutput(QRhiCommandBuffer *cb, Output &o);
     QVector<EffectRenderer::Override> effectOverrides(int layer) const;

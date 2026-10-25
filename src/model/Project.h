@@ -14,6 +14,22 @@ enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid
 constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
 enum class BlendMode { Normal = 0, Add, Screen, Multiply, Lighten, Darken };
+// What a media clip does at its out point.
+enum class PlayMode { Loop = 0, Bounce, OnceHold, OnceClear };
+constexpr int kPlayModeCount = int(PlayMode::OnceClear) + 1;
+// What triggering a clip does: restart it; stop it if it is already playing; play only while held.
+enum class TriggerMode { Retrigger = 0, Toggle, Piano };
+constexpr int kTriggerModeCount = int(TriggerMode::Piano) + 1;
+// How a layer changes from one clip to the next (over its transition time).
+enum class TransitionStyle { Crossfade = 0, WipeLeft, WipeRight, WipeUp, WipeDown, PushLeft, PushRight, PushUp, PushDown, Zoom };
+constexpr int kTransitionStyleCount = int(TransitionStyle::Zoom) + 1;
+// Autopilot: what a layer plays when its clip finishes (media at its out point, anything else
+// after the layer's autopilot time).
+enum class Autopilot { Off = 0, Next, Random };
+QString playModeName(PlayMode m);
+QString triggerModeName(TriggerMode m);
+QString transitionStyleName(TransitionStyle t);
+QString autopilotName(Autopilot a);
 
 QString testPatternName(TestPattern p);
 QString scaleModeName(ScaleMode m);
@@ -161,6 +177,14 @@ struct Screen {
     QVector<ProjectionMask> masks;         // drawn over the output, after every slice
 };
 
+// One effect in a chain (see render/Effects.h for the catalogue): type id, on/off and its parameter
+// values in the order the effect defines them.
+struct EffectInstance {
+    QString type;
+    bool enabled = true;
+    QVector<double> params;
+};
+
 // One cell of the clip deck. An empty id means an empty slot.
 struct Clip {
     QString id;
@@ -170,7 +194,19 @@ struct Clip {
     QString mediaPath;
     QString inputId; // Capture: camera/capture device id; Ndi: NDI source name; Share: Spout sender / Syphon server
     ScaleMode scale = ScaleMode::Fit;
-    bool loop = true;
+    // Media playback.
+    PlayMode playMode = PlayMode::Loop;
+    double speed = 1.0;      // 0.05 .. 8
+    bool reverse = false;    // HAP movies only
+    double inPoint = 0.0;    // 0..1 of the movie
+    double outPoint = 1.0;
+    TriggerMode trigger = TriggerMode::Retrigger;
+    // Transform within the layer's target area: offset in pixels, scale, clockwise rotation, opacity.
+    double posX = 0.0, posY = 0.0;
+    double scaleBy = 1.0;
+    double rotation = 0.0;
+    double opacity = 1.0;
+    QVector<EffectInstance> effects; // applied to the clip before the layer mixes it in
     double volume = 1.0; // the clip's own audio level
     QColor solidColor = Qt::white;
     int gridSpacing = 64;
@@ -191,13 +227,6 @@ struct Clip {
     QString mediaKey() const;
 };
 
-// One effect in a chain (see render/Effects.h for the catalogue): type id, on/off and its parameter
-// values in the order the effect defines them.
-struct EffectInstance {
-    QString type;
-    bool enabled = true;
-    QVector<double> params;
-};
 
 // A row of the clip deck. Layers are composited bottom (index 0) to top.
 struct Layer {
@@ -210,6 +239,9 @@ struct Layer {
     bool solo = false;
     int targetWall = -1;   // clips are fitted into this wall; -1 = whole composition
     int transitionMs = 0;  // crossfade when the playing clip changes
+    TransitionStyle transition = TransitionStyle::Crossfade;
+    Autopilot autopilot = Autopilot::Off;
+    double autopilotSeconds = 10.0; // clips without an end (stills, patterns, live inputs)
     int activeColumn = -1; // playback state: which clip is playing, -1 = none
     QVector<Clip> clips;   // one slot per column
     QVector<EffectInstance> effects; // applied to the layer before it is blended

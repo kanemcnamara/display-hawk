@@ -33,6 +33,23 @@ MediaSource::MediaSource(QObject *parent)
             m_player->setActiveVideoTrack(-1);
     });
     m_player->setLoops(QMediaPlayer::Infinite);
+    connect(m_player, &QMediaPlayer::positionChanged, this, &MediaSource::onPlayerPosition);
+    connect(m_player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
+        if (status == QMediaPlayer::LoadedMedia && !m_hap && m_isVideo)
+            applyPlayerPlayback();
+        if (status != QMediaPlayer::EndOfMedia || m_hap || !m_isVideo)
+            return;
+        if (m_params.mode == PlayMode::OnceHold || m_params.mode == PlayMode::OnceClear) {
+            if (!m_endedReported) {
+                m_endedReported = true;
+                emit ended();
+            }
+        } else { // manual looping (in/out points set): back to the in point
+            m_player->setPosition(qint64(m_params.in * m_player->duration()));
+            m_player->play();
+            emit looped();
+        }
+    });
     connect(m_sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
         if (frame.isValid() && m_isVideo && !m_hap)
             emit videoFrame(frame);
@@ -99,10 +116,18 @@ void MediaSource::open(const QString &path)
                 m_error = msg;
                 emit stateChanged();
             });
+            connect(m_hap, &HapPlayer::looped, this, [this] {
+                syncSoundtrack();
+                emit looped();
+            });
+            connect(m_hap, &HapPlayer::ended, this, [this] {
+                m_player->pause();
+                emit ended();
+            });
             m_hapThread->start(QThread::HighPriority);
-            QMetaObject::invokeMethod(m_hap, [hap = m_hap, loop = m_loop] {
-                hap->setLoop(loop);
-                hap->play();
+            QMetaObject::invokeMethod(m_hap, [hap = m_hap, params = m_params] {
+                hap->setParams(params);
+                hap->restart();
             });
             // The soundtrack (if any) from an audio-only decoder, started together with the pictures.
             m_player->setSource(QUrl::fromLocalFile(path));
@@ -256,12 +281,109 @@ void MediaSource::pause()
 
 void MediaSource::restart()
 {
-    if (m_hap)
+    m_endedReported = false;
+    if (m_hap) {
         QMetaObject::invokeMethod(m_hap, &HapPlayer::restart);
-    if (m_isVideo && !isLive()) {
-        m_player->setPosition(0);
+        syncSoundtrack();
+    } else if (m_isVideo && !isLive()) {
+        m_player->setPosition(qint64(m_params.in * m_player->duration()));
         m_player->play();
     }
+}
+
+void MediaSource::setPlayback(const PlaybackParams &params)
+{
+    if (params == m_params)
+        return;
+    m_params = params;
+    if (m_hap) {
+        QMetaObject::invokeMethod(m_hap, [hap = m_hap, params] { hap->setParams(params); });
+        syncSoundtrack();
+    } else if (m_isVideo && !isLive()) {
+        applyPlayerPlayback();
+    }
+}
+
+void MediaSource::applyPlayerPlayback()
+{
+    m_player->setPlaybackRate(qBound(0.05, m_params.speed, 8.0));
+    // Gapless looping by the decoder when the whole movie loops; otherwise in/out are handled here.
+    const bool whole = m_params.in <= 0.0 && m_params.out >= 1.0;
+    const bool loops = m_params.mode == PlayMode::Loop || m_params.mode == PlayMode::Bounce;
+    m_player->setLoops(loops && whole ? QMediaPlayer::Infinite : 1);
+    const qint64 duration = m_player->duration();
+    if (duration > 0 && m_player->position() < qint64(m_params.in * duration))
+        m_player->setPosition(qint64(m_params.in * duration));
+}
+
+void MediaSource::onPlayerPosition(qint64 ms)
+{
+    if (m_hap || !m_isVideo)
+        return;
+    const qint64 duration = m_player->duration();
+    const qint64 last = m_lastPositionMs;
+    m_lastPositionMs = ms;
+    if (duration <= 0)
+        return;
+    const qint64 outMs = qint64(m_params.out * duration);
+    const bool once = m_params.mode == PlayMode::OnceHold || m_params.mode == PlayMode::OnceClear;
+    if (m_params.out < 1.0 && ms >= outMs) {
+        if (once) {
+            m_player->pause();
+            if (!m_endedReported) {
+                m_endedReported = true;
+                emit ended();
+            }
+        } else {
+            m_player->setPosition(qint64(m_params.in * duration));
+            emit looped();
+        }
+    } else if (ms + duration / 2 < last && !once) {
+        emit looped(); // the decoder wrapped round by itself
+    }
+}
+
+void MediaSource::syncSoundtrack()
+{
+    if (!m_hap || !m_player->hasAudio())
+        return;
+    // Reverse or bouncing pictures have no sensible sound: the soundtrack only plays forwards.
+    m_player->setPlaybackRate(qBound(0.05, m_params.speed, 8.0));
+    m_player->setPosition(qint64(m_hap->position() * m_player->duration()));
+    if (m_params.reverse || m_params.mode == PlayMode::Bounce)
+        m_player->pause();
+    else if (m_hapPlaying)
+        m_player->play();
+}
+
+void MediaSource::seek(double fraction)
+{
+    fraction = qBound(0.0, fraction, 1.0);
+    if (m_hap) {
+        QMetaObject::invokeMethod(m_hap, [hap = m_hap, fraction] { hap->seek(fraction); });
+        if (m_player->hasAudio())
+            m_player->setPosition(qint64(fraction * m_player->duration()));
+    } else if (m_isVideo && !isLive()) {
+        m_player->setPosition(qint64(fraction * m_player->duration()));
+    }
+}
+
+double MediaSource::position() const
+{
+    if (m_hap)
+        return m_hap->position();
+    if (m_isVideo && !isLive() && m_player->duration() > 0)
+        return double(m_player->position()) / m_player->duration();
+    return -1.0;
+}
+
+double MediaSource::durationSeconds() const
+{
+    if (m_hap)
+        return m_hap->durationSeconds();
+    if (m_isVideo && !isLive())
+        return m_player->duration() / 1000.0;
+    return 0.0;
 }
 
 bool MediaSource::hasAudio() const
@@ -284,13 +406,6 @@ void MediaSource::setAudioDevice(const QAudioDevice &device)
     m_audio->setDevice(device);
 }
 
-void MediaSource::setLoop(bool loop)
-{
-    m_loop = loop;
-    m_player->setLoops(loop ? QMediaPlayer::Infinite : 1);
-    if (m_hap)
-        QMetaObject::invokeMethod(m_hap, [hap = m_hap, loop] { hap->setLoop(loop); });
-}
 
 bool MediaSource::isPlaying() const
 {

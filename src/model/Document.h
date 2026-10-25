@@ -90,7 +90,8 @@ public:
     void moveClip(int fromLayer, int fromColumn, int toLayer, int toColumn); // swaps the two slots
 
     // Playback: changes what is playing without creating undo steps or marking the file modified.
-    void triggerClip(int layer, int column);
+    void triggerClip(int layer, int column); // follows the clip's trigger mode
+    void releaseClip(int layer, int column); // piano clips stop when released
     void triggerColumn(int column);
     void clearLayer(int layer);
     void setMaster(double master);

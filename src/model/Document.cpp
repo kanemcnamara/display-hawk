@@ -277,6 +277,10 @@ void Document::triggerClip(int layer, int column)
     Layer &l = m_project.layers[layer];
     if (column < 0 || column >= l.clips.size() || l.clips[column].isEmpty())
         return;
+    if (l.clips[column].trigger == TriggerMode::Toggle && l.activeColumn == column) {
+        clearLayer(layer); // a toggle clip that is playing stops
+        return;
+    }
     l.activeColumn = column;
     notifyPlaybackChanged();
     emit clipTriggered(l.clips[column].id);
@@ -297,6 +301,15 @@ void Document::triggerColumn(int column)
     notifyPlaybackChanged();
     for (const QString &id : std::as_const(triggered))
         emit clipTriggered(id);
+}
+
+void Document::releaseClip(int layer, int column)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    const Layer &l = m_project.layers[layer];
+    if (l.activeColumn == column && column < l.clips.size() && l.clips[column].trigger == TriggerMode::Piano)
+        clearLayer(layer);
 }
 
 void Document::clearLayer(int layer)

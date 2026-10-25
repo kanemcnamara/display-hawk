@@ -1,12 +1,12 @@
 #pragma once
 
 #include "media/HapDecoder.h"
+#include "media/HapPlayer.h"
 
 #include <QImage>
 #include <QObject>
 #include <QVideoFrame>
 
-class HapPlayer;
 class QAudioDevice;
 class QAudioOutput;
 class NdiReceiver;
@@ -41,7 +41,12 @@ public:
     void play();
     void pause();
     void restart();
-    void setLoop(bool loop);
+    // Speed, direction, end behaviour and in/out points. Reverse and bounce need a HAP movie;
+    // other movies play forwards (bounce loops).
+    void setPlayback(const PlaybackParams &params);
+    void seek(double fraction); // 0..1 of the whole movie
+    double position() const;    // 0..1, -1 when unknown
+    double durationSeconds() const;
 
     bool isVideo() const { return m_isVideo; }
     bool isHap() const { return m_hap != nullptr; }
@@ -54,6 +59,8 @@ signals:
     void hapFrame(const HapFrame &frame);
     void stillImage(const QImage &image); // a null image clears the media
     void stateChanged();
+    void looped(); // went round from the out point to the in point
+    void ended();  // a play-once clip reached its end
 
 private:
     void stopHap();
@@ -74,5 +81,10 @@ private:
     bool m_isVideo = false;
     bool m_hasImage = false;
     bool m_hapPlaying = false;
-    bool m_loop = true;
+    PlaybackParams m_params;
+    qint64 m_lastPositionMs = 0;
+    bool m_endedReported = false;
+    void applyPlayerPlayback();
+    void onPlayerPosition(qint64 ms);
+    void syncSoundtrack(); // HAP: keeps the audio-only decoder at the pictures' position and speed
 };

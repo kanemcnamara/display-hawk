@@ -30,7 +30,9 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QSlider>
 #include <QStackedWidget>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
 
@@ -297,7 +299,19 @@ QWidget *PropertyPanel::buildLayerPage()
     f->addRow(tr("Volume"), m_layerVolume);
     f->addRow(tr("Blend"), m_layerBlend);
     f->addRow(tr("Fit clips into"), m_layerTarget);
-    f->addRow(tr("Crossfade"), m_layerTransition);
+    f->addRow(tr("Transition"), m_layerTransition);
+    m_transition = new QComboBox;
+    for (int i = 0; i < kTransitionStyleCount; ++i)
+        m_transition->addItem(transitionStyleName(TransitionStyle(i)));
+    m_transition->setToolTip(tr("How the next clip replaces the playing one, over the transition time"));
+    f->addRow(tr("Style"), m_transition);
+    m_autopilot = new QComboBox;
+    for (int i = 0; i < 3; ++i)
+        m_autopilot->addItem(autopilotName(::Autopilot(i)));
+    m_autopilot->setToolTip(tr("Move on when a clip finishes: movies at their end (or each loop), "
+                               "anything else after the time set here"));
+    m_autopilotSeconds = makeDouble(0.5, 3600, 1, QStringLiteral(" s"));
+    f->addRow(tr("Autopilot"), row({m_autopilot, m_autopilotSeconds}));
     f->addRow(QString(), row({m_layerBypass, m_layerSolo}));
     v->addWidget(box);
 
@@ -318,6 +332,16 @@ QWidget *PropertyPanel::buildLayerPage()
     connect(m_layerTarget, &QComboBox::activated, this, [this](int i) {
         const int wall = m_layerTarget->itemData(i).toInt();
         editLayer([&](Layer &l) { l.targetWall = wall; });
+    });
+    connect(m_transition, &QComboBox::activated, this, [this](int i) {
+        editLayer([&](Layer &l) { l.transition = TransitionStyle(i); });
+    });
+    connect(m_autopilot, &QComboBox::activated, this, [this](int i) {
+        editLayer([&](Layer &l) { l.autopilot = ::Autopilot(i); });
+    });
+    connect(m_autopilotSeconds, &QDoubleSpinBox::valueChanged, this, [this](double s) {
+        if (!m_refreshing)
+            editLayer([&](Layer &l) { l.autopilotSeconds = s; });
     });
     connect(m_layerTransition, &QSpinBox::valueChanged, this, [this](int ms) {
         if (!m_refreshing)
@@ -360,6 +384,10 @@ void PropertyPanel::refreshLayer()
     setValue(m_layerVolume, qRound(l->volume * 100.0));
     m_layerBlend->setCurrentIndex(int(l->blend));
     setValue(m_layerTransition, l->transitionMs);
+    m_transition->setCurrentIndex(int(l->transition));
+    m_autopilot->setCurrentIndex(int(l->autopilot));
+    setValue(m_autopilotSeconds, l->autopilotSeconds);
+    m_autopilotSeconds->setEnabled(l->autopilot != ::Autopilot::Off);
     m_layerBypass->setChecked(l->bypass);
     m_layerSolo->setChecked(l->solo);
     const Project &p = m_doc->project();
@@ -411,7 +439,6 @@ QWidget *PropertyPanel::buildClipPage()
     m_mediaPath = new QLineEdit;
     m_mediaPath->setReadOnly(true);
     auto *browse = new QPushButton(tr("Browse..."));
-    m_loop = new QCheckBox(tr("Loop"));
     m_clipVolume = makeDouble(0, 200, 0, QStringLiteral(" %"));
     m_clipVolume->setToolTip(tr("This clip's audio level (above 100% boosts quiet files)"));
     m_scale = new QComboBox;
@@ -430,13 +457,112 @@ QWidget *PropertyPanel::buildClipPage()
     f->addRow(tr("Solid colour"), m_solidColor);
     f->addRow(tr("Media"), row({m_mediaPath, browse}));
     f->addRow(tr("Input"), row({m_input, refreshInputs}));
-    f->addRow(QString(), m_loop);
     f->addRow(tr("Volume"), m_clipVolume);
     f->addRow(tr("Scale"), m_scale);
     f->addRow(trigger);
     f->addRow(QString(), row({play, pause, restart}));
     f->addRow(QString(), m_mediaStatus);
+    m_trigger = new QComboBox;
+    for (int i = 0; i < kTriggerModeCount; ++i)
+        m_trigger->addItem(triggerModeName(TriggerMode(i)));
+    m_trigger->setToolTip(tr("What triggering this clip does (mouse, MIDI note, OSC)"));
+    f->addRow(tr("Trigger"), m_trigger);
+
+    // Playback of movies.
+    auto *pb = new QGroupBox(tr("Playback"));
+    auto *pf = new QFormLayout(pb);
+    m_playMode = new QComboBox;
+    for (int i = 0; i < kPlayModeCount; ++i)
+        m_playMode->addItem(playModeName(PlayMode(i)));
+    m_speed = makeDouble(0.05, 8, 2, QStringLiteral(" x"));
+    m_speed->setSingleStep(0.05);
+    m_reverse = new QCheckBox(tr("Reverse"));
+    m_reverse->setToolTip(tr("Play backwards (HAP movies; other formats only play forwards)"));
+    m_inPoint = makeDouble(0, 100, 1, QStringLiteral(" %"));
+    m_outPoint = makeDouble(0, 100, 1, QStringLiteral(" %"));
+    m_inPoint->setToolTip(tr("Where the clip starts (and loops back to)"));
+    m_outPoint->setToolTip(tr("Where the clip ends (and loops from)"));
+    m_position = new QSlider(Qt::Horizontal);
+    m_position->setRange(0, 1000);
+    m_position->setToolTip(tr("Drag to scrub the playing clip"));
+    m_positionText = new QLabel;
+    m_positionText->setMinimumWidth(110);
+    pf->addRow(tr("At the end"), m_playMode);
+    pf->addRow(tr("Speed"), row({m_speed, m_reverse}));
+    pf->addRow(tr("In / out"), row({m_inPoint, m_outPoint}));
+    pf->addRow(tr("Position"), row({m_position, m_positionText}));
     m_clipStack->addWidget(box);
+
+    // Transform within the layer's area.
+    auto *tf = new QGroupBox(tr("Transform"));
+    auto *tl = new QFormLayout(tf);
+    m_clipX = makeDouble(-100000, 100000, 0, QStringLiteral(" px"));
+    m_clipY = makeDouble(-100000, 100000, 0, QStringLiteral(" px"));
+    m_clipScale = makeDouble(1, 2000, 0, QStringLiteral(" %"));
+    m_clipRotation = makeDouble(-360, 360, 1, QStringLiteral("\u00B0"));
+    m_clipOpacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
+    auto *resetTransform = new QPushButton(tr("Reset"));
+    tl->addRow(tr("Position"), row({m_clipX, m_clipY}));
+    tl->addRow(tr("Scale / rotate"), row({m_clipScale, m_clipRotation}));
+    tl->addRow(tr("Opacity"), row({m_clipOpacity, resetTransform}));
+
+    auto *cfx = new QGroupBox(tr("Clip effects"));
+    auto *cfl = new QVBoxLayout(cfx);
+    m_clipFx = new EffectChainEditor(m_doc);
+    cfl->addWidget(m_clipFx);
+
+    // The clip page scrolls as one: settings, playback, transform, effects.
+    auto *clipPage = new QWidget;
+    auto *cv = new QVBoxLayout(clipPage);
+    cv->setContentsMargins(0, 0, 0, 0);
+    m_clipStack->removeWidget(box);
+    cv->addWidget(box);
+    cv->addWidget(pb);
+    cv->addWidget(tf);
+    cv->addWidget(cfx);
+    m_clipStack->addWidget(clipPage);
+
+    connect(m_trigger, &QComboBox::activated, this, [this](int i) { editClip([&](Clip &c) { c.trigger = TriggerMode(i); }); });
+    connect(m_playMode, &QComboBox::activated, this, [this](int i) { editClip([&](Clip &c) { c.playMode = PlayMode(i); }); });
+    connect(m_reverse, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.reverse = on; });
+    });
+    auto clipNumber = [this](QDoubleSpinBox *spin, const std::function<void(Clip &, double)> &set) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, [this, set](double v) {
+            if (!m_refreshing)
+                editClip([&](Clip &c) { set(c, v); });
+        });
+    };
+    clipNumber(m_speed, [](Clip &c, double v) { c.speed = v; });
+    clipNumber(m_inPoint, [](Clip &c, double v) {
+        c.inPoint = v / 100.0;
+        c.outPoint = qMax(c.outPoint, c.inPoint);
+    });
+    clipNumber(m_outPoint, [](Clip &c, double v) {
+        c.outPoint = v / 100.0;
+        c.inPoint = qMin(c.inPoint, c.outPoint);
+    });
+    clipNumber(m_clipX, [](Clip &c, double v) { c.posX = v; });
+    clipNumber(m_clipY, [](Clip &c, double v) { c.posY = v; });
+    clipNumber(m_clipScale, [](Clip &c, double v) { c.scaleBy = v / 100.0; });
+    clipNumber(m_clipRotation, [](Clip &c, double v) { c.rotation = v; });
+    clipNumber(m_clipOpacity, [](Clip &c, double v) { c.opacity = v / 100.0; });
+    connect(resetTransform, &QPushButton::clicked, this, [this] {
+        editClip([](Clip &c) {
+            c.posX = c.posY = c.rotation = 0.0;
+            c.scaleBy = c.opacity = 1.0;
+        });
+    });
+    connect(m_position, &QSlider::sliderMoved, this, [this](int v) {
+        const Clip *c = m_doc->selectedClip();
+        if (MediaSource *m = c ? m_engine->mediaFor(c->id) : nullptr)
+            m->seek(v / 1000.0);
+    });
+    auto *positionTimer = new QTimer(this);
+    positionTimer->setInterval(100);
+    connect(positionTimer, &QTimer::timeout, this, &PropertyPanel::refreshPosition);
+    positionTimer->start();
 
     connect(addPattern, &QPushButton::clicked, this, [this, newPattern] {
         const Selection s = m_doc->selection();
@@ -481,10 +607,6 @@ QWidget *PropertyPanel::buildClipPage()
         const QColor col = QColorDialog::getColor(clip->solidColor, this, tr("Solid colour"));
         if (col.isValid())
             editClip([&](Clip &c) { c.solidColor = col; });
-    });
-    connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
-        if (!m_refreshing)
-            editClip([&](Clip &c) { c.loop = on; });
     });
     connect(m_scale, &QComboBox::activated, this, [this](int i) {
         editClip([&](Clip &c) { c.scale = ScaleMode(i); });
@@ -551,7 +673,18 @@ void PropertyPanel::refreshClip()
     setButtonColor(m_solidColor, c->solidColor);
     setText(m_mediaPath, QFileInfo(c->mediaPath).fileName());
     m_mediaPath->setToolTip(c->mediaPath);
-    m_loop->setChecked(c->loop);
+    m_trigger->setCurrentIndex(int(c->trigger));
+    m_playMode->setCurrentIndex(int(c->playMode));
+    setValue(m_speed, c->speed);
+    m_reverse->setChecked(c->reverse);
+    setValue(m_inPoint, c->inPoint * 100.0);
+    setValue(m_outPoint, c->outPoint * 100.0);
+    setValue(m_clipX, c->posX);
+    setValue(m_clipY, c->posY);
+    setValue(m_clipScale, c->scaleBy * 100.0);
+    setValue(m_clipRotation, c->rotation);
+    setValue(m_clipOpacity, c->opacity * 100.0);
+    m_clipFx->setClip(m_doc->selection().layer, m_doc->selection().column);
     m_scale->setCurrentIndex(int(c->scale));
     setValue(m_clipVolume, qRound(c->volume * 100.0));
     m_clipVolume->setEnabled(c->source == ContentSource::Media);
@@ -589,7 +722,12 @@ void PropertyPanel::refreshClip()
     m_gridSpacing->setEnabled(!media && (c->pattern == TestPattern::Grid || c->pattern == TestPattern::Checker));
     m_solidColor->setEnabled(!media && c->pattern == TestPattern::Solid);
     m_scale->setEnabled(media);
-    m_loop->setEnabled(c->source == ContentSource::Media);
+    const bool movie = c->source == ContentSource::Media;
+    for (QWidget *w : {static_cast<QWidget *>(m_playMode), static_cast<QWidget *>(m_speed),
+                       static_cast<QWidget *>(m_reverse), static_cast<QWidget *>(m_inPoint),
+                       static_cast<QWidget *>(m_outPoint), static_cast<QWidget *>(m_position)})
+        w->setEnabled(movie);
+    refreshPosition();
     m_mediaPath->setEnabled(c->source == ContentSource::Media);
 
     QString status;
@@ -608,6 +746,27 @@ void PropertyPanel::refreshClip()
             status = tr("Loading...");
     }
     m_mediaStatus->setText(status);
+}
+
+void PropertyPanel::refreshPosition()
+{
+    if (!m_position || !m_position->isVisible() || m_position->isSliderDown())
+        return;
+    const Clip *c = m_doc->selectedClip();
+    const MediaSource *m = c ? m_engine->mediaFor(c->id) : nullptr;
+    const double pos = m ? m->position() : -1.0;
+    if (pos < 0) {
+        m_positionText->setText(QStringLiteral("--:--"));
+        return;
+    }
+    const QSignalBlocker b(m_position);
+    m_position->setValue(qRound(pos * 1000));
+    const double total = m->durationSeconds();
+    auto mmss = [](double s) {
+        const int t = qMax(0, int(s));
+        return QStringLiteral("%1:%2").arg(t / 60).arg(t % 60, 2, 10, QLatin1Char('0'));
+    };
+    m_positionText->setText(QStringLiteral("%1 / %2").arg(mmss(pos * total), mmss(total)));
 }
 
 // ---------------------------------------------------------------- LED wall

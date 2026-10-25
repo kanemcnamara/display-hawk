@@ -43,6 +43,8 @@ qt_add_executable(DisplayHawk
     src/control/Midi.h
     src/control/Midi.cpp
     src/control/ControlRouter.h
+    src/control/AutopilotController.h
+    src/control/AutopilotController.cpp
     src/control/ControlRouter.cpp
     src/media/MediaSource.h
     src/media/MediaSource.cpp

@@ -147,6 +147,8 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         const QString what = p[3];
         if (what == QLatin1String("clip") && p.value(5) == QLatin1String("trigger") && value != 0.0)
             apply(ControlAction::TriggerClip, layer, index(4), 1.0, Mode::Press);
+        else if (what == QLatin1String("clip") && p.value(5) == QLatin1String("trigger") && hasArg)
+            m_doc->releaseClip(layer, index(4)); // 0 = released (piano clips)
         else if (what == QLatin1String("opacity") && hasArg)
             apply(ControlAction::LayerOpacity, layer, 0, value, Mode::Value);
         else if (what == QLatin1String("volume") && hasArg)
@@ -201,6 +203,8 @@ void ControlRouter::handleMidi(const MidiMessage &m)
             if (kind == Kind::Trigger) {
                 if (m.data2 >= 64 && previous < 64) // fire once as the control goes past halfway
                     apply(c.action, c.layer, c.column, 1.0, Mode::Press);
+                else if (m.data2 < 64 && previous >= 64 && c.action == ControlAction::TriggerClip)
+                    m_doc->releaseClip(c.layer, c.column); // piano clips
             } else {
                 apply(c.action, c.layer, c.column, v, Mode::Value, c.param);
             }
@@ -209,6 +213,8 @@ void ControlRouter::handleMidi(const MidiMessage &m)
                 apply(c.action, c.layer, c.column, m.data2 / 127.0, Mode::Value, c.param);
             else
                 apply(c.action, c.layer, c.column, 1.0, Mode::Press); // a press flips a toggle
+        } else if (m.isNoteOff() && c.action == ControlAction::TriggerClip) {
+            m_doc->releaseClip(c.layer, c.column); // piano clips play while the key is held
         }
     }
 }

@@ -1174,6 +1174,195 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.notifyChanged(true);
     }
 
+    // Clip playback: trigger modes, transitions, transforms and clip effects (any machine), then
+    // movie playback controls when DISPLAYHAWK_TEST_HAP_PLAYBACK names a HAP movie of a few seconds.
+    {
+        Project &p = doc.project();
+        p.layers[0].effects.clear();
+        p.layers[1].effects.clear();
+        p.compEffects.clear();
+        p.layers[0].blend = p.layers[1].blend = BlendMode::Normal;
+        doc.clearLayer(1);
+        const int col = p.columns;
+        doc.addColumn();
+        doc.addColumn();
+        Clip red = Clip::fromPattern(TestPattern::Solid);
+        red.solidColor = Qt::red;
+        Clip blue = Clip::fromPattern(TestPattern::Solid);
+        blue.solidColor = Qt::blue;
+        doc.setClip(0, col, red);
+        doc.setClip(0, col + 1, blue);
+        p.layers[0].targetWall = -1;
+        p.layers[0].transitionMs = 0;
+        doc.notifyChanged();
+        auto at = [&](double fx, double fy) {
+            const QImage &img = previews[0];
+            return img.isNull() ? QColor() : QColor(img.pixel(int(fx * (img.width() - 1)), int(fy * (img.height() - 1))));
+        };
+
+        // Toggle: triggering the playing clip again stops the layer. Piano: releasing stops it.
+        p.layers[0].clips[col].trigger = TriggerMode::Toggle;
+        doc.triggerClip(0, col);
+        const bool started = p.layers[0].activeColumn == col;
+        doc.triggerClip(0, col);
+        check(started && p.layers[0].activeColumn == -1, "toggle clips stop when triggered again");
+        p.layers[0].clips[col].trigger = TriggerMode::Piano;
+        doc.triggerClip(0, col);
+        doc.releaseClip(0, col);
+        check(p.layers[0].activeColumn == -1, "piano clips stop when released");
+        p.layers[0].clips[col].trigger = TriggerMode::Retrigger;
+        doc.triggerClip(0, col);
+        doc.releaseClip(0, col);
+        check(p.layers[0].activeColumn == col, "retrigger clips keep playing after release");
+        check(waitFor([&] { return near(at(0.5, 0.5), 255, 0, 0); }), "red clip shows");
+
+        // Wipe right over 4 s: part way, blue has come in from the left, red is still on the right.
+        p.layers[0].transitionMs = 4000;
+        p.layers[0].transition = TransitionStyle::WipeRight;
+        doc.notifyChanged();
+        doc.triggerClip(0, col + 1);
+        const bool wipe = waitFor([&] { return near(at(0.1, 0.5), 0, 0, 255) && near(at(0.9, 0.5), 255, 0, 0); }, 3000);
+        save(previews[0], "transition-wipe");
+        check(wipe, "wipe transition reveals the new clip from one side");
+        // Push left: the incoming clip slides in from the right.
+        p.layers[0].transition = TransitionStyle::PushLeft;
+        doc.notifyChanged();
+        doc.triggerClip(0, col);
+        const bool push = waitFor([&] { return near(at(0.9, 0.5), 255, 0, 0) && near(at(0.1, 0.5), 0, 0, 255); }, 3000);
+        check(push, "push transition slides the new clip in");
+        p.layers[0].transitionMs = 0;
+        p.layers[0].transition = TransitionStyle::Crossfade;
+        doc.notifyChanged();
+        doc.clearLayer(0);
+        doc.triggerClip(0, col + 1);
+
+        // Clip transform: half size leaves the corners empty; moved right, the left edge empties.
+        p.layers[0].clips[col + 1].scaleBy = 0.5;
+        doc.notifyChanged();
+        const bool scaled = waitFor([&] { return qGray(at(0.05, 0.05).rgb()) < 10 && near(at(0.5, 0.5), 0, 0, 255); });
+        p.layers[0].clips[col + 1].scaleBy = 1.0;
+        p.layers[0].clips[col + 1].posX = p.compWidth / 2.0;
+        doc.notifyChanged();
+        const bool moved = waitFor([&] { return qGray(at(0.25, 0.5).rgb()) < 10 && near(at(0.75, 0.5), 0, 0, 255); });
+        save(previews[0], "clip-transform");
+        check(scaled && moved, "clip transform scales and moves the clip");
+        p.layers[0].clips[col + 1].posX = 0.0;
+
+        // Clip effects: invert on the clip turns blue to yellow.
+        p.layers[0].clips[col + 1].effects = {makeEffect(QStringLiteral("invert"))};
+        doc.notifyChanged(true);
+        check(waitFor([&] { return near(at(0.5, 0.5), 255, 255, 0); }), "clip effects apply to the clip");
+        p.layers[0].clips[col + 1].effects.clear();
+        doc.notifyChanged(true);
+
+        // Autopilot on clips without an end: after the layer's time it moves to the next clip.
+        p.layers[0].autopilot = Autopilot::Next;
+        p.layers[0].autopilotSeconds = 0.5;
+        doc.notifyChanged();
+        doc.triggerClip(0, col);
+        const bool moved1 = waitFor([&] { return p.layers[0].activeColumn == col + 1; }, 3000);
+        check(moved1, "autopilot moves on after its time");
+        p.layers[0].autopilot = Autopilot::Off;
+        doc.notifyChanged();
+
+        const QString hap = qEnvironmentVariable("DISPLAYHAWK_TEST_HAP_PLAYBACK");
+        if (!hap.isEmpty()) {
+            doc.setClip(0, col, Clip::fromMedia(hap));
+            Clip &movie = p.layers[0].clips[col];
+            movie.playMode = PlayMode::OnceHold;
+            doc.notifyChanged();
+            doc.triggerClip(0, col);
+            const QString id = movie.id;
+            const bool opened = waitFor([&] {
+                const MediaSource *m = engine.mediaFor(id);
+                return m && m->isHap() && m->position() >= 0;
+            }, 5000);
+            MediaSource *m = engine.mediaFor(id);
+            auto pos = [&] { return m ? m->position() : -1.0; };
+            auto setMovie = [&](const std::function<void(Clip &)> &fn) {
+                fn(p.layers[0].clips[col]);
+                doc.notifyChanged();
+            };
+            if (opened) {
+                const double duration = m->durationSeconds();
+                // Speed: at 2x, 0.5 s of play covers 1 s of the movie.
+                setMovie([](Clip &c) { c.speed = 2.0; });
+                m->restart();
+                waitMs(500);
+                const double fast = pos() * duration;
+                check(fast > 0.75 && fast < 1.3, qPrintable(QStringLiteral("speed 2x (%1 s of movie in 0.5 s)").arg(fast, 0, 'f', 2)));
+                // Reverse: from the end, the position goes down.
+                setMovie([](Clip &c) {
+                    c.speed = 1.0;
+                    c.reverse = true;
+                });
+                m->restart();
+                waitMs(100);
+                const double r0 = pos();
+                waitMs(400);
+                const double r1 = pos();
+                check(r0 > 0.8 && r1 < r0 - 0.1, "reverse plays backwards");
+                // In/out points, looping: the position stays between them.
+                setMovie([](Clip &c) {
+                    c.reverse = false;
+                    c.playMode = PlayMode::Loop;
+                    c.inPoint = 0.25;
+                    c.outPoint = 0.5;
+                });
+                m->restart();
+                bool inside = true;
+                double lo = 1, hi = 0;
+                for (int i = 0; i < 20; ++i) {
+                    waitMs(75);
+                    lo = qMin(lo, pos());
+                    hi = qMax(hi, pos());
+                    inside = inside && pos() >= 0.24 && pos() <= 0.51;
+                }
+                check(inside && hi - lo > 0.15, "in and out points bound the loop");
+                // Bounce: it runs up to the out point, then back down.
+                setMovie([](Clip &c) { c.playMode = PlayMode::Bounce; });
+                m->restart();
+                bool up = false, down = false;
+                double last = pos();
+                for (int i = 0; i < 30; ++i) {
+                    waitMs(60);
+                    const double now = pos();
+                    up = up || now > last + 0.005;
+                    down = down || (up && now < last - 0.005);
+                    last = now;
+                }
+                check(up && down, "bounce plays forwards then backwards");
+                // Play once and clear: the layer empties at the out point.
+                bool finished = false;
+                QObject::connect(&engine, &RenderEngine::clipFinished, &app,
+                                 [&](const QString &clip, bool ended) { finished = finished || (ended && clip == id); });
+                setMovie([](Clip &c) {
+                    c.playMode = PlayMode::OnceClear;
+                    c.inPoint = 0.0;
+                    c.outPoint = 1.0;
+                    c.speed = 4.0;
+                });
+                m->restart();
+                check(waitFor([&] { return finished && p.layers[0].activeColumn == -1; }, int(duration * 1000) + 2000),
+                      "play once and clear empties the layer at the end");
+                // Autopilot on a movie: when it reaches its end the layer moves to the next clip.
+                setMovie([](Clip &c) { c.playMode = PlayMode::OnceHold; });
+                p.layers[0].autopilot = Autopilot::Next;
+                doc.notifyChanged();
+                doc.triggerClip(0, col);
+                check(waitFor([&] { return p.layers[0].activeColumn == col + 1; }, int(duration * 1000) + 2000),
+                      "autopilot follows a movie's end");
+                p.layers[0].autopilot = Autopilot::Off;
+                doc.notifyChanged();
+            } else {
+                check(false, "HAP playback movie opens");
+            }
+        } else {
+            qInfo("selftest: SKIP movie playback controls (set DISPLAYHAWK_TEST_HAP_PLAYBACK to a HAP movie)");
+        }
+        doc.clearLayer(0);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};

@@ -109,6 +109,8 @@ void RenderEngine::syncMedia()
                     m_thread->setClipImage(id, img);
             }, Qt::DirectConnection);
             connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
+            connect(m, &MediaSource::looped, this, [this, id] { emit clipFinished(id, false); });
+            connect(m, &MediaSource::ended, this, [this, id] { emit clipFinished(id, true); });
             for (const QAudioDevice &d : QMediaDevices::audioOutputs())
                 if (d.id() == m_audioDeviceId)
                     m->setAudioDevice(d);
@@ -118,7 +120,13 @@ void RenderEngine::syncMedia()
             m_mediaPaths.insert(id, clip->mediaKey());
             m->open(clip->mediaKey());
         }
-        m->setLoop(clip->loop);
+        PlaybackParams params;
+        params.speed = clip->speed;
+        params.reverse = clip->reverse;
+        params.mode = clip->playMode;
+        params.in = clip->inPoint;
+        params.out = clip->outPoint;
+        m->setPlayback(params);
     }
 
     // Audio levels: clip x layer x master, faded over the layer's crossfade when clips come and go.
