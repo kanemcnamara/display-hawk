@@ -22,6 +22,8 @@ qt_add_executable(DisplayHawk
     src/render/RenderEngine.cpp
     src/render/RenderThread.h
     src/render/RenderThread.cpp
+    src/render/YuvConverter.h
+    src/render/YuvConverter.cpp
     src/media/MediaSource.h
     src/media/MediaSource.cpp
     src/ui/MainWindow.h
@@ -70,6 +72,8 @@ qt_add_shaders(DisplayHawk "shaders"
     FILES
         shaders/quad.vert
         shaders/quad.frag
+        shaders/yuv.vert
+        shaders/yuv.frag
 )
 
 target_include_directories(DisplayHawk PRIVATE src)

@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QEventLoop>
+#include <functional>
 #include <QIcon>
 #include <QJsonObject>
 #include <QMutex>
@@ -95,6 +96,13 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         QTimer::singleShot(ms, &loop, &QEventLoop::quit);
         loop.exec();
     };
+    // Slow GPUs (CI virtual machines) take several frames to reflect a change in the preview, so each
+    // check waits until its condition holds, up to a timeout, instead of sleeping a fixed time.
+    auto waitFor = [&waitMs](const std::function<bool()> &condition, int timeoutMs = 5000) {
+        for (int waited = 0; !condition() && waited < timeoutMs; waited += 50)
+            waitMs(50);
+        return condition();
+    };
     auto litPercent = [](const QImage &img) {
         int lit = 0, samples = 0;
         for (int y = 0; y < img.height(); y += 4)
@@ -131,10 +139,10 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     doc.commitUndo();
     doc.undo();
     check(doc.project().layers[0].activeColumn == 2, "undo leaves playback alone");
-    waitMs(400);
-    const QImage bars = previews[0];
-    save(bars, "deck-colour-bars");
-    check(!bars.isNull() && bars != panelMap && litPercent(bars) > 50, "triggered clip reaches the composition");
+    const bool barsShown =
+        waitFor([&] { return !previews[0].isNull() && previews[0] != panelMap && litPercent(previews[0]) > 50; });
+    save(previews[0], "deck-colour-bars");
+    check(barsShown, "triggered clip reaches the composition");
 
     // Blend modes: a red solid on the top layer over the colour bars. Bars are white, yellow, cyan,
     // green, magenta, red, blue, black across the top three quarters.
@@ -151,14 +159,14 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     auto near = [](const QColor &c, int r, int g, int b) {
         return qAbs(c.red() - r) < 40 && qAbs(c.green() - g) < 40 && qAbs(c.blue() - b) < 40;
     };
-    waitMs(400);
+    const bool multiplyOk = waitFor([&] { return near(barColor(0), 255, 0, 0) && near(barColor(3), 0, 0, 0); });
     save(previews[0], "deck-multiply");
-    check(near(barColor(0), 255, 0, 0) && near(barColor(3), 0, 0, 0), "multiply blend (white->red, green->black)");
+    check(multiplyOk, "multiply blend (white->red, green->black)");
     doc.project().layers[1].blend = BlendMode::Add;
     doc.notifyChanged();
-    waitMs(400);
+    const bool addOk = waitFor([&] { return near(barColor(3), 255, 255, 0) && near(barColor(6), 255, 0, 255); });
     save(previews[0], "deck-add");
-    check(near(barColor(3), 255, 255, 0) && near(barColor(6), 255, 0, 255), "add blend (green->yellow, blue->magenta)");
+    check(addOk, "add blend (green->yellow, blue->magenta)");
     doc.clearLayer(1);
 
     // Optional: DISPLAYHAWK_TEST_VIDEO=<file> checks that a video clip decodes and keeps moving.
@@ -167,8 +175,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.setClip(0, 3, Clip::fromMedia(video));
         doc.triggerClip(0, 3);
         // Decoder start-up varies (FFmpeg loads on first use); allow up to 3 s for frames to arrive.
-        for (int i = 0; i < 30 && litPercent(previews[0]) <= 20; ++i)
-            waitMs(100);
+        waitFor([&] { return litPercent(previews[0]) > 20; });
         const QImage first = previews[0];
         waitMs(500);
         const QImage second = previews[0];
@@ -179,18 +186,19 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     }
 
     doc.setBlackout(true);
-    waitMs(400);
+    const bool black = waitFor([&] { return litPercent(previews[0]) < 2; });
     save(previews[0], "deck-blackout");
-    check(litPercent(previews[0]) < 2, "blackout sends black");
+    check(black, "blackout sends black");
     doc.setBlackout(false);
 
     // A crossfade must render without errors and end on the new clip.
     doc.project().layers[0].transitionMs = 300;
     doc.notifyChanged();
     doc.triggerColumn(0);
-    waitMs(800);
+    waitMs(300);
+    const bool faded = waitFor([&] { return litPercent(previews[0]) > 50; });
     save(previews[0], "deck-after-crossfade");
-    check(litPercent(previews[0]) > 50, "crossfade finishes on the new clip");
+    check(faded, "crossfade finishes on the new clip");
 
     // The app's own window (not the desktop), for checking the UI layout.
     window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));

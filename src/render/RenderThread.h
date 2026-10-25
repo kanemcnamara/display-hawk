@@ -3,6 +3,7 @@
 #include "model/Project.h"
 #include "render/RenderEngine.h"
 #include "render/RhiQuad.h"
+#include "render/YuvConverter.h"
 
 #include <QElapsedTimer>
 #include <QMutex>
@@ -59,8 +60,8 @@ private:
     void releaseTarget(Target &t);
     void uploadImage(QRhiResourceUpdateBatch *u, QRhiTexture *&tex, const QImage &image);
     void renderComposition(QRhiCommandBuffer *cb);
-    void appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u, const Clip &clip,
-                        const QRect &target, const QSize &compSize, float opacity);
+    void appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u,
+                        const Clip &clip, const QRect &target, const QSize &compSize, float opacity);
     void collectGarbage(qint64 now);
     void renderPreviews(QRhiCommandBuffer *cb);
     void renderOutput(QRhiCommandBuffer *cb, Output &o);
@@ -95,6 +96,12 @@ private:
     // Render-thread only.
     QRhi *m_rhi = nullptr;
     RhiQuad m_quad;
+    YuvConverter m_yuv;
+    // DISPLAYHAWK_PERF=1 logs how long video frames take to prepare on the render thread.
+    bool m_perfLog = false;
+    qint64 m_perfNs = 0;
+    int m_perfFrames = 0;
+    int m_perfGpuFrames = 0;
     Project m_project;
     PreviewRequest m_preview[2];
     QVector<Output> m_outputs;
@@ -102,7 +109,9 @@ private:
     Target m_previewTarget[2];
     // Per clip: its pattern image or its newest media frame.
     struct ClipTex {
-        QRhiTexture *tex = nullptr;
+        QRhiTexture *tex = nullptr;     // patterns, images and CPU-converted video
+        YuvConverter::Target yuv;       // video converted on the GPU
+        bool useYuv = false;            // the newest frame went through the GPU path
         QByteArray patternKey;
         QVideoFrame frame;
         QImage image;
@@ -111,6 +120,7 @@ private:
         qint64 lastUsed = 0;
     };
     QHash<QString, ClipTex> m_clipTex;
+    void releaseClipTex(ClipTex &ct, bool deferred);
     // Per layer: what is playing, the outgoing clip during a crossfade, and the layer texture.
     struct LayerState {
         Clip current;

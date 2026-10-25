@@ -43,6 +43,7 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 A dedicated render thread owns the GPU through Qt RHI: **Metal** on macOS, **Direct3D 11** on Windows, OpenGL 3.3 as the automatic fallback. It renders the composition, presents every output with vsync (paced by the first live output), and renders downscaled previews of exactly what each editor view shows, which it reads back as images for the UI. The UI thread never touches the GPU, so dialogs or a busy UI cannot drop output frames.
 
 - `DISPLAYHAWK_RHI=opengl|d3d11|d3d12|metal` picks a backend (D3D12 needs an MSVC build of Qt).
+- Video frames are uploaded as their native YUV planes (NV12/NV21, 4:2:0 and 4:2:2 planar, 10-bit P010/P016) and converted to RGB on the GPU with the frame's colour matrix (BT.601/709/2020) and range. On 4K H.264 this cuts the render thread's per-frame work about 3x versus CPU conversion, and matches it to within one 8-bit level. `DISPLAYHAWK_NO_GPU_YUV=1` forces the CPU path; `DISPLAYHAWK_PERF=1` logs per-frame preparation time.
 - Shaders live in `shaders/` as Vulkan-style GLSL and are compiled to HLSL/MSL/GLSL/SPIR-V at build time by `qt_add_shaders`.
 - Over Remote Desktop, Windows composites Direct3D windows at ~30 fps; outputs on local displays run at the display's refresh rate.
 

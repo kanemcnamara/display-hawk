@@ -156,7 +156,7 @@ void RenderThread::run()
         m_initDone.release();
         return;
     }
-    if (!m_quad.init(m_rhi)) {
+    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi)) {
         m_initError = tr("Could not load shaders.");
         delete m_rhi;
         m_rhi = nullptr;
@@ -173,6 +173,7 @@ void RenderThread::run()
     m_previewClock[0].start();
     m_previewClock[1].start();
     m_clock.start();
+    m_perfLog = qEnvironmentVariableIsSet("DISPLAYHAWK_PERF");
 
     for (;;) {
         {
@@ -234,6 +235,11 @@ void RenderThread::run()
             ++frames;
         if (fpsClock.elapsed() >= 1000) {
             emit statsUpdated(qRound(frames * 1000.0 / fpsClock.elapsed()), m_comp.size);
+            if (m_perfLog && m_perfFrames > 0)
+                qInfo("perf: %d video frames/s (%d on GPU path), %.2f ms each to prepare", m_perfFrames,
+                      m_perfGpuFrames, m_perfNs / 1e6 / m_perfFrames);
+            m_perfNs = 0;
+            m_perfFrames = m_perfGpuFrames = 0;
             frames = 0;
             fpsClock.restart();
         }
@@ -252,13 +258,14 @@ void RenderThread::run()
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
     for (ClipTex &ct : m_clipTex)
-        delete ct.tex;
+        releaseClipTex(ct, false);
     m_clipTex.clear();
     for (LayerState &ls : m_layers)
         releaseTarget(ls.target);
     m_layers.clear();
     delete m_overlayTex;
     m_overlayTex = nullptr;
+    m_yuv.release();
     m_quad.release();
     delete m_rhi;
     m_rhi = nullptr;
@@ -424,8 +431,24 @@ QByteArray RenderThread::overlayKey() const
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
-void RenderThread::appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u, const Clip &clip,
-                                  const QRect &target, const QSize &compSize, float opacity)
+void RenderThread::releaseClipTex(ClipTex &ct, bool deferred)
+{
+    if (ct.tex) {
+        m_quad.forgetTexture(ct.tex);
+        if (deferred)
+            ct.tex->deleteLater();
+        else
+            delete ct.tex;
+        ct.tex = nullptr;
+    }
+    if (ct.yuv.rgba)
+        m_quad.forgetTexture(ct.yuv.rgba);
+    m_yuv.releaseTarget(ct.yuv, deferred);
+}
+
+void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws,
+                                  QRhiResourceUpdateBatch *u, const Clip &clip, const QRect &target,
+                                  const QSize &compSize, float opacity)
 {
     ClipTex &ct = m_clipTex[clip.id];
     ct.lastUsed = m_clock.elapsed();
@@ -438,19 +461,39 @@ void RenderThread::appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceU
     if (clip.source == ContentSource::Media) {
         if (ct.newMedia) {
             ct.newMedia = false;
-            const QImage img = ct.frame.isValid() ? ct.frame.toImage() : ct.image;
+            QElapsedTimer prep;
+            prep.start();
+            QRhiTexture *oldRgba = ct.yuv.rgba;
+            static const bool gpuYuv = !qEnvironmentVariableIsSet("DISPLAYHAWK_NO_GPU_YUV");
+            if (gpuYuv && ct.frame.isValid() && YuvConverter::supports(ct.frame.pixelFormat())
+                && m_yuv.convert(cb, ct.frame, ct.yuv)) {
+                // Planes uploaded as decoded; colour conversion ran on the GPU.
+                if (oldRgba && oldRgba != ct.yuv.rgba)
+                    m_quad.forgetTexture(oldRgba);
+                ct.useYuv = true;
+                ct.hasMedia = true;
+                ++m_perfGpuFrames;
+            } else {
+                const QImage img = ct.frame.isValid() ? ct.frame.toImage() : ct.image;
+                ct.useYuv = false;
+                ct.hasMedia = !img.isNull();
+                if (ct.hasMedia)
+                    uploadImage(u, ct.tex, img);
+            }
+            if (ct.frame.isValid()) {
+                m_perfNs += prep.nsecsElapsed();
+                ++m_perfFrames;
+            }
             ct.frame = QVideoFrame();
             ct.image = QImage();
-            ct.hasMedia = !img.isNull();
-            if (ct.hasMedia) {
-                uploadImage(u, ct.tex, img);
-                ct.patternKey.clear();
-            }
+            ct.patternKey.clear();
         }
-        if (!ct.hasMedia || !ct.tex)
+        QRhiTexture *tex = ct.useYuv ? ct.yuv.rgba : ct.tex;
+        if (!ct.hasMedia || !tex)
             return;
-        qp.texture = ct.tex;
-        qp.dst = scaledRect(ct.tex->pixelSize(), target, clip.scale);
+        qp.texture = tex;
+        qp.texFlipY = ct.useYuv && m_rhi->isYUpInFramebuffer(); // rendered, not uploaded
+        qp.dst = scaledRect(tex->pixelSize(), target, clip.scale);
     } else {
         // Patterns are drawn for the target area; the panel map always covers the whole composition.
         const bool panelMap = clip.pattern == TestPattern::PanelMap;
@@ -461,6 +504,7 @@ void RenderThread::appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceU
             uploadImage(u, ct.tex, Patterns::generate(m_project, clip, size));
             ct.patternKey = key;
             ct.hasMedia = false;
+            ct.useYuv = false;
         }
         if (!ct.tex)
             return;
@@ -522,9 +566,9 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         QVector<RhiQuad::Params> draws;
         const QRect target = p.targetRect(layer.targetWall);
         if (!st.previous.isEmpty())
-            appendClipDraw(draws, u, st.previous, target, compSize, 1.0f);
+            appendClipDraw(cb, draws, u, st.previous, target, compSize, 1.0f);
         if (!st.current.isEmpty())
-            appendClipDraw(draws, u, st.current, target, compSize, mix);
+            appendClipDraw(cb, draws, u, st.current, target, compSize, mix);
         m_quad.recordPass(cb, st.target.rt, Qt::transparent, draws, u);
 
         RhiQuad::Params lp;
@@ -578,10 +622,7 @@ void RenderThread::collectGarbage(qint64 now)
     m_lastGc = now;
     for (auto it = m_clipTex.begin(); it != m_clipTex.end();) {
         if (now - it->lastUsed > kIdleMs && !it->newMedia) {
-            if (it->tex) {
-                m_quad.forgetTexture(it->tex);
-                it->tex->deleteLater();
-            }
+            releaseClipTex(*it, true);
             it = m_clipTex.erase(it);
         } else {
             ++it;
