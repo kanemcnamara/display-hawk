@@ -75,6 +75,12 @@ public:
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
     // Draws every slice's outline, name, port and the port routes over the outputs (for the LED tech).
     void setIdentifySlices(bool on);
+    // The preview monitor: renders this clip (by id; empty = off) at `size`, its media running muted
+    // if it is not playing anyway.
+    void setPreviewClip(const QString &clipId, const QSize &size);
+    // Recording: the composition read back `fps` times a second, delivered as recordFrame.
+    void setRecording(bool on, int fps);
+    QString previewClip() const { return m_previewClip; }
     bool identifySlices() const { return m_identifySlices; }
 
     // Live modulation on top of the faders (audio-reactive): master and per-layer opacity
@@ -86,6 +92,8 @@ signals:
     void mediaStateChanged();
     // A playing media clip went round its loop (ended = false) or, playing once, reached its end.
     void clipFinished(const QString &clipId, bool ended);
+    void clipPreviewReady(const QString &clipId, const QImage &image);
+    void recordFrame(const QImage &image);
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);
     void statsUpdated(int fps, const QSize &compSize);
 
@@ -112,5 +120,8 @@ private:
     QOffscreenSurface *m_fallbackSurface = nullptr;
     QString m_backendName;
     bool m_identifySlices = false;
+    QString m_previewClip;
+    QSize m_previewSize;
+    void pushClipPreview();
     QSurface::SurfaceType m_surfaceType = QSurface::OpenGLSurface;
 };

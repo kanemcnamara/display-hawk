@@ -15,6 +15,10 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <QMediaPlayer>
+#include "ui/MediaBrowser.h"
+#include "ui/ClipPreviewPanel.h"
+#include "media/OutputRecorder.h"
 #include "ui/ReportExporter.h"
 
 #include <QApplication>
@@ -1769,6 +1773,71 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
               "an ISF shader that does not compile is skipped");
         p.layers[0].effects.clear();
         doc.notifyChanged(true);
+        doc.clearLayer(0);
+    }
+
+    // Workflow: the preview monitor, thumbnails, recording.
+    {
+        Project &p = doc.project();
+        p.layers[0].effects.clear();
+        p.compEffects.clear();
+        doc.clearLayer(1);
+        const int col = p.columns;
+        doc.addColumn();
+        doc.addColumn();
+        Clip red = Clip::fromPattern(TestPattern::Solid);
+        red.solidColor = Qt::red;
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        doc.setClip(0, col + 1, red);
+        p.layers[0].transitionMs = 0;
+        doc.triggerClip(0, col);
+        // Selecting the (not playing) red clip previews it; the outputs keep showing the bars.
+        ClipPreviewPanel *monitor = window.clipPreview();
+        doc.select(Selection::ofClip(0, col + 1));
+        const bool previewed = waitFor([&] {
+            const QImage img = monitor->image();
+            return !img.isNull() && near(QColor(img.pixel(img.width() / 2, img.height() / 2)), 255, 0, 0);
+        }, 5000);
+        check(previewed && near(barColor(0), 255, 255, 255) && p.layers[0].activeColumn == col,
+              "preview monitor shows the selected clip without sending it out");
+        monitor->image().save(QStringLiteral("%1/preview-monitor.png").arg(outDir));
+
+        // Thumbnails: an image and (if available) a video.
+        Thumbnailer thumbs;
+        QHash<QString, QImage> got;
+        QObject::connect(&thumbs, &Thumbnailer::ready, &app, [&](const QString &path, const QImage &img) { got.insert(path, img); });
+        const QString png = outDir + QStringLiteral("/thumb-source.png");
+        QImage source(400, 200, QImage::Format_RGB32);
+        source.fill(Qt::green);
+        source.save(png);
+        thumbs.request(png);
+        const QString video = qEnvironmentVariable("DISPLAYHAWK_TEST_VIDEO");
+        if (!video.isEmpty())
+            thumbs.request(video);
+        const bool imageThumb = waitFor([&] {
+            return got.contains(png) && near(QColor(got[png].pixel(Thumbnailer::size().width() / 2, Thumbnailer::size().height() / 2)), 0, 255, 0);
+        }, 5000);
+        const bool videoThumb = video.isEmpty() || waitFor([&] { return got.contains(video) && !got[video].isNull(); }, 8000);
+        check(imageThumb && videoThumb, "media browser thumbnails (image and video)");
+
+        // Record two seconds of the composition and play the file back.
+        const QString file = QDir::temp().filePath(QStringLiteral("displayhawk-recording-test.mp4"));
+        QFile::remove(file);
+        OutputRecorder *recorder = window.recorder();
+        QString error;
+        const bool started = recorder->start(file, 30, &error);
+        waitMs(2000);
+        const int frames = recorder->framesWritten();
+        recorder->stop();
+        waitFor([&] { return QFileInfo(file).size() > 10000; }, 5000);
+        QMediaPlayer player;
+        player.setSource(QUrl::fromLocalFile(file));
+        const bool playable = waitFor([&] { return player.duration() > 1000; }, 5000);
+        check(started && frames > 30 && playable,
+              qPrintable(QStringLiteral("recording writes a playable video (%1 frames, %2 ms, %3 bytes)%4")
+                             .arg(frames).arg(player.duration()).arg(QFileInfo(file).size())
+                             .arg(error.isEmpty() ? QString() : QStringLiteral(": ") + error)));
+        doc.select(Selection::composition());
         doc.clearLayer(0);
     }
 

@@ -63,6 +63,7 @@ RenderEngine::RenderEngine(Document *doc, QObject *parent)
     connect(m_doc, &Document::changed, this, [this] {
         pushProject();
         syncMedia();
+        pushClipPreview(); // picks up edits to the previewed clip
     });
     m_audioDeviceId = QSettings().value(QStringLiteral("audio/device")).toByteArray();
     m_volumeTimer = new QTimer(this);
@@ -87,6 +88,10 @@ void RenderEngine::syncMedia()
         const Clip *c = l.activeClip();
         if (c && !c->mediaKey().isEmpty())
             wanted.insert(c->id, c);
+        // The previewed clip's media runs too (muted below unless it is also playing).
+        for (const Clip &pc : l.clips)
+            if (!m_previewClip.isEmpty() && pc.id == m_previewClip && !pc.mediaKey().isEmpty())
+                wanted.insert(pc.id, &pc);
     }
 
     for (auto it = wanted.cbegin(); it != wanted.cend(); ++it) {
@@ -213,6 +218,8 @@ bool RenderEngine::start(QString *error)
         m_thread->setIdentifySlices(m_identifySlices);
         connect(m_thread, &RenderThread::previewReady, this, &RenderEngine::previewReady);
         connect(m_thread, &RenderThread::statsUpdated, this, &RenderEngine::statsUpdated);
+        connect(m_thread, &RenderThread::clipPreviewReady, this, &RenderEngine::clipPreviewReady);
+        connect(m_thread, &RenderThread::recordFrame, this, &RenderEngine::recordFrame);
         pushProject();
         m_thread->start(QThread::HighPriority);
         QString reason;
@@ -312,6 +319,37 @@ void RenderEngine::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)
 {
     if (m_thread)
         m_thread->setNdiOutputs(outputs);
+}
+
+void RenderEngine::setPreviewClip(const QString &clipId, const QSize &size)
+{
+    if (clipId == m_previewClip && size == m_previewSize)
+        return;
+    m_previewClip = clipId;
+    m_previewSize = size;
+    syncMedia(); // opens (or releases) its media
+    pushClipPreview();
+}
+
+void RenderEngine::pushClipPreview()
+{
+    if (!m_thread)
+        return;
+    const Project &p = m_doc->project();
+    for (const Layer &l : p.layers)
+        for (const Clip &c : l.clips)
+            if (!m_previewClip.isEmpty() && c.id == m_previewClip) {
+                const QRect area = p.targetRect(l.targetWall); // the monitor keeps the area's shape
+                m_thread->setClipPreview(c, area, area.size().scaled(m_previewSize, Qt::KeepAspectRatio).expandedTo(QSize(16, 16)));
+                return;
+            }
+    m_thread->setClipPreview(Clip(), QRect(), QSize());
+}
+
+void RenderEngine::setRecording(bool on, int fps)
+{
+    if (m_thread)
+        m_thread->setRecording(on, fps);
 }
 
 void RenderEngine::setIdentifySlices(bool on)

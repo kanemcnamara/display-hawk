@@ -11,6 +11,13 @@
 #include "control/ModulationHub.h"
 #include "control/TempoClock.h"
 #include "ui/LfoDialog.h"
+#include "ui/ClipPreviewPanel.h"
+#include "ui/MediaBrowser.h"
+#include "media/OutputRecorder.h"
+#include <QDateTime>
+#include <QLabel>
+#include <QMessageBox>
+#include <QStandardPaths>
 #include "render/Isf.h"
 #include <QDesktopServices>
 #include <QStatusBar>
@@ -168,10 +175,17 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
         showControls();
         m_controlDialog->learnNew(action, layer, column);
     });
+    m_clipPreview = new ClipPreviewPanel(doc, engine);
+    auto *previewDock = new QDockWidget(tr("Preview"));
+    previewDock->setObjectName(QStringLiteral("preview"));
+    previewDock->setWidget(m_clipPreview);
     auto *deckDock = new QDockWidget(tr("Clip Deck"));
     deckDock->setObjectName(QStringLiteral("deck"));
     deckDock->setWidget(deck);
     addDockWidget(Qt::BottomDockWidgetArea, deckDock);
+    addDockWidget(Qt::BottomDockWidgetArea, previewDock);
+    splitDockWidget(deckDock, previewDock, Qt::Horizontal);
+    resizeDocks({deckDock, previewDock}, {1200, 360}, Qt::Horizontal);
     resizeDocks({deckDock}, {280}, Qt::Vertical);
 
     m_cursorLabel = new QLabel;
@@ -287,6 +301,45 @@ void MainWindow::buildActions()
     connect(m_liveAction, &QAction::toggled, this, &MainWindow::setLive);
     QAction *identify = output->addAction(tr("&Identify Displays"), QKeySequence(tr("Ctrl+I")), this,
                                           &MainWindow::identifyDisplays);
+    // Recording the composition to a video file.
+    m_recorder = new OutputRecorder(m_engine, this);
+    m_recordAction = output->addAction(tr("&Record Composition..."));
+    m_recordAction->setCheckable(true);
+    m_recordAction->setShortcut(QKeySequence(tr("Ctrl+Shift+R")));
+    m_recordAction->setToolTip(tr("Record what the composition shows to an MP4 file (H.264, 30 fps)"));
+    connect(m_recordAction, &QAction::triggered, this, [this](bool on) {
+        if (!on) {
+            m_recorder->stop();
+            return;
+        }
+        const QString folder = QStandardPaths::writableLocation(QStandardPaths::MoviesLocation);
+        const QString suggested = QStringLiteral("%1/Display Hawk %2.mp4")
+                                      .arg(folder, QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH-mm-ss")));
+        const QString path = QFileDialog::getSaveFileName(this, tr("Record composition"), suggested, tr("MP4 video (*.mp4)"));
+        QString error;
+        if (path.isEmpty() || !m_recorder->start(path, 30, &error)) {
+            if (!error.isEmpty())
+                QMessageBox::warning(this, tr("Record composition"), tr("Cannot record: %1").arg(error));
+            const QSignalBlocker b(m_recordAction);
+            m_recordAction->setChecked(false);
+        }
+    });
+    auto *recIndicator = new QLabel;
+    recIndicator->setStyleSheet(QStringLiteral("color: #ff4040; font-weight: bold;"));
+    statusBar()->addPermanentWidget(recIndicator);
+    auto *recTimer = new QTimer(this);
+    recTimer->setInterval(500);
+    connect(recTimer, &QTimer::timeout, this, [this, recIndicator] {
+        const qint64 s = m_recorder->elapsedMs() / 1000;
+        recIndicator->setText(m_recorder->isRecording()
+                                  ? tr("● REC %1:%2").arg(s / 60).arg(s % 60, 2, 10, QLatin1Char('0'))
+                                  : QString());
+    });
+    recTimer->start();
+    connect(m_recorder, &OutputRecorder::stateChanged, this, [this] {
+        const QSignalBlocker b(m_recordAction);
+        m_recordAction->setChecked(m_recorder->isRecording());
+    });
     QAction *identifySlices = output->addAction(tr("Identify &Slices on Outputs"));
     identifySlices->setCheckable(true);
     identifySlices->setShortcut(QKeySequence(tr("Ctrl+Shift+I")));
@@ -377,6 +430,14 @@ void MainWindow::buildTree()
     dock->setWidget(m_tree);
     dock->setMinimumWidth(260);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
+
+    // Media files, tabbed with the setup tree.
+    auto *media = new QDockWidget(tr("Media"));
+    media->setObjectName(QStringLiteral("media"));
+    media->setWidget(new MediaBrowser(m_doc));
+    addDockWidget(Qt::LeftDockWidgetArea, media);
+    tabifyDockWidget(dock, media);
+    dock->raise();
 }
 
 void MainWindow::rebuildTree()

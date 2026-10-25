@@ -74,6 +74,8 @@ qt_add_executable(DisplayHawk
     src/media/Ndi.cpp
     src/media/HapPlayer.h
     src/media/HapPlayer.cpp
+    src/media/OutputRecorder.h
+    src/media/OutputRecorder.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/ui/CanvasView.h
@@ -84,6 +86,10 @@ qt_add_executable(DisplayHawk
     src/ui/CabinetLayoutEditor.cpp
     src/ui/LfoDialog.h
     src/ui/LfoDialog.cpp
+    src/ui/ClipPreviewPanel.h
+    src/ui/ClipPreviewPanel.cpp
+    src/ui/MediaBrowser.h
+    src/ui/MediaBrowser.cpp
     src/ui/MaskEditor.h
     src/ui/MaskEditor.cpp
     src/ui/EffectChainEditor.h

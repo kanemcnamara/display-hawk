@@ -95,6 +95,12 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - **Projection masks** per screen: polygons that black out light (or with *Invert*, everything outside them), with a soft *feather*. *Edit* a mask to drag its points on the output map; double-click an edge to add a point, Alt+click a point to remove it, drag inside it to move it.
 - **Output → Identify Slices on Outputs** also draws an 8 x 8 alignment grid through every warped slice on the projectors, for lining warps up on the surface.
 
+## Workflow
+
+- **Preview** monitor (dock next to the clip deck): the clip selected in the deck, with its transform and effects, as it would look in its layer's area, without sending it to the outputs. Movies run muted while previewed.
+- **Media** browser (tab next to *Setup*): folders on the left, thumbnails of the videos and images in the chosen folder on the right. Drag files onto the clip deck, or double-click to add one to the next empty slot of the selected layer.
+- **Output → Record Composition…** (Ctrl/Cmd+Shift+R): records what the composition shows to an MP4 (H.264, 30 fps, up to 4K) with the platform's encoder; a red *REC* timer shows in the status bar.
+
 ## Remote control: OSC, MIDI and DMX
 
 **Control → OSC, MIDI & DMX…** (Ctrl/Cmd+M).

@@ -6,6 +6,8 @@
 class CanvasView;
 class AudioReactive;
 class LfoDialog;
+class ClipPreviewPanel;
+class OutputRecorder;
 class ModulationHub;
 class TempoClock;
 class AudioReactiveDialog;
@@ -35,6 +37,8 @@ public:
     AudioReactive *audioReactive() const { return m_audioReactive; }
     TempoClock *tempoClock() const { return m_tempo; }
     ModulationHub *modulationHub() const { return m_modulation; }
+    ClipPreviewPanel *clipPreview() const { return m_clipPreview; }
+    OutputRecorder *recorder() const { return m_recorder; }
     void showControls();
     void showAudioReactive();
     void showLfos();
@@ -75,6 +79,9 @@ private:
     ControlDialog *m_controlDialog = nullptr;
     AudioReactive *m_audioReactive;
     TempoClock *m_tempo;
+    ClipPreviewPanel *m_clipPreview;
+    OutputRecorder *m_recorder;
+    QAction *m_recordAction;
     ModulationHub *m_modulation;
     AudioReactiveDialog *m_audioReactiveDialog = nullptr;
     LfoDialog *m_lfoDialog = nullptr;

@@ -41,12 +41,18 @@ public:
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
     void setModulation(double master, const QVector<double> &layerOpacity, const QVector<EffectParamMod> &effects);
     void setIdentifySlices(bool on);
+    // Preview monitor: renders `clip` alone (fitted into `area` of the composition) at `size` and
+    // emits clipPreviewReady; an empty clip turns it off.
+    void setClipPreview(const Clip &clip, const QRect &area, const QSize &size);
+    void setRecording(bool on, int fps);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
 signals:
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);
     void statsUpdated(int fps, const QSize &compSize);
+    void clipPreviewReady(const QString &clipId, const QImage &image);
+    void recordFrame(const QImage &image);
 
 protected:
     void run() override;
@@ -153,6 +159,31 @@ private:
     QVector<double> m_sharedLayerMod;
     QVector<EffectParamMod> m_sharedEffectMod;
     bool m_sharedIdentify = false;
+    struct ClipPreview {
+        Clip clip;
+        QRect area;
+        QSize size;
+    };
+    ClipPreview m_sharedClipPreview, m_clipPreview;
+    Target m_clipPreviewLayer, m_clipPreviewOut;
+    QRhiReadbackResult m_clipPreviewReadback;
+    bool m_clipPreviewPending = false;
+    bool m_clipPreviewDone = false;
+    QString m_clipPreviewId;
+    QElapsedTimer m_clipPreviewClock;
+    void renderClipPreview(QRhiCommandBuffer *cb);
+    // Recording the composition.
+    bool m_sharedRecording = false;
+    int m_sharedRecordFps = 30;
+    bool m_recording = false;
+    int m_recordFps = 30;
+    Target m_recordTarget;
+    QRhiReadbackResult m_recordReadback;
+    bool m_recordPending = false;
+    bool m_recordDone = false;
+    QElapsedTimer m_recordClock;
+    qint64 m_nextRecordMs = 0;
+    void renderRecording(QRhiCommandBuffer *cb);
     bool m_identify = false;
     // Per screen while identifying slices: the overlay drawn on top of its output.
     struct ScreenOverlay {
