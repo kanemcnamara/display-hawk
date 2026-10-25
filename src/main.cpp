@@ -2011,8 +2011,6 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
 
         // A real movie: the recording made above.
         const QString movie = QDir::temp().filePath(QStringLiteral("displayhawk-recording-test.mp4"));
-        const QString target = QDir::temp().filePath(QStringLiteral("displayhawk-hap-test.mov"));
-        QFile::remove(target);
         HapConverter converter;
         bool done = false, converted = false;
         QString message;
@@ -2021,44 +2019,51 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
             converted = ok;
             message = m;
         });
-        QElapsedTimer took;
-        took.start();
-        converter.start(movie, target, {Hap::Format::HapQ, true});
-        waitFor([&] { return done; }, 60000);
-        MovReader reader;
-        const bool opened = converted && reader.open(target);
-        QMediaPlayer probe;
-        probe.setSource(QUrl::fromLocalFile(movie));
-        waitFor([&] { return probe.mediaStatus() == QMediaPlayer::LoadedMedia; }, 5000);
-        const int expected = qRound(probe.duration() / 1000.0 * reader.frameRate());
-        HapFrame middle;
-        const bool decodes = opened && decodeHapFrame(reader.readFrame(reader.frameCount() / 2), reader.size(), middle);
-        const QImage middleImage = Hap::textureToImage(middle);
-        save(middleImage, "hap-converted-frame");
-        const bool framesOk = opened && reader.codec() == "HapY" && qAbs(reader.frameCount() - expected) <= 2;
-        // ...and it plays as a clip, through the HAP player.
-        const int col = doc.project().columns;
-        doc.addColumn();
-        doc.setClip(0, col, Clip::fromMedia(target));
-        doc.project().layers[1].effects.clear();
-        doc.clearLayer(1);
-        doc.triggerClip(0, col);
-        const bool plays = waitFor([&] { return litPercent(previews[OutputMonitor::kView]) > 20; }, 8000);
-        save(previews[OutputMonitor::kView], "hap-converted-playing");
-        check(converted && framesOk && decodes && litPercent(middleImage) > 20 && plays,
-              qPrintable(QStringLiteral("HAP converter: movie -> Hap Q .mov (%1, %2 of %3 frames, %4 ms), plays as a clip")
-                             .arg(message).arg(reader.frameCount()).arg(expected).arg(took.elapsed())));
-        doc.clearLayer(0);
-        doc.setClip(0, col, Clip());
+        if (QFileInfo(movie).size() < 1000) {
+            // No movie to convert: recording needs a video encoder (CI virtual Macs have none).
+            qInfo("selftest: SKIP HAP converter on a movie (the recording above made no file)");
+        } else {
+            const QString target = QDir::temp().filePath(QStringLiteral("displayhawk-hap-test.mov"));
+            QFile::remove(target);
+            QElapsedTimer took;
+            took.start();
+            converter.start(movie, target, {Hap::Format::HapQ, true});
+            waitFor([&] { return done; }, 60000);
+            MovReader reader;
+            const bool opened = converted && reader.open(target);
+            QMediaPlayer probe;
+            probe.setSource(QUrl::fromLocalFile(movie));
+            waitFor([&] { return probe.mediaStatus() == QMediaPlayer::LoadedMedia; }, 5000);
+            const int expected = qRound(probe.duration() / 1000.0 * reader.frameRate());
+            HapFrame middle;
+            const bool decodes = opened && decodeHapFrame(reader.readFrame(reader.frameCount() / 2), reader.size(), middle);
+            const QImage middleImage = Hap::textureToImage(middle);
+            save(middleImage, "hap-converted-frame");
+            const bool framesOk = opened && reader.codec() == "HapY" && qAbs(reader.frameCount() - expected) <= 2;
+            // ...and it plays as a clip, through the HAP player.
+            const int col = doc.project().columns;
+            doc.addColumn();
+            doc.setClip(0, col, Clip::fromMedia(target));
+            doc.project().layers[1].effects.clear();
+            doc.clearLayer(1);
+            doc.triggerClip(0, col);
+            const bool plays = waitFor([&] { return litPercent(previews[OutputMonitor::kView]) > 20; }, 8000);
+            save(previews[OutputMonitor::kView], "hap-converted-playing");
+            check(converted && framesOk && decodes && litPercent(middleImage) > 20 && plays,
+                  qPrintable(QStringLiteral("HAP converter: movie -> Hap Q .mov (%1, %2 of %3 frames, %4 ms), plays as a clip")
+                                 .arg(message).arg(reader.frameCount()).arg(expected).arg(took.elapsed())));
+            doc.clearLayer(0);
+            doc.setClip(0, col, Clip());
 
-        // The queue window, converting through the dialog as a user would.
-        window.showHapConverter({movie});
-        const bool queued = waitFor([&] { return window.hapConverter()->pending() == 0; }, 60000);
-        window.hapConverter()->grab().save(QStringLiteral("%1/hap-converter-window.png").arg(outDir));
-        window.hapConverter()->hide();
-        check(queued, "HAP converter window runs its queue");
-        for (const QString &f : QDir::temp().entryList({QStringLiteral("displayhawk-recording-test (*).mov")}))
-            QFile::remove(QDir::temp().filePath(f));
+            // The queue window, converting through the dialog as a user would.
+            window.showHapConverter({movie});
+            const bool queued = waitFor([&] { return window.hapConverter()->pending() == 0; }, 60000);
+            window.hapConverter()->grab().save(QStringLiteral("%1/hap-converter-window.png").arg(outDir));
+            window.hapConverter()->hide();
+            check(queued, "HAP converter window runs its queue");
+            for (const QString &f : QDir::temp().entryList({QStringLiteral("displayhawk-recording-test (*).mov")}))
+                QFile::remove(QDir::temp().filePath(f));
+        }
 
         // With sound, when a test movie with audio is given.
         const QString soundMovie = qEnvironmentVariable("DISPLAYHAWK_TEST_SOUND");
