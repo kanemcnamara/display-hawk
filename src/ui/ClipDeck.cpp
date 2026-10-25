@@ -142,6 +142,18 @@ ClipDeck::ClipDeck(Document *doc, QWidget *parent)
     top->addWidget(addLayer);
     top->addWidget(addColumn);
     top->addStretch();
+    m_audioMaster = new QSlider(Qt::Horizontal);
+    m_audioMaster->setRange(0, 100);
+    m_audioMaster->setFixedWidth(140);
+    m_audioMaster->setToolTip(tr("Audio master: level of all clip sound"));
+    m_audioMute = new QPushButton(tr("MUTE"));
+    m_audioMute->setCheckable(true);
+    m_audioMute->setToolTip(tr("Mute all clip sound"));
+    m_audioMute->setStyleSheet(QStringLiteral("QPushButton:checked { background: #e0a020; color: black; font-weight: bold; }"));
+    top->addWidget(new QLabel(tr("Audio")));
+    top->addWidget(m_audioMaster);
+    top->addWidget(m_audioMute);
+    top->addSpacing(16);
     top->addWidget(new QLabel(tr("Master")));
     top->addWidget(m_master);
     top->addWidget(m_blackout);
@@ -184,6 +196,14 @@ ClipDeck::ClipDeck(Document *doc, QWidget *parent)
         if (!m_refreshing)
             m_doc->setBlackout(on);
     });
+    connect(m_audioMaster, &QSlider::valueChanged, this, [this](int v) {
+        if (!m_refreshing)
+            m_doc->setAudioMaster(v / 100.0);
+    });
+    connect(m_audioMute, &QPushButton::toggled, this, [this](bool on) {
+        if (!m_refreshing)
+            m_doc->setAudioMuted(on);
+    });
     connect(m_doc, &Document::structureChanged, this, &ClipDeck::rebuildRows);
     connect(m_doc, &Document::changed, this, &ClipDeck::refresh);
     connect(m_doc, &Document::selectionChanged, this, &ClipDeck::refresh);
@@ -213,6 +233,8 @@ void ClipDeck::refresh()
     m_refreshing = true;
     m_master->setValue(qRound(p.master * 100.0));
     m_blackout->setChecked(p.blackout);
+    m_audioMaster->setValue(qRound(p.audioMaster * 100.0));
+    m_audioMute->setChecked(p.audioMuted);
     m_refreshing = false;
     for (QWidget *w : std::as_const(m_rows))
         static_cast<LayerRow *>(w)->refresh();

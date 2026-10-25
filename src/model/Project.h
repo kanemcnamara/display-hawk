@@ -87,6 +87,7 @@ struct Clip {
     QString inputId; // Capture: camera/capture device id; Ndi: NDI source name; Share: Spout sender / Syphon server
     ScaleMode scale = ScaleMode::Fit;
     bool loop = true;
+    double volume = 1.0; // the clip's own audio level
     QColor solidColor = Qt::white;
     int gridSpacing = 64;
 
@@ -111,6 +112,7 @@ struct Layer {
     QString id;
     QString name = QStringLiteral("Layer");
     double opacity = 1.0;
+    double volume = 1.0; // playback state, like opacity
     BlendMode blend = BlendMode::Normal;
     bool bypass = false;
     bool solo = false;
@@ -133,8 +135,11 @@ enum class ControlAction {
     LayerBypass,    // toggle (layer)
     LayerSolo,      // toggle (layer)
     ClearLayer,     // trigger (layer)
+    LayerVolume,    // continuous (layer)
+    AudioMaster,    // continuous
+    AudioMute,      // toggle
 };
-constexpr int kControlActionCount = int(ControlAction::ClearLayer) + 1;
+constexpr int kControlActionCount = int(ControlAction::AudioMute) + 1;
 QString controlActionName(ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
@@ -183,6 +188,8 @@ struct Project {
     QVector<ControlMapping> controls; // MIDI mappings for this show
     DmxPatch dmx;
     bool blackout = false; // playback state
+    double audioMaster = 1.0; // playback state
+    bool audioMuted = false;  // playback state
 
     QSize compSize() const { return QSize(compWidth, compHeight); }
     QRect targetRect(int wall) const;

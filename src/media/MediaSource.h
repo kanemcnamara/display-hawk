@@ -7,6 +7,8 @@
 #include <QVideoFrame>
 
 class HapPlayer;
+class QAudioDevice;
+class QAudioOutput;
 class NdiReceiver;
 class QCamera;
 class QMediaCaptureSession;
@@ -28,6 +30,13 @@ public:
     // A file path, or a live input key as produced by Clip::mediaKey().
     void open(const QString &key);
     bool isLive() const { return m_camera || m_ndi; }
+
+    // Audio: files (including the soundtrack of HAP movies, played by an audio-only decoder
+    // alongside the HAP reader). Live inputs carry no audio yet.
+    bool hasAudio() const;
+    void setVolume(double volume); // 0..1 (linear)
+    double volume() const;
+    void setAudioDevice(const QAudioDevice &device);
     void close();
     void play();
     void pause();
@@ -54,6 +63,7 @@ private:
 
     QMediaPlayer *m_player = nullptr;
     QVideoSink *m_sink = nullptr;
+    QAudioOutput *m_audio = nullptr;
     HapPlayer *m_hap = nullptr;
     QThread *m_hapThread = nullptr;
     QCamera *m_camera = nullptr;

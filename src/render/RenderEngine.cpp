@@ -5,11 +5,18 @@
 #include "render/RenderThread.h"
 
 #include <QOffscreenSurface>
+#include <QAudio>
+#include <QAudioDevice>
+#include <QMediaDevices>
+#include <QSettings>
 #include <QTimer>
 #include <algorithm>
 #include <rhi/qrhi_platform.h>
 
 namespace {
+
+constexpr int kVolumeTickMs = 15;
+constexpr int kClickFreeMs = 40; // even "instant" level changes ramp this long, so they never click
 
 struct BackendChoice {
     QRhi::Implementation impl;
@@ -57,6 +64,11 @@ RenderEngine::RenderEngine(Document *doc, QObject *parent)
         pushProject();
         syncMedia();
     });
+    m_audioDeviceId = QSettings().value(QStringLiteral("audio/device")).toByteArray();
+    m_volumeTimer = new QTimer(this);
+    m_volumeTimer->setInterval(kVolumeTickMs);
+    m_volumeTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_volumeTimer, &QTimer::timeout, this, &RenderEngine::stepVolumes);
     connect(m_doc, &Document::clipTriggered, this, [this](const QString &clipId) {
         // Re-triggering a playing clip restarts it, like a cue.
         if (MediaSource *m = m_media.value(clipId))
@@ -97,6 +109,9 @@ void RenderEngine::syncMedia()
                     m_thread->setClipImage(id, img);
             }, Qt::DirectConnection);
             connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
+            for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+                if (d.id() == m_audioDeviceId)
+                    m->setAudioDevice(d);
             m_media.insert(id, m);
         }
         if (m_mediaPaths.value(id) != clip->mediaKey()) {
@@ -106,10 +121,31 @@ void RenderEngine::syncMedia()
         m->setLoop(clip->loop);
     }
 
+    // Audio levels: clip x layer x master, faded over the layer's crossfade when clips come and go.
+    const Project &p = m_doc->project();
+    bool anySolo = false;
+    for (const Layer &l : p.layers)
+        anySolo = anySolo || (l.solo && !l.bypass);
+    const double master = p.audioMuted ? 0.0 : p.audioMaster;
+    for (int li = 0; li < p.layers.size(); ++li) {
+        const Layer &l = p.layers[li];
+        const Clip *c = l.activeClip();
+        if (!c || !wanted.contains(c->id))
+            continue;
+        const bool audible = !l.bypass && (!anySolo || l.solo);
+        const double target = audible ? c->volume * l.volume * master : 0.0;
+        const bool starting = !m_volumes.contains(c->id) || m_volumes[c->id].target == 0.0;
+        m_mediaLayer.insert(c->id, li);
+        rampTo(c->id, qMin(1.0, target), starting && l.transitionMs > 0 ? l.transitionMs : kClickFreeMs);
+    }
+
     // Keep decoders of clips that just stopped alive long enough for their crossfade to finish.
     for (const QString &id : m_media.keys()) {
         if (wanted.contains(id))
             continue;
+        const int li = m_mediaLayer.value(id, -1);
+        const int fade = li >= 0 && li < p.layers.size() ? p.layers[li].transitionMs : 0;
+        rampTo(id, 0.0, qMax(kClickFreeMs, fade));
         QTimer::singleShot(longestTransition + 500, this, [this, id] {
             bool stillWanted = false;
             for (const Layer &l : m_doc->project().layers)
@@ -128,6 +164,8 @@ void RenderEngine::releaseMedia(const QString &clipId)
     if (!m)
         return;
     m_mediaPaths.remove(clipId);
+    m_volumes.remove(clipId);
+    m_mediaLayer.remove(clipId);
     m->disconnect(this);
     m->close();
     m->deleteLater();
@@ -213,6 +251,47 @@ void RenderEngine::setPreview(int view, const PreviewRequest &request)
 {
     if (m_thread)
         m_thread->setPreview(view, request);
+}
+
+void RenderEngine::rampTo(const QString &clipId, double target, int ms)
+{
+    Ramp &r = m_volumes[clipId];
+    if (qFuzzyCompare(r.target + 1.0, target + 1.0) && m_volumeTimer->isActive())
+        return;
+    r.target = target;
+    r.step = qMax(0.0005, qAbs(target - r.current) * kVolumeTickMs / qMax(1, ms));
+    if (!m_volumeTimer->isActive())
+        m_volumeTimer->start();
+    stepVolumes();
+}
+
+void RenderEngine::stepVolumes()
+{
+    bool moving = false;
+    for (auto it = m_volumes.begin(); it != m_volumes.end(); ++it) {
+        Ramp &r = it.value();
+        if (r.current != r.target) {
+            r.current = r.current < r.target ? qMin(r.target, r.current + r.step) : qMax(r.target, r.current - r.step);
+            moving = moving || r.current != r.target;
+        }
+        // Sliders are perceptual; QAudioOutput wants linear gain.
+        if (MediaSource *m = m_media.value(it.key()))
+            m->setVolume(QAudio::convertVolume(r.current, QAudio::LogarithmicVolumeScale, QAudio::LinearVolumeScale));
+    }
+    if (!moving)
+        m_volumeTimer->stop();
+}
+
+void RenderEngine::setAudioDevice(const QByteArray &deviceId)
+{
+    m_audioDeviceId = deviceId;
+    QSettings().setValue(QStringLiteral("audio/device"), deviceId);
+    QAudioDevice device = QMediaDevices::defaultAudioOutput();
+    for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+        if (d.id() == deviceId)
+            device = d;
+    for (MediaSource *m : std::as_const(m_media))
+        m->setAudioDevice(device);
 }
 
 void RenderEngine::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)

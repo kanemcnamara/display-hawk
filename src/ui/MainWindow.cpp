@@ -12,6 +12,9 @@
 #include "ui/ReportExporter.h"
 
 #include <QAction>
+#include <QActionGroup>
+#include <QAudioDevice>
+#include <QMediaDevices>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
@@ -262,6 +265,27 @@ void MainWindow::buildActions()
                                         "and recover from a crash without asking."));
     m_liveOnLaunchAction->setChecked(settings.value(kSettingLiveOnLaunch, false).toBool());
     connect(m_liveOnLaunchAction, &QAction::toggled, this, [](bool on) { QSettings().setValue(kSettingLiveOnLaunch, on); });
+
+    QMenu *audio = menuBar()->addMenu(tr("&Audio"));
+    QMenu *devices = audio->addMenu(tr("Output device"));
+    // Rebuilt when opened, so newly plugged-in interfaces show up.
+    connect(devices, &QMenu::aboutToShow, this, [this, devices] {
+        devices->clear();
+        auto *group = new QActionGroup(devices);
+        auto add = [&](const QString &label, const QByteArray &id) {
+            QAction *a = devices->addAction(label, this, [this, id] { m_engine->setAudioDevice(id); });
+            a->setCheckable(true);
+            a->setChecked(m_engine->audioDeviceId() == id);
+            group->addAction(a);
+        };
+        add(tr("System default (%1)").arg(QMediaDevices::defaultAudioOutput().description()), QByteArray());
+        devices->addSeparator();
+        for (const QAudioDevice &d : QMediaDevices::audioOutputs())
+            add(d.description(), d.id());
+    });
+    audio->addAction(tr("Mute all"), QKeySequence(tr("Ctrl+Shift+M")), this, [this] {
+        m_doc->setAudioMuted(!m_doc->project().audioMuted);
+    });
 
     QMenu *control = menuBar()->addMenu(tr("&Control"));
     control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);

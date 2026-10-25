@@ -22,6 +22,13 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 - **Spout (Windows) / Syphon (macOS)** share GPU textures with other apps on the same machine (OBS, TouchDesigner, Resolume, MadMapper...), with no copy through system memory. Set a screen's output device to *Spout* / *Syphon* to publish it as "Display Hawk - &lt;screen name&gt;", or right-click a clip slot → *Spout source* / *Syphon source* to take another app's output in. Spout needs the Direct3D 11 backend (the Windows default) and Syphon the Metal backend (the macOS default). Built from the vendored, BSD-licensed Spout2 and Syphon SDKs in `third_party/`.
 - NDI uses the **NDI runtime installed on the machine** (NDI Tools or the NDI Runtime from [ndi.video](https://ndi.video)); Display Hawk loads it when needed and runs normally without it. NDI® is a registered trademark of Vizrt NDI AB.
 
+## Audio
+
+- Video clips play their sound. Levels: **clip volume** (clip properties, up to 200% for quiet files) × **layer volume** (layer properties) × **audio master** (deck top bar, with **MUTE**). Layer volume and the audio master are playback controls like opacity: saved with the show, never undo steps.
+- Bypassed layers, and layers left out by a solo, are silent. When a layer crossfades, the outgoing clip's sound fades out and the incoming clip's fades in over the same time; every other level change ramps over 40 ms so it never clicks.
+- HAP movies with a soundtrack play it through an audio-only decoder started alongside the HAP reader.
+- **Audio → Output device** picks the sound card (remembered on this machine). OSC: `/dh/layer/<l>/volume`, `/dh/audio/master`, `/dh/audio/mute`; the same actions are available for MIDI mappings.
+
 ## LED tools
 
 - **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.

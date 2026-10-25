@@ -4,6 +4,8 @@
 #include "media/MovReader.h"
 #include "media/Ndi.h"
 
+#include <QAudioDevice>
+#include <QAudioOutput>
 #include <QCamera>
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -20,8 +22,16 @@ MediaSource::MediaSource(QObject *parent)
     : QObject(parent)
     , m_player(new QMediaPlayer(this))
     , m_sink(new QVideoSink(this))
+    , m_audio(new QAudioOutput(this))
 {
     m_player->setVideoSink(m_sink);
+    m_player->setAudioOutput(m_audio);
+    m_audio->setVolume(0.0f); // the engine ramps it up when the clip plays
+    // HAP movies: m_player only plays the soundtrack, so switch its video track off once known.
+    connect(m_player, &QMediaPlayer::tracksChanged, this, [this] {
+        if (m_hap)
+            m_player->setActiveVideoTrack(-1);
+    });
     m_player->setLoops(QMediaPlayer::Infinite);
     connect(m_sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
         if (frame.isValid() && m_isVideo && !m_hap)
@@ -94,6 +104,9 @@ void MediaSource::open(const QString &path)
                 hap->setLoop(loop);
                 hap->play();
             });
+            // The soundtrack (if any) from an audio-only decoder, started together with the pictures.
+            m_player->setSource(QUrl::fromLocalFile(path));
+            m_player->play();
         }
     } else {
         m_isVideo = true;
@@ -229,7 +242,7 @@ void MediaSource::play()
 {
     if (m_hap)
         QMetaObject::invokeMethod(m_hap, &HapPlayer::play);
-    else if (m_isVideo)
+    if (m_isVideo && !isLive())
         m_player->play();
 }
 
@@ -237,18 +250,38 @@ void MediaSource::pause()
 {
     if (m_hap)
         QMetaObject::invokeMethod(m_hap, &HapPlayer::pause);
-    else if (m_isVideo)
+    if (m_isVideo && !isLive())
         m_player->pause();
 }
 
 void MediaSource::restart()
 {
-    if (m_hap) {
+    if (m_hap)
         QMetaObject::invokeMethod(m_hap, &HapPlayer::restart);
-    } else if (m_isVideo) {
+    if (m_isVideo && !isLive()) {
         m_player->setPosition(0);
         m_player->play();
     }
+}
+
+bool MediaSource::hasAudio() const
+{
+    return m_player->hasAudio();
+}
+
+void MediaSource::setVolume(double volume)
+{
+    m_audio->setVolume(float(qBound(0.0, volume, 1.0)));
+}
+
+double MediaSource::volume() const
+{
+    return m_audio->volume();
+}
+
+void MediaSource::setAudioDevice(const QAudioDevice &device)
+{
+    m_audio->setDevice(device);
 }
 
 void MediaSource::setLoop(bool loop)

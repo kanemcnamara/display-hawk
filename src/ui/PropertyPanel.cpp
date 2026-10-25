@@ -267,6 +267,8 @@ QWidget *PropertyPanel::buildLayerPage()
     auto *f = new QFormLayout(box);
     m_layerName = new QLineEdit;
     m_layerOpacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
+    m_layerVolume = makeDouble(0, 100, 0, QStringLiteral(" %"));
+    m_layerVolume->setToolTip(tr("Audio level of this layer's clips"));
     m_layerBlend = new QComboBox;
     for (int i = 0; i <= int(BlendMode::Darken); ++i)
         m_layerBlend->addItem(blendModeName(BlendMode(i)));
@@ -279,6 +281,7 @@ QWidget *PropertyPanel::buildLayerPage()
     m_layerSolo = new QCheckBox(tr("Solo"));
     f->addRow(tr("Name"), m_layerName);
     f->addRow(tr("Opacity"), m_layerOpacity);
+    f->addRow(tr("Volume"), m_layerVolume);
     f->addRow(tr("Blend"), m_layerBlend);
     f->addRow(tr("Fit clips into"), m_layerTarget);
     f->addRow(tr("Crossfade"), m_layerTransition);
@@ -309,6 +312,10 @@ QWidget *PropertyPanel::buildLayerPage()
                                 m_layerSolo->isChecked());
     };
     connect(m_layerOpacity, &QDoubleSpinBox::valueChanged, this, playback);
+    connect(m_layerVolume, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (!m_refreshing)
+            m_doc->setLayerVolume(m_doc->selection().layer, v / 100.0);
+    });
     connect(m_layerBypass, &QCheckBox::toggled, this, playback);
     connect(m_layerSolo, &QCheckBox::toggled, this, playback);
     return page;
@@ -330,6 +337,7 @@ void PropertyPanel::refreshLayer()
         return;
     setText(m_layerName, l->name);
     setValue(m_layerOpacity, qRound(l->opacity * 100.0));
+    setValue(m_layerVolume, qRound(l->volume * 100.0));
     m_layerBlend->setCurrentIndex(int(l->blend));
     setValue(m_layerTransition, l->transitionMs);
     m_layerBypass->setChecked(l->bypass);
@@ -383,6 +391,8 @@ QWidget *PropertyPanel::buildClipPage()
     m_mediaPath->setReadOnly(true);
     auto *browse = new QPushButton(tr("Browse..."));
     m_loop = new QCheckBox(tr("Loop"));
+    m_clipVolume = makeDouble(0, 200, 0, QStringLiteral(" %"));
+    m_clipVolume->setToolTip(tr("This clip's audio level (above 100% boosts quiet files)"));
     m_scale = new QComboBox;
     for (int i = 0; i <= int(ScaleMode::Native); ++i)
         m_scale->addItem(scaleModeName(ScaleMode(i)));
@@ -400,6 +410,7 @@ QWidget *PropertyPanel::buildClipPage()
     f->addRow(tr("Media"), row({m_mediaPath, browse}));
     f->addRow(tr("Input"), row({m_input, refreshInputs}));
     f->addRow(QString(), m_loop);
+    f->addRow(tr("Volume"), m_clipVolume);
     f->addRow(tr("Scale"), m_scale);
     f->addRow(trigger);
     f->addRow(QString(), row({play, pause, restart}));
@@ -456,6 +467,10 @@ QWidget *PropertyPanel::buildClipPage()
     });
     connect(m_scale, &QComboBox::activated, this, [this](int i) {
         editClip([&](Clip &c) { c.scale = ScaleMode(i); });
+    });
+    connect(m_clipVolume, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.volume = v / 100.0; });
     });
     connect(trigger, &QPushButton::clicked, this, [this] {
         const Selection s = m_doc->selection();
@@ -517,6 +532,8 @@ void PropertyPanel::refreshClip()
     m_mediaPath->setToolTip(c->mediaPath);
     m_loop->setChecked(c->loop);
     m_scale->setCurrentIndex(int(c->scale));
+    setValue(m_clipVolume, qRound(c->volume * 100.0));
+    m_clipVolume->setEnabled(c->source == ContentSource::Media);
 
     // Live input list for the clip's source type.
     m_input->clear();
@@ -562,7 +579,8 @@ void PropertyPanel::refreshClip()
         else if (!m->errorString().isEmpty())
             status = tr("Error: %1").arg(m->errorString());
         else if (m->isVideo())
-            status = m->isPlaying() ? tr("Video playing") : tr("Video paused");
+            status = (m->isPlaying() ? tr("Video playing") : tr("Video paused"))
+                     + (m->isLive() ? QString() : m->hasAudio() ? tr(", with sound") : tr(", no audio track"));
         else if (m->isOpen())
             status = tr("Still image");
         else

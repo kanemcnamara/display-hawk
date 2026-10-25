@@ -10,6 +10,7 @@
 class Document;
 class MediaSource;
 class OutputWindow;
+class QTimer;
 class QOffscreenSurface;
 class RenderThread;
 
@@ -48,6 +49,12 @@ public:
     // Decoder for a playing media clip, or nullptr when the clip is not playing.
     MediaSource *mediaFor(const QString &clipId) const { return m_media.value(clipId); }
 
+    // Audio: the level a clip is currently playing at (0..1, slider scale, after fades), and the
+    // output device (empty = system default; remembered on this machine).
+    double audioLevel(const QString &clipId) const { return m_volumes.value(clipId).current; }
+    void setAudioDevice(const QByteArray &deviceId);
+    QByteArray audioDeviceId() const { return m_audioDeviceId; }
+
     void addOutput(OutputWindow *window);
     // Blocks until the render thread has released the window's swapchain; delete the window afterwards.
     void removeOutput(OutputWindow *window);
@@ -68,10 +75,21 @@ private:
     void pushProject();
     void syncMedia();
     void releaseMedia(const QString &clipId);
+    void stepVolumes();
+    void rampTo(const QString &clipId, double target, int ms);
 
     Document *m_doc;
     QHash<QString, MediaSource *> m_media; // clip id -> decoder, for clips that are playing
     QHash<QString, QString> m_mediaPaths;
+    struct Ramp {
+        double current = 0.0;
+        double target = 0.0;
+        double step = 1.0; // per tick
+    };
+    QHash<QString, Ramp> m_volumes;     // clip id -> audio level
+    QHash<QString, int> m_mediaLayer;   // clip id -> layer it last played on (for fade-out time)
+    QTimer *m_volumeTimer = nullptr;
+    QByteArray m_audioDeviceId;
     RenderThread *m_thread = nullptr;
     QOffscreenSurface *m_fallbackSurface = nullptr;
     QString m_backendName;

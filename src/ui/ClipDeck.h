@@ -36,6 +36,8 @@ private:
     Document *m_doc;
     QSlider *m_master;
     QPushButton *m_blackout;
+    QSlider *m_audioMaster;
+    QPushButton *m_audioMute;
     QVBoxLayout *m_rowLayout;
     QVector<QWidget *> m_rows;
     ClipGrid *m_grid;

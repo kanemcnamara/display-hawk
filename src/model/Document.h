@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "model/Project.h"
 
@@ -85,6 +85,9 @@ public:
     void setMaster(double master);
     void setBlackout(bool on);
     void setLayerPlayback(int layer, double opacity, bool bypass, bool solo);
+    void setLayerVolume(int layer, double volume);
+    void setAudioMaster(double volume);
+    void setAudioMuted(bool muted);
 
     // Undo works on whole-project snapshots. Rapid edits (drags, typing) are grouped: a step is
     // committed when commitUndo() is called (e.g. on mouse release) or after a short pause.

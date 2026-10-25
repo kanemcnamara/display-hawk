@@ -73,12 +73,15 @@ void Document::copyPlayback(const Project &from, Project &to)
 {
     to.master = from.master;
     to.blackout = from.blackout;
+    to.audioMaster = from.audioMaster;
+    to.audioMuted = from.audioMuted;
     for (Layer &l : to.layers) {
         for (const Layer &f : from.layers) {
             if (f.id != l.id)
                 continue;
             l.activeColumn = f.activeColumn < l.clips.size() ? f.activeColumn : -1;
             l.opacity = f.opacity;
+            l.volume = f.volume;
             l.bypass = f.bypass;
             l.solo = f.solo;
         }
@@ -298,6 +301,26 @@ void Document::setMaster(double master)
 void Document::setBlackout(bool on)
 {
     m_project.blackout = on;
+    notifyPlaybackChanged();
+}
+
+void Document::setLayerVolume(int layer, double volume)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    m_project.layers[layer].volume = qBound(0.0, volume, 1.0);
+    notifyPlaybackChanged();
+}
+
+void Document::setAudioMaster(double volume)
+{
+    m_project.audioMaster = qBound(0.0, volume, 1.0);
+    notifyPlaybackChanged();
+}
+
+void Document::setAudioMuted(bool muted)
+{
+    m_project.audioMuted = muted;
     notifyPlaybackChanged();
 }
 

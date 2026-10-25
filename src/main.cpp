@@ -1,6 +1,7 @@
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
 #include "control/Sacn.h"
+#include "media/MediaSource.h"
 #include "media/Ndi.h"
 #include "media/TextureShare.h"
 #include "model/Document.h"
@@ -13,6 +14,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QAudioDevice>
 #include <QCameraDevice>
 #include <QDialog>
 #include <QMediaDevices>
@@ -199,6 +201,57 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         save(second, "deck-video-b");
         check(litPercent(first) > 20, "video clip shows frames");
         check(!first.isNull() && first != second, "video clip is playing");
+    }
+
+    // Optional: DISPLAYHAWK_TEST_SOUND=<video with audio>, DISPLAYHAWK_TEST_HAP_SOUND=<HAP .mov with audio>.
+    const QString soundFile = qEnvironmentVariable("DISPLAYHAWK_TEST_SOUND");
+    if (!soundFile.isEmpty()) {
+        qInfo("selftest: default audio output: %s", qPrintable(QMediaDevices::defaultAudioOutput().description()));
+        const Clip sound = Clip::fromMedia(soundFile);
+        doc.setClip(0, 5, sound);
+        doc.project().layers[0].transitionMs = 0;
+        doc.setLayerVolume(0, 0.5);
+        doc.triggerClip(0, 5);
+        const bool audible = waitFor([&] {
+            MediaSource *m = engine.mediaFor(sound.id);
+            return m && m->hasAudio() && qAbs(engine.audioLevel(sound.id) - 0.5) < 0.02;
+        }, 8000);
+        check(audible, "clip sound plays at clip x layer x master level");
+        doc.setAudioMuted(true);
+        check(waitFor([&] { return engine.audioLevel(sound.id) < 0.001; }, 2000), "audio mute silences clips");
+        doc.setAudioMuted(false);
+        window.controlRouter()->handleOsc({QStringLiteral("/dh/layer/1/volume"), {1.0}});
+        check(waitFor([&] { return engine.audioLevel(sound.id) > 0.99; }, 2000), "OSC layer volume");
+        // A 1 s crossfade to a test pattern fades the sound out over the same second.
+        doc.project().layers[0].transitionMs = 1000;
+        doc.notifyChanged();
+        doc.triggerClip(0, 0);
+        waitMs(500);
+        const double mid = engine.audioLevel(sound.id);
+        const bool gone = waitFor([&] { return engine.audioLevel(sound.id) < 0.001; }, 3000);
+        qInfo("selftest: level half-way through the crossfade: %.2f", mid);
+        check(mid > 0.2 && mid < 0.8 && gone, "audio fades out with the layer crossfade");
+        doc.project().layers[0].transitionMs = 0;
+        doc.notifyChanged();
+    } else {
+        qInfo("selftest: SKIP clip audio (set DISPLAYHAWK_TEST_SOUND)");
+    }
+    const QString hapSound = qEnvironmentVariable("DISPLAYHAWK_TEST_HAP_SOUND");
+    if (!hapSound.isEmpty()) {
+        const Clip hap = Clip::fromMedia(hapSound);
+        doc.setClip(0, 6, hap);
+        // Start from black so only the HAP pictures themselves can light the composition.
+        doc.project().layers[0].transitionMs = 0;
+        doc.clearLayer(0);
+        waitFor([&] { return litPercent(previews[0]) < 2; }, 3000);
+        doc.triggerClip(0, 6);
+        const bool both = waitFor([&] {
+            MediaSource *m = engine.mediaFor(hap.id);
+            return m && m->isHap() && m->hasAudio() && engine.audioLevel(hap.id) > 0.99 && litPercent(previews[0]) > 20;
+        }, 8000);
+        save(previews[0], "hap-with-sound");
+        check(both, "HAP movie plays its pictures and its soundtrack");
+        doc.triggerClip(0, 0);
     }
 
     doc.setBlackout(true);

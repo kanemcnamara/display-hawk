@@ -67,7 +67,7 @@ private:
 
     // Layer
     QLineEdit *m_layerName;
-    QDoubleSpinBox *m_layerOpacity;
+    QDoubleSpinBox *m_layerOpacity, *m_layerVolume;
     QComboBox *m_layerBlend, *m_layerTarget;
     QSpinBox *m_layerTransition;
     QCheckBox *m_layerBypass, *m_layerSolo;
@@ -81,6 +81,7 @@ private:
     QLineEdit *m_mediaPath;
     QLabel *m_mediaStatus;
     QCheckBox *m_loop;
+    QDoubleSpinBox *m_clipVolume;
 
     // Wall
     QLineEdit *m_wallName;

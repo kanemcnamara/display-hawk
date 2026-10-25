@@ -18,7 +18,10 @@ Kind kindOf(ControlAction a)
     switch (a) {
     case ControlAction::Master:
     case ControlAction::LayerOpacity:
+    case ControlAction::LayerVolume:
+    case ControlAction::AudioMaster:
         return Kind::Continuous;
+    case ControlAction::AudioMute:
     case ControlAction::Blackout:
     case ControlAction::OutputsLive:
     case ControlAction::LayerBypass:
@@ -129,6 +132,10 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         apply(ControlAction::Blackout, 0, 0, value, toggleMode);
     else if (p[1] == QLatin1String("live"))
         apply(ControlAction::OutputsLive, 0, 0, value, toggleMode);
+    else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("master") && hasArg)
+        apply(ControlAction::AudioMaster, 0, 0, value, Mode::Value);
+    else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("mute"))
+        apply(ControlAction::AudioMute, 0, 0, value, toggleMode);
     else if (p[1] == QLatin1String("column") && p.value(3) == QLatin1String("trigger") && value != 0.0)
         apply(ControlAction::TriggerColumn, 0, index(2), 1.0, Mode::Press);
     else if (p[1] == QLatin1String("layer") && p.size() >= 4) {
@@ -138,6 +145,8 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
             apply(ControlAction::TriggerClip, layer, index(4), 1.0, Mode::Press);
         else if (what == QLatin1String("opacity") && hasArg)
             apply(ControlAction::LayerOpacity, layer, 0, value, Mode::Value);
+        else if (what == QLatin1String("volume") && hasArg)
+            apply(ControlAction::LayerVolume, layer, 0, value, Mode::Value);
         else if (what == QLatin1String("bypass"))
             apply(ControlAction::LayerBypass, layer, 0, value, toggleMode);
         else if (what == QLatin1String("solo"))
@@ -225,6 +234,16 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
     case ControlAction::LayerOpacity:
         if (layerOk)
             m_doc->setLayerPlayback(layer, value, p.layers[layer].bypass, p.layers[layer].solo);
+        break;
+    case ControlAction::LayerVolume:
+        if (layerOk)
+            m_doc->setLayerVolume(layer, value);
+        break;
+    case ControlAction::AudioMaster:
+        m_doc->setAudioMaster(value);
+        break;
+    case ControlAction::AudioMute:
+        m_doc->setAudioMuted(mode == Mode::Press ? !p.audioMuted : on);
         break;
     case ControlAction::LayerBypass:
         if (layerOk) {
@@ -481,6 +500,7 @@ QString ControlRouter::oscReference()
         "<tt>/dh/column/3/trigger</tt><br>"
         "<tt>/dh/layer/2/clip/4/trigger</tt><br>"
         "<tt>/dh/layer/2/opacity</tt> f 0..1 &nbsp; <tt>/dh/layer/2/bypass</tt> [0|1] &nbsp; "
-        "<tt>/dh/layer/2/solo</tt> [0|1] &nbsp; <tt>/dh/layer/2/clear</tt><br>"
+        "<tt>/dh/layer/2/solo</tt> [0|1] &nbsp; <tt>/dh/layer/2/clear</tt> &nbsp; <tt>/dh/layer/2/volume</tt> f 0..1<br>"
+        "<tt>/dh/audio/master</tt> f 0..1 &nbsp; <tt>/dh/audio/mute</tt> [0|1]<br>"
         "Toggles without an argument flip. Triggers ignore 0 (button release).");
 }

@@ -54,6 +54,9 @@ QString controlActionName(ControlAction a)
     case ControlAction::LayerBypass: return QStringLiteral("Layer bypass");
     case ControlAction::LayerSolo: return QStringLiteral("Layer solo");
     case ControlAction::ClearLayer: return QStringLiteral("Stop layer");
+    case ControlAction::LayerVolume: return QStringLiteral("Layer volume");
+    case ControlAction::AudioMaster: return QStringLiteral("Audio master");
+    case ControlAction::AudioMute: return QStringLiteral("Audio mute");
     }
     return {};
 }
@@ -61,7 +64,7 @@ QString controlActionName(ControlAction a)
 bool controlActionUsesLayer(ControlAction a)
 {
     return a == ControlAction::TriggerClip || a == ControlAction::LayerOpacity || a == ControlAction::LayerBypass
-           || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer;
+           || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer || a == ControlAction::LayerVolume;
 }
 
 bool controlActionUsesColumn(ControlAction a)
@@ -224,6 +227,7 @@ static QJsonObject clipToJson(const Clip &c)
                        {"inputId", c.inputId},
                        {"scale", int(c.scale)},
                        {"loop", c.loop},
+                       {"volume", c.volume},
                        {"solidColor", c.solidColor.name()},
                        {"gridSpacing", c.gridSpacing}};
 }
@@ -241,6 +245,7 @@ static Clip clipFromJson(const QJsonObject &o)
     c.inputId = o["inputId"].toString();
     c.scale = ScaleMode(o["scale"].toInt(0));
     c.loop = o["loop"].toBool(true);
+    c.volume = qBound(0.0, o["volume"].toDouble(1.0), 2.0);
     c.solidColor = QColor(o["solidColor"].toString("#ffffff"));
     c.gridSpacing = qMax(4, o["gridSpacing"].toInt(64));
     return c;
@@ -259,7 +264,9 @@ QJsonObject Project::toJson() const
                                       {"overlayOpacity", overlayOpacity},
                                       {"maskToPanels", maskToPanels},
                                       {"master", master},
-                                      {"blackout", blackout}};
+                                      {"blackout", blackout},
+                                      {"audioMaster", audioMaster},
+                                      {"audioMuted", audioMuted}};
 
     QJsonArray wallArr;
     for (const LedWall &w : walls) {
@@ -317,6 +324,7 @@ QJsonObject Project::toJson() const
         layerArr.append(QJsonObject{{"id", l.id},
                                     {"name", l.name},
                                     {"opacity", l.opacity},
+                                    {"volume", l.volume},
                                     {"blend", int(l.blend)},
                                     {"bypass", l.bypass},
                                     {"solo", l.solo},
@@ -358,6 +366,8 @@ Project Project::fromJson(const QJsonObject &root)
     p.maskToPanels = comp["maskToPanels"].toBool(false);
     p.master = comp["master"].toDouble(1.0);
     p.blackout = comp["blackout"].toBool(false);
+    p.audioMaster = qBound(0.0, comp["audioMaster"].toDouble(1.0), 1.0);
+    p.audioMuted = comp["audioMuted"].toBool(false);
 
     for (const QJsonValue &v : root["walls"].toArray()) {
         const QJsonObject o = v.toObject();
@@ -417,6 +427,7 @@ Project Project::fromJson(const QJsonObject &root)
             l.id = o["id"].toString();
             l.name = o["name"].toString(l.name);
             l.opacity = o["opacity"].toDouble(1.0);
+            l.volume = qBound(0.0, o["volume"].toDouble(1.0), 1.0);
             l.blend = BlendMode(o["blend"].toInt(0));
             l.bypass = o["bypass"].toBool(false);
             l.solo = o["solo"].toBool(false);
