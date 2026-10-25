@@ -9,4 +9,7 @@ Vendored unmodified (except where noted) so Display Hawk builds with no extra do
 
 Spout is compiled on Windows only, Syphon on macOS only.
 
-**Local patches:** `syphon/Syphon/SyphonServerRendererMetal.m` returns nil when the compiled Metal shaders are missing (they are not bundled; Display Hawk publishes BGRA frames, which Syphon copies with a blit), instead of creating a pipeline with nil functions, which aborts under Metal API validation.
+**Local patches** (Display Hawk does not bundle Syphon's compiled Metal shaders; it publishes BGRA, unflipped frames, which Syphon copies with a blit):
+
+- `syphon/Syphon/SyphonServerRendererMetal.m`: return nil when the shaders are missing, instead of building a pipeline with nil functions (which aborts under Metal API validation).
+- `syphon/Syphon/SyphonMetalServer.m`: keep the server when the renderer is unavailable, and skip (rather than publish undrawn) frames that would need it.

@@ -53,11 +53,9 @@
     {
         _device = theDevice;
         _surfaceTexture = nil;
+        // Display Hawk patch: the renderer needs compiled shaders, which are not bundled. Without it
+        // the server still publishes frames it can blit (BGRA, unflipped: all that Display Hawk sends).
         _renderer = [[SyphonServerRendererMetal alloc] initWithDevice:theDevice colorPixelFormat:MTLPixelFormatBGRA8Unorm];
-        if (!_renderer)
-        {
-            return nil;
-        }
     }
     return self;
 }
@@ -167,6 +165,11 @@
     // otherwise, re-draw the frame
     else
     {
+        if (!_renderer) // Display Hawk patch: no shaders bundled; do not publish an undrawn frame
+        {
+            SYPHONLOG(@"Frame needs the Metal renderer (not available); publish BGRA, unflipped frames");
+            return;
+        }
         [_renderer renderFromTexture:textureToPublish inTexture:destination region:region onCommandBuffer:commandBuffer flip:isFlipped];
     }
     

@@ -188,9 +188,12 @@ void RenderThread::renderShareOutputs(QRhiCommandBuffer *cb)
             o->sender = TextureSender::create(m_rhi, o->name);
             if (!o->sender) {
                 o->failed = true; // logged once
-                qWarning("%s output %s not started: needs the %s backend",
-                         qPrintable(TextureShare::technology().isEmpty() ? QStringLiteral("Texture sharing") : TextureShare::technology()),
-                         qPrintable(o->name), TextureShare::technology() == QLatin1String("Syphon") ? "Metal" : "Direct3D 11");
+                if (TextureShare::supportsBackend(m_rhi))
+                    qWarning("%s output %s could not be created", qPrintable(TextureShare::technology()), qPrintable(o->name));
+                else
+                    qWarning("%s output %s not started: needs the %s backend",
+                             qPrintable(TextureShare::technology().isEmpty() ? QStringLiteral("Texture sharing") : TextureShare::technology()),
+                             qPrintable(o->name), TextureShare::technology() == QLatin1String("Syphon") ? "Metal" : "Direct3D 11");
                 continue;
             }
             qInfo("%s output: %s", qPrintable(TextureShare::technology()), qPrintable(o->name));
