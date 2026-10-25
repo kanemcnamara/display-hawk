@@ -1,6 +1,7 @@
-#include "ui/PropertyPanel.h"
+﻿#include "ui/PropertyPanel.h"
 
 #include "media/MediaSource.h"
+#include "render/RenderEngine.h"
 #include "model/Document.h"
 
 #include <QCheckBox>
@@ -26,7 +27,7 @@
 
 namespace {
 
-enum Page { CompositionPage, WallPage, ScreenPage, SlicePage };
+enum Page { CompositionPage, WallPage, ScreenPage, SlicePage, LayerPage, ClipPage };
 
 QSpinBox *makeSpin(int min, int max, const QString &suffix = QStringLiteral(" px"))
 {
@@ -124,10 +125,10 @@ constexpr double kPixelsPerGigPort = 655360.0;
 
 } // namespace
 
-PropertyPanel::PropertyPanel(Document *doc, MediaSource *media, QWidget *parent)
+PropertyPanel::PropertyPanel(Document *doc, RenderEngine *engine, QWidget *parent)
     : QWidget(parent)
     , m_doc(doc)
-    , m_media(media)
+    , m_engine(engine)
 {
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
@@ -137,6 +138,8 @@ PropertyPanel::PropertyPanel(Document *doc, MediaSource *media, QWidget *parent)
     m_stack->addWidget(buildWallPage());
     m_stack->addWidget(buildScreenPage());
     m_stack->addWidget(buildSlicePage());
+    m_stack->addWidget(buildLayerPage());
+    m_stack->addWidget(buildClipPage());
     scroll->setWidget(m_stack);
 
     auto *layout = new QVBoxLayout(this);
@@ -145,7 +148,7 @@ PropertyPanel::PropertyPanel(Document *doc, MediaSource *media, QWidget *parent)
 
     connect(m_doc, &Document::changed, this, &PropertyPanel::refresh);
     connect(m_doc, &Document::selectionChanged, this, &PropertyPanel::refresh);
-    connect(m_media, &MediaSource::stateChanged, this, &PropertyPanel::refresh);
+    connect(m_engine, &RenderEngine::mediaStateChanged, this, &PropertyPanel::refresh);
     connect(qApp, &QGuiApplication::screenAdded, this, &PropertyPanel::refreshDisplays);
     connect(qApp, &QGuiApplication::screenRemoved, this, &PropertyPanel::refreshDisplays);
     refreshDisplays();
@@ -175,42 +178,6 @@ QWidget *PropertyPanel::buildCompositionPage()
     cf->addRow(fitWalls);
     v->addWidget(comp);
 
-    auto *content = new QGroupBox(tr("Content"));
-    auto *ctf = new QFormLayout(content);
-    m_source = new QComboBox;
-    m_source->addItems({tr("Test pattern"), tr("Media file")});
-    m_pattern = new QComboBox;
-    for (int i = 0; i <= int(TestPattern::Solid); ++i)
-        m_pattern->addItem(testPatternName(TestPattern(i)));
-    m_gridSpacing = makeSpin(4, 2048);
-    m_solidColor = new QPushButton;
-    m_mediaPath = new QLineEdit;
-    m_mediaPath->setReadOnly(true);
-    auto *browse = new QPushButton(tr("Browse..."));
-    auto *play = new QPushButton(tr("Play"));
-    auto *pause = new QPushButton(tr("Pause"));
-    auto *restart = new QPushButton(tr("Restart"));
-    m_mediaStatus = new QLabel;
-    m_mediaStatus->setWordWrap(true);
-    m_loop = new QCheckBox(tr("Loop"));
-    m_scale = new QComboBox;
-    for (int i = 0; i <= int(ScaleMode::Native); ++i)
-        m_scale->addItem(scaleModeName(ScaleMode(i)));
-    m_target = new QComboBox;
-    m_opacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
-    ctf->addRow(tr("Source"), m_source);
-    ctf->addRow(tr("Pattern"), m_pattern);
-    ctf->addRow(tr("Grid size"), m_gridSpacing);
-    ctf->addRow(tr("Solid colour"), m_solidColor);
-    ctf->addRow(tr("Media"), row({m_mediaPath, browse}));
-    ctf->addRow(QString(), row({play, pause, restart}));
-    ctf->addRow(QString(), m_loop);
-    ctf->addRow(QString(), m_mediaStatus);
-    ctf->addRow(tr("Scale"), m_scale);
-    ctf->addRow(tr("Fit into"), m_target);
-    ctf->addRow(tr("Opacity"), m_opacity);
-    v->addWidget(content);
-
     auto *overlay = new QGroupBox(tr("LED panel overlay"));
     auto *of = new QFormLayout(overlay);
     m_overlay = new QCheckBox(tr("Show panel outlines and numbers on top of content"));
@@ -218,6 +185,11 @@ QWidget *PropertyPanel::buildCompositionPage()
     of->addRow(m_overlay);
     of->addRow(tr("Opacity"), m_overlayOpacity);
     v->addWidget(overlay);
+
+    auto *hint = new QLabel(tr("Content is played from the clip deck: select a layer or clip slot to edit it."));
+    hint->setWordWrap(true);
+    hint->setEnabled(false);
+    v->addWidget(hint);
     v->addStretch();
 
     Project &p = m_doc->project();
@@ -247,51 +219,6 @@ QWidget *PropertyPanel::buildCompositionPage()
         }
     });
     connect(fitWalls, &QPushButton::clicked, m_doc, &Document::fitCompositionToWalls);
-
-    connect(m_source, &QComboBox::activated, this, [this, &p](int i) {
-        p.content.source = ContentSource(i);
-        m_doc->notifyMediaChanged();
-    });
-    connect(m_pattern, &QComboBox::activated, this, [this, &p](int i) {
-        p.content.pattern = TestPattern(i);
-        p.content.source = ContentSource::TestPattern;
-        m_doc->notifyMediaChanged();
-    });
-    connect(m_gridSpacing, &QSpinBox::valueChanged, this, [this, &p](int v) {
-        if (m_refreshing) return;
-        p.content.gridSpacing = v;
-        m_doc->notifyChanged();
-    });
-    connect(m_solidColor, &QPushButton::clicked, this, [this, &p] {
-        const QColor c = QColorDialog::getColor(p.content.solidColor, this, tr("Solid colour"));
-        if (c.isValid()) {
-            p.content.solidColor = c;
-            m_doc->notifyChanged();
-        }
-    });
-    connect(browse, &QPushButton::clicked, this, &PropertyPanel::browseMedia);
-    connect(play, &QPushButton::clicked, m_media, &MediaSource::play);
-    connect(pause, &QPushButton::clicked, m_media, &MediaSource::pause);
-    connect(restart, &QPushButton::clicked, m_media, &MediaSource::restart);
-    connect(m_loop, &QCheckBox::toggled, this, [this, &p](bool on) {
-        if (m_refreshing) return;
-        p.content.loop = on;
-        m_media->setLoop(on);
-        m_doc->notifyChanged();
-    });
-    connect(m_scale, &QComboBox::activated, this, [this, &p](int i) {
-        p.content.scale = ScaleMode(i);
-        m_doc->notifyChanged();
-    });
-    connect(m_target, &QComboBox::activated, this, [this, &p](int i) {
-        p.content.targetWall = m_target->itemData(i).toInt();
-        m_doc->notifyChanged();
-    });
-    connect(m_opacity, &QDoubleSpinBox::valueChanged, this, [this, &p](double v) {
-        if (m_refreshing) return;
-        p.content.opacity = v / 100.0;
-        m_doc->notifyChanged();
-    });
     connect(m_overlay, &QCheckBox::toggled, this, [this, &p](bool on) {
         if (m_refreshing) return;
         p.panelOverlay = on;
@@ -305,60 +232,279 @@ QWidget *PropertyPanel::buildCompositionPage()
     return page;
 }
 
-void PropertyPanel::browseMedia()
-{
-    const QString path = QFileDialog::getOpenFileName(
-        this, tr("Open media"), QFileInfo(m_doc->project().content.mediaPath).absolutePath(),
-        tr("Media (*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.m4v *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)"));
-    if (path.isEmpty())
-        return;
-    Content &c = m_doc->project().content;
-    c.mediaPath = path;
-    c.source = ContentSource::Media;
-    m_doc->notifyMediaChanged();
-}
-
 void PropertyPanel::refreshComposition()
 {
     const Project &p = m_doc->project();
-    const Content &c = p.content;
     syncSizePreset(m_compPreset, p.compWidth, p.compHeight);
     setValue(m_compW, p.compWidth);
     setValue(m_compH, p.compHeight);
     setButtonColor(m_compBg, p.background);
-    m_source->setCurrentIndex(int(c.source));
-    m_pattern->setCurrentIndex(int(c.pattern));
-    setValue(m_gridSpacing, c.gridSpacing);
-    setButtonColor(m_solidColor, c.solidColor);
-    setText(m_mediaPath, QFileInfo(c.mediaPath).fileName());
-    m_mediaPath->setToolTip(c.mediaPath);
-    m_loop->setChecked(c.loop);
-    m_scale->setCurrentIndex(int(c.scale));
-    setValue(m_opacity, qRound(c.opacity * 100.0));
     m_overlay->setChecked(p.panelOverlay);
     setValue(m_overlayOpacity, qRound(p.overlayOpacity * 100.0));
+}
 
-    m_target->clear();
-    m_target->addItem(tr("Whole composition"), -1);
+// ---------------------------------------------------------------- Layer
+
+QWidget *PropertyPanel::buildLayerPage()
+{
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    auto *box = new QGroupBox(tr("Layer"));
+    auto *f = new QFormLayout(box);
+    m_layerName = new QLineEdit;
+    m_layerOpacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
+    m_layerBlend = new QComboBox;
+    for (int i = 0; i <= int(BlendMode::Darken); ++i)
+        m_layerBlend->addItem(blendModeName(BlendMode(i)));
+    m_layerTarget = new QComboBox;
+    m_layerTarget->setToolTip(tr("Clips on this layer are fitted into this area"));
+    m_layerTransition = makeSpin(0, 60000, QStringLiteral(" ms"));
+    m_layerTransition->setSingleStep(100);
+    m_layerTransition->setSpecialValueText(tr("Cut"));
+    m_layerBypass = new QCheckBox(tr("Bypass"));
+    m_layerSolo = new QCheckBox(tr("Solo"));
+    f->addRow(tr("Name"), m_layerName);
+    f->addRow(tr("Opacity"), m_layerOpacity);
+    f->addRow(tr("Blend"), m_layerBlend);
+    f->addRow(tr("Fit clips into"), m_layerTarget);
+    f->addRow(tr("Crossfade"), m_layerTransition);
+    f->addRow(QString(), row({m_layerBypass, m_layerSolo}));
+    v->addWidget(box);
+    v->addStretch();
+
+    connect(m_layerName, &QLineEdit::textEdited, this, [this](const QString &t) {
+        editLayer([&](Layer &l) { l.name = t; }, true);
+    });
+    connect(m_layerBlend, &QComboBox::activated, this, [this](int i) {
+        editLayer([&](Layer &l) { l.blend = BlendMode(i); });
+    });
+    connect(m_layerTarget, &QComboBox::activated, this, [this](int i) {
+        const int wall = m_layerTarget->itemData(i).toInt();
+        editLayer([&](Layer &l) { l.targetWall = wall; });
+    });
+    connect(m_layerTransition, &QSpinBox::valueChanged, this, [this](int ms) {
+        if (!m_refreshing)
+            editLayer([&](Layer &l) { l.transitionMs = ms; });
+    });
+    // Opacity, bypass and solo are performance controls: not undo steps.
+    auto playback = [this] {
+        if (m_refreshing)
+            return;
+        const Selection s = m_doc->selection();
+        m_doc->setLayerPlayback(s.layer, m_layerOpacity->value() / 100.0, m_layerBypass->isChecked(),
+                                m_layerSolo->isChecked());
+    };
+    connect(m_layerOpacity, &QDoubleSpinBox::valueChanged, this, playback);
+    connect(m_layerBypass, &QCheckBox::toggled, this, playback);
+    connect(m_layerSolo, &QCheckBox::toggled, this, playback);
+    return page;
+}
+
+void PropertyPanel::editLayer(const std::function<void(Layer &)> &fn, bool structural)
+{
+    Layer *l = m_doc->selectedLayer();
+    if (!l)
+        return;
+    fn(*l);
+    m_doc->notifyChanged(structural);
+}
+
+void PropertyPanel::refreshLayer()
+{
+    const Layer *l = m_doc->selectedLayer();
+    if (!l)
+        return;
+    setText(m_layerName, l->name);
+    setValue(m_layerOpacity, qRound(l->opacity * 100.0));
+    m_layerBlend->setCurrentIndex(int(l->blend));
+    setValue(m_layerTransition, l->transitionMs);
+    m_layerBypass->setChecked(l->bypass);
+    m_layerSolo->setChecked(l->solo);
+    const Project &p = m_doc->project();
+    m_layerTarget->clear();
+    m_layerTarget->addItem(tr("Whole composition"), -1);
     for (int i = 0; i < p.walls.size(); ++i)
-        m_target->addItem(p.walls[i].name, i);
-    m_target->setCurrentIndex(qMax(0, m_target->findData(c.targetWall)));
+        m_layerTarget->addItem(p.walls[i].name, i);
+    m_layerTarget->setCurrentIndex(qMax(0, m_layerTarget->findData(l->targetWall)));
+}
 
-    const bool media = c.source == ContentSource::Media;
+// ---------------------------------------------------------------- Clip
+
+QWidget *PropertyPanel::buildClipPage()
+{
+    auto *page = new QWidget;
+    auto *v = new QVBoxLayout(page);
+    m_clipStack = new QStackedWidget;
+    v->addWidget(m_clipStack);
+    v->addStretch();
+
+    // Empty slot: offer to fill it.
+    auto *empty = new QGroupBox(tr("Empty clip slot"));
+    auto *ef = new QFormLayout(empty);
+    auto *newPattern = new QComboBox;
+    for (int i = 0; i <= int(TestPattern::Solid); ++i)
+        newPattern->addItem(testPatternName(TestPattern(i)));
+    auto *addPattern = new QPushButton(tr("Add"));
+    auto *addMedia = new QPushButton(tr("Load media file..."));
+    ef->addRow(tr("Test pattern"), row({newPattern, addPattern}));
+    ef->addRow(addMedia);
+    ef->addRow(new QLabel(tr("Tip: drag video or image files onto the clip deck.")));
+    m_clipStack->addWidget(empty);
+
+    auto *box = new QGroupBox(tr("Clip"));
+    auto *f = new QFormLayout(box);
+    m_clipName = new QLineEdit;
+    m_source = new QComboBox;
+    m_source->addItems({tr("Test pattern"), tr("Media file")});
+    m_pattern = new QComboBox;
+    for (int i = 0; i <= int(TestPattern::Solid); ++i)
+        m_pattern->addItem(testPatternName(TestPattern(i)));
+    m_gridSpacing = makeSpin(4, 2048);
+    m_solidColor = new QPushButton;
+    m_mediaPath = new QLineEdit;
+    m_mediaPath->setReadOnly(true);
+    auto *browse = new QPushButton(tr("Browse..."));
+    m_loop = new QCheckBox(tr("Loop"));
+    m_scale = new QComboBox;
+    for (int i = 0; i <= int(ScaleMode::Native); ++i)
+        m_scale->addItem(scaleModeName(ScaleMode(i)));
+    auto *trigger = new QPushButton(tr("Trigger"));
+    auto *play = new QPushButton(tr("Play"));
+    auto *pause = new QPushButton(tr("Pause"));
+    auto *restart = new QPushButton(tr("Restart"));
+    m_mediaStatus = new QLabel;
+    m_mediaStatus->setWordWrap(true);
+    f->addRow(tr("Name"), m_clipName);
+    f->addRow(tr("Source"), m_source);
+    f->addRow(tr("Pattern"), m_pattern);
+    f->addRow(tr("Grid size"), m_gridSpacing);
+    f->addRow(tr("Solid colour"), m_solidColor);
+    f->addRow(tr("Media"), row({m_mediaPath, browse}));
+    f->addRow(QString(), m_loop);
+    f->addRow(tr("Scale"), m_scale);
+    f->addRow(trigger);
+    f->addRow(QString(), row({play, pause, restart}));
+    f->addRow(QString(), m_mediaStatus);
+    m_clipStack->addWidget(box);
+
+    connect(addPattern, &QPushButton::clicked, this, [this, newPattern] {
+        const Selection s = m_doc->selection();
+        m_doc->setClip(s.layer, s.column, Clip::fromPattern(TestPattern(newPattern->currentIndex())));
+    });
+    connect(addMedia, &QPushButton::clicked, this, &PropertyPanel::browseMedia);
+    connect(browse, &QPushButton::clicked, this, &PropertyPanel::browseMedia);
+    connect(m_clipName, &QLineEdit::textEdited, this, [this](const QString &t) {
+        editClip([&](Clip &c) { c.name = t; });
+    });
+    connect(m_source, &QComboBox::activated, this, [this](int i) {
+        editClip([&](Clip &c) { c.source = ContentSource(i); });
+    });
+    connect(m_pattern, &QComboBox::activated, this, [this](int i) {
+        editClip([&](Clip &c) {
+            c.pattern = TestPattern(i);
+            c.source = ContentSource::TestPattern;
+        });
+    });
+    connect(m_gridSpacing, &QSpinBox::valueChanged, this, [this](int v) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.gridSpacing = v; });
+    });
+    connect(m_solidColor, &QPushButton::clicked, this, [this] {
+        const Clip *clip = m_doc->selectedClip();
+        if (!clip)
+            return;
+        const QColor col = QColorDialog::getColor(clip->solidColor, this, tr("Solid colour"));
+        if (col.isValid())
+            editClip([&](Clip &c) { c.solidColor = col; });
+    });
+    connect(m_loop, &QCheckBox::toggled, this, [this](bool on) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.loop = on; });
+    });
+    connect(m_scale, &QComboBox::activated, this, [this](int i) {
+        editClip([&](Clip &c) { c.scale = ScaleMode(i); });
+    });
+    connect(trigger, &QPushButton::clicked, this, [this] {
+        const Selection s = m_doc->selection();
+        m_doc->triggerClip(s.layer, s.column);
+    });
+    auto withMedia = [this](void (MediaSource::*fn)()) {
+        return [this, fn] {
+            if (const Clip *c = m_doc->selectedClip())
+                if (MediaSource *m = m_engine->mediaFor(c->id))
+                    (m->*fn)();
+        };
+    };
+    connect(play, &QPushButton::clicked, this, withMedia(&MediaSource::play));
+    connect(pause, &QPushButton::clicked, this, withMedia(&MediaSource::pause));
+    connect(restart, &QPushButton::clicked, this, withMedia(&MediaSource::restart));
+    return page;
+}
+
+void PropertyPanel::editClip(const std::function<void(Clip &)> &fn)
+{
+    Clip *c = m_doc->selectedClip();
+    if (!c)
+        return;
+    fn(*c);
+    m_doc->notifyChanged(true); // the deck shows names and thumbnails
+}
+
+void PropertyPanel::browseMedia()
+{
+    const Selection s = m_doc->selection();
+    if (s.kind != Selection::Clip)
+        return;
+    const Clip *existing = m_doc->selectedClip();
+    const QString start = existing ? QFileInfo(existing->mediaPath).absolutePath() : QString();
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Open media"), start,
+        tr("Media (*.mp4 *.mov *.mkv *.avi *.webm *.wmv *.m4v *.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff);;All files (*)"));
+    if (path.isEmpty())
+        return;
+    Clip c = existing ? *existing : Clip::fromMedia(path);
+    c.source = ContentSource::Media;
+    c.mediaPath = path;
+    m_doc->setClip(s.layer, s.column, c);
+}
+
+void PropertyPanel::refreshClip()
+{
+    const Clip *c = m_doc->selectedClip();
+    m_clipStack->setCurrentIndex(c ? 1 : 0);
+    if (!c)
+        return;
+    setText(m_clipName, c->name);
+    m_clipName->setPlaceholderText(c->displayName());
+    m_source->setCurrentIndex(int(c->source));
+    m_pattern->setCurrentIndex(int(c->pattern));
+    setValue(m_gridSpacing, c->gridSpacing);
+    setButtonColor(m_solidColor, c->solidColor);
+    setText(m_mediaPath, QFileInfo(c->mediaPath).fileName());
+    m_mediaPath->setToolTip(c->mediaPath);
+    m_loop->setChecked(c->loop);
+    m_scale->setCurrentIndex(int(c->scale));
+
+    const bool media = c->source == ContentSource::Media;
     m_pattern->setEnabled(!media);
-    m_gridSpacing->setEnabled(!media && (c.pattern == TestPattern::Grid || c.pattern == TestPattern::Checker));
-    m_solidColor->setEnabled(!media && c.pattern == TestPattern::Solid);
+    m_gridSpacing->setEnabled(!media && (c->pattern == TestPattern::Grid || c->pattern == TestPattern::Checker));
+    m_solidColor->setEnabled(!media && c->pattern == TestPattern::Solid);
     m_scale->setEnabled(media);
+    m_loop->setEnabled(media);
+
     QString status;
     if (media) {
-        if (!m_media->errorString().isEmpty())
-            status = tr("Error: %1").arg(m_media->errorString());
-        else if (m_media->isVideo())
-            status = m_media->isPlaying() ? tr("Video playing") : tr("Video paused");
-        else if (m_media->isOpen())
+        const MediaSource *m = m_engine->mediaFor(c->id);
+        if (!m)
+            status = tr("Not playing. Trigger the clip to load it.");
+        else if (!m->errorString().isEmpty())
+            status = tr("Error: %1").arg(m->errorString());
+        else if (m->isVideo())
+            status = m->isPlaying() ? tr("Video playing") : tr("Video paused");
+        else if (m->isOpen())
             status = tr("Still image");
         else
-            status = tr("No media loaded");
+            status = tr("Loading...");
     }
     m_mediaStatus->setText(status);
 }
@@ -408,7 +554,7 @@ QWidget *PropertyPanel::buildWallPage()
     auto *mf = new QFormLayout(mapBox);
     m_wallScreen = new QComboBox;
     auto *createSlice = new QPushButton(tr("Create 1:1 slice on screen"));
-    auto *fillContent = new QPushButton(tr("Fit content into this wall"));
+    auto *fillContent = new QPushButton(tr("Fit all layers into this wall"));
     mf->addRow(tr("Screen"), m_wallScreen);
     mf->addRow(createSlice);
     mf->addRow(fillContent);
@@ -466,7 +612,8 @@ QWidget *PropertyPanel::buildWallPage()
         const Selection s = m_doc->selection();
         if (s.kind != Selection::Wall)
             return;
-        m_doc->project().content.targetWall = s.wall;
+        for (Layer &l : m_doc->project().layers)
+            l.targetWall = s.wall;
         m_doc->notifyChanged();
     });
     return page;
@@ -520,12 +667,12 @@ void PropertyPanel::refreshWall()
            "<tr><td>Resolution</td><td><b>%1 x %2 px</b></td></tr>"
            "<tr><td>Pixel pitch</td><td>%3</td></tr>"
            "<tr><td>Physical size</td><td>%4 x %5 m (%6 m diagonal)</td></tr>"
-           "<tr><td>Area</td><td>%7 m²</td></tr>"
+           "<tr><td>Area</td><td>%7 mÂ²</td></tr>"
            "<tr><td>Aspect ratio</td><td>%8 : 1</td></tr>"
            "<tr><td>Panels</td><td>%9</td></tr>"
            "<tr><td>Total pixels</td><td>%10</td></tr>"
-           "<tr><td>Composition area</td><td>%11, %12 → %13, %14</td></tr>"
-           "<tr><td>Est. 1G ports</td><td>%15 (≈650k px/port @ 60 Hz)</td></tr>"
+           "<tr><td>Composition area</td><td>%11, %12 â†’ %13, %14</td></tr>"
+           "<tr><td>Est. 1G ports</td><td>%15 (â‰ˆ650k px/port @ 60 Hz)</td></tr>"
            "</table>")
             .arg(w->pixelWidth())
             .arg(w->pixelHeight())
@@ -739,7 +886,7 @@ QWidget *PropertyPanel::buildSlicePage()
     m_outW = makeSpin(1, 100000);
     m_outH = makeSpin(1, 100000);
     m_rotation = new QComboBox;
-    m_rotation->addItems({QStringLiteral("0°"), QStringLiteral("90° CW"), QStringLiteral("180°"), QStringLiteral("270° CW")});
+    m_rotation->addItems({QStringLiteral("0Â°"), QStringLiteral("90Â° CW"), QStringLiteral("180Â°"), QStringLiteral("270Â° CW")});
     m_flipH = new QCheckBox(tr("Flip horizontal"));
     m_flipV = new QCheckBox(tr("Flip vertical"));
     m_brightness = makeDouble(0, 200, 0, QStringLiteral(" %"));
@@ -905,6 +1052,15 @@ void PropertyPanel::refresh()
     case Selection::Slice:
         m_stack->setCurrentIndex(SlicePage);
         refreshSlice();
+        break;
+    case Selection::Layer:
+        m_stack->setCurrentIndex(LayerPage);
+        refreshLayer();
+        break;
+    case Selection::Clip:
+        m_stack->setCurrentIndex(ClipPage);
+        refreshLayer();
+        refreshClip();
         break;
     default:
         m_stack->setCurrentIndex(CompositionPage);

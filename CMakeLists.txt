@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.21)
+﻿cmake_minimum_required(VERSION 3.21)
 project(DisplayHawk VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -28,6 +28,8 @@ qt_add_executable(DisplayHawk
     src/ui/MainWindow.cpp
     src/ui/CanvasView.h
     src/ui/CanvasView.cpp
+    src/ui/ClipDeck.h
+    src/ui/ClipDeck.cpp
     src/ui/IdentifyOverlay.h
     src/ui/IdentifyOverlay.cpp
     src/ui/OutputWindow.h

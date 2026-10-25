@@ -1,5 +1,6 @@
-#pragma once
+﻿#pragma once
 
+#include <QHash>
 #include <QImage>
 #include <QObject>
 #include <QRectF>
@@ -43,7 +44,8 @@ public:
 
     QString backendName() const { return m_backendName; }
     QSurface::SurfaceType surfaceType() const { return m_surfaceType; }
-    MediaSource *media() const { return m_media; }
+    // Decoder for a playing media clip, or nullptr when the clip is not playing.
+    MediaSource *mediaFor(const QString &clipId) const { return m_media.value(clipId); }
 
     void addOutput(OutputWindow *window);
     // Blocks until the render thread has released the window's swapchain; delete the window afterwards.
@@ -52,15 +54,18 @@ public:
     void setPreview(int view, const PreviewRequest &request);
 
 signals:
+    void mediaStateChanged();
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);
     void statsUpdated(int fps, const QSize &compSize);
 
 private:
     void pushProject();
-    void reloadMedia();
+    void syncMedia();
+    void releaseMedia(const QString &clipId);
 
     Document *m_doc;
-    MediaSource *m_media;
+    QHash<QString, MediaSource *> m_media; // clip id -> decoder, for clips that are playing
+    QHash<QString, QString> m_mediaPaths;
     RenderThread *m_thread = nullptr;
     QOffscreenSurface *m_fallbackSurface = nullptr;
     QString m_backendName;

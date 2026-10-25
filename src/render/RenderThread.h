@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "model/Project.h"
 #include "render/RenderEngine.h"
@@ -23,8 +23,10 @@ public:
     void requestStop();
 
     void setProject(const Project &project);
-    void setVideoFrame(const QVideoFrame &frame); // any thread
-    void setStillImage(const QImage &image);      // any thread
+    // Media for one clip; callable from any thread (decoder threads deliver video frames).
+    void setClipFrame(const QString &clipId, const QVideoFrame &frame);
+    void setClipImage(const QString &clipId, const QImage &image);
+    void dropClipMedia(const QString &clipId);
     void setPreview(int view, const PreviewRequest &request);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
@@ -57,11 +59,14 @@ private:
     void releaseTarget(Target &t);
     void uploadImage(QRhiResourceUpdateBatch *u, QRhiTexture *&tex, const QImage &image);
     void renderComposition(QRhiCommandBuffer *cb);
+    void appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u, const Clip &clip,
+                        const QRect &target, const QSize &compSize, float opacity);
+    void collectGarbage(qint64 now);
     void renderPreviews(QRhiCommandBuffer *cb);
     void renderOutput(QRhiCommandBuffer *cb, Output &o);
     QVector<RhiQuad::Params> screenDraws(const Screen &screen, const QSizeF &target, const QRectF &screenRect) const;
     void deliverReadbacks();
-    QByteArray patternKey() const;
+    QByteArray patternKey(const Clip &clip) const;
     QByteArray overlayKey() const;
 
     const QRhi::Implementation m_backend;
@@ -73,9 +78,12 @@ private:
     bool m_stop = false;
     Project m_sharedProject;
     bool m_projectDirty = true;
-    QVideoFrame m_sharedFrame;
-    QImage m_sharedImage;
-    bool m_mediaDirty = false;
+    struct SharedMedia {
+        QVideoFrame frame;
+        QImage image;
+        bool remove = false;
+    };
+    QHash<QString, SharedMedia> m_sharedMedia; // clip id -> newest media not yet taken by run()
     PreviewRequest m_sharedPreview[2];
     QVector<OutputWindow *> m_toAdd;
     QVector<OutputWindow *> m_toRemove;
@@ -92,15 +100,31 @@ private:
     QVector<Output> m_outputs;
     Target m_comp;
     Target m_previewTarget[2];
-    QRhiTexture *m_mediaTex = nullptr;
-    QRhiTexture *m_patternTex = nullptr;
+    // Per clip: its pattern image or its newest media frame.
+    struct ClipTex {
+        QRhiTexture *tex = nullptr;
+        QByteArray patternKey;
+        QVideoFrame frame;
+        QImage image;
+        bool newMedia = false;
+        bool hasMedia = false;
+        qint64 lastUsed = 0;
+    };
+    QHash<QString, ClipTex> m_clipTex;
+    // Per layer: what is playing, the outgoing clip during a crossfade, and the layer texture.
+    struct LayerState {
+        Clip current;
+        Clip previous;
+        qint64 since = 0;
+        int duration = 0;
+        qint64 lastUsed = 0;
+        Target target;
+    };
+    QHash<QString, LayerState> m_layers;
+    QElapsedTimer m_clock;
+    qint64 m_lastGc = 0;
     QRhiTexture *m_overlayTex = nullptr;
-    QByteArray m_patternKey;
     QByteArray m_overlayKey;
-    QVideoFrame m_videoFrame;
-    QImage m_stillImage;
-    bool m_newMedia = false;
-    bool m_hasMedia = false;
     QRhiReadbackResult m_readback[2];
     bool m_readbackPending[2] = {false, false};
     bool m_readbackDone[2] = {false, false};

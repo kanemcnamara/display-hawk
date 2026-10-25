@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "model/Project.h"
 
@@ -6,8 +6,8 @@
 
 namespace Patterns {
 
-// Test pattern sized to the content target (whole composition or one wall).
-QImage generate(const Project &project, QSize size);
+// A clip's test pattern at the given size (the PanelMap pattern is always composition-sized).
+QImage generate(const Project &project, const Clip &clip, QSize size);
 
 // Full-composition image with every LED wall's panels coloured, outlined and numbered.
 QImage panelMap(const Project &project, bool transparentBackground);

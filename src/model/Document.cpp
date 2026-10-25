@@ -69,16 +69,32 @@ void Document::redo()
     restoreSnapshot(m_redo.takeLast());
 }
 
+void Document::copyPlayback(const Project &from, Project &to)
+{
+    to.master = from.master;
+    to.blackout = from.blackout;
+    for (Layer &l : to.layers) {
+        for (const Layer &f : from.layers) {
+            if (f.id != l.id)
+                continue;
+            l.activeColumn = f.activeColumn < l.clips.size() ? f.activeColumn : -1;
+            l.opacity = f.opacity;
+            l.bypass = f.bypass;
+            l.solo = f.solo;
+        }
+    }
+}
+
 void Document::restoreSnapshot(const Project &snapshot)
 {
-    const bool mediaDiffers = snapshot.content.source != m_project.content.source
-                              || snapshot.content.mediaPath != m_project.content.mediaPath;
-    m_project = snapshot;
-    m_committed = snapshot;
+    // Undo restores the setup, not the show: whatever is playing keeps playing.
+    Project restored = snapshot;
+    copyPlayback(m_project, restored);
+    m_project = restored;
+    m_committed = restored;
     validateSelection();
     setModified(m_project.toJson() != m_savedJson);
-    if (mediaDiffers)
-        emit mediaChanged();
+    emit mediaChanged();
     emit structureChanged();
     emit changed();
     emit selectionChanged();
@@ -129,9 +145,171 @@ void Document::validateSelection()
         ok = s.screen >= 0 && s.screen < m_project.screens.size() && s.slice >= 0
              && s.slice < m_project.screens[s.screen].slices.size();
         break;
+    case Selection::Layer:
+        ok = s.layer >= 0 && s.layer < m_project.layers.size();
+        break;
+    case Selection::Clip:
+        ok = s.layer >= 0 && s.layer < m_project.layers.size() && s.column >= 0 && s.column < m_project.columns;
+        break;
     }
     if (!ok)
         s = Selection::composition();
+}
+
+Layer *Document::selectedLayer()
+{
+    if (m_selection.kind == Selection::Layer || m_selection.kind == Selection::Clip)
+        return &m_project.layers[m_selection.layer];
+    return nullptr;
+}
+
+Clip *Document::selectedClip()
+{
+    if (m_selection.kind != Selection::Clip)
+        return nullptr;
+    Clip &c = m_project.layers[m_selection.layer].clips[m_selection.column];
+    return c.isEmpty() ? nullptr : &c;
+}
+
+// ---------------------------------------------------------------- clip deck
+
+int Document::addLayer()
+{
+    Layer l;
+    l.id = newId();
+    l.name = QStringLiteral("Layer %1").arg(m_project.layers.size() + 1);
+    l.clips.resize(m_project.columns);
+    m_project.layers.append(l);
+    const int idx = m_project.layers.size() - 1;
+    notifyChanged(true);
+    select(Selection::ofLayer(idx));
+    return idx;
+}
+
+void Document::removeLayer(int index)
+{
+    if (index < 0 || index >= m_project.layers.size() || m_project.layers.size() <= 1)
+        return; // always keep one layer
+    m_project.layers.removeAt(index);
+    notifyChanged(true);
+}
+
+void Document::addColumn()
+{
+    ++m_project.columns;
+    m_project.normalizeDeck();
+    notifyChanged(true);
+}
+
+void Document::setClip(int layer, int column, const Clip &clip)
+{
+    if (layer < 0 || layer >= m_project.layers.size() || column < 0)
+        return;
+    if (column >= m_project.columns) {
+        m_project.columns = column + 1;
+        m_project.normalizeDeck();
+    }
+    Layer &l = m_project.layers[layer];
+    l.clips[column] = clip;
+    if (clip.isEmpty() && l.activeColumn == column)
+        l.activeColumn = -1;
+    notifyChanged(true);
+    emit mediaChanged();
+}
+
+void Document::moveClip(int fromLayer, int fromColumn, int toLayer, int toColumn)
+{
+    const int nl = m_project.layers.size();
+    if (fromLayer < 0 || fromLayer >= nl || toLayer < 0 || toLayer >= nl || fromColumn < 0
+        || fromColumn >= m_project.columns || toColumn < 0 || toColumn >= m_project.columns)
+        return;
+    if (fromLayer == toLayer && fromColumn == toColumn)
+        return;
+    Layer &a = m_project.layers[fromLayer];
+    Layer &b = m_project.layers[toLayer];
+    std::swap(a.clips[fromColumn], b.clips[toColumn]);
+    // A playing clip keeps playing from its new slot when it stays on the same layer.
+    if (fromLayer == toLayer) {
+        if (a.activeColumn == fromColumn)
+            a.activeColumn = toColumn;
+        else if (a.activeColumn == toColumn)
+            a.activeColumn = fromColumn;
+    } else {
+        if (a.activeColumn == fromColumn)
+            a.activeColumn = -1;
+        if (b.activeColumn == toColumn)
+            b.activeColumn = -1;
+    }
+    notifyChanged(true);
+    select(Selection::ofClip(toLayer, toColumn));
+}
+
+void Document::notifyPlaybackChanged()
+{
+    // Keep the undo baseline in step so playback never shows up as an undo step.
+    copyPlayback(m_project, m_committed);
+    validateSelection();
+    emit changed();
+}
+
+void Document::triggerClip(int layer, int column)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    Layer &l = m_project.layers[layer];
+    if (column < 0 || column >= l.clips.size() || l.clips[column].isEmpty())
+        return;
+    l.activeColumn = column;
+    notifyPlaybackChanged();
+    emit clipTriggered(l.clips[column].id);
+}
+
+void Document::triggerColumn(int column)
+{
+    if (column < 0 || column >= m_project.columns)
+        return;
+    // A column is a scene: layers with an empty slot in it are cleared.
+    QStringList triggered;
+    for (Layer &l : m_project.layers) {
+        const bool has = column < l.clips.size() && !l.clips[column].isEmpty();
+        l.activeColumn = has ? column : -1;
+        if (has)
+            triggered << l.clips[column].id;
+    }
+    notifyPlaybackChanged();
+    for (const QString &id : std::as_const(triggered))
+        emit clipTriggered(id);
+}
+
+void Document::clearLayer(int layer)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    m_project.layers[layer].activeColumn = -1;
+    notifyPlaybackChanged();
+}
+
+void Document::setMaster(double master)
+{
+    m_project.master = qBound(0.0, master, 1.0);
+    notifyPlaybackChanged();
+}
+
+void Document::setBlackout(bool on)
+{
+    m_project.blackout = on;
+    notifyPlaybackChanged();
+}
+
+void Document::setLayerPlayback(int layer, double opacity, bool bypass, bool solo)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    Layer &l = m_project.layers[layer];
+    l.opacity = qBound(0.0, opacity, 1.0);
+    l.bypass = bypass;
+    l.solo = solo;
+    notifyPlaybackChanged();
 }
 
 LedWall *Document::selectedWall()
@@ -199,11 +377,12 @@ void Document::removeWall(int index)
     if (index < 0 || index >= m_project.walls.size())
         return;
     m_project.walls.removeAt(index);
-    int &tw = m_project.content.targetWall;
-    if (tw == index)
-        tw = -1;
-    else if (tw > index)
-        --tw;
+    for (Layer &l : m_project.layers) {
+        if (l.targetWall == index)
+            l.targetWall = -1;
+        else if (l.targetWall > index)
+            --l.targetWall;
+    }
     notifyChanged(true);
 }
 
@@ -281,6 +460,27 @@ void Document::duplicateSelection()
         slices.append(sl);
         notifyChanged(true);
         select(Selection::ofSlice(s.screen, slices.size() - 1));
+    } else if (s.kind == Selection::Clip && selectedClip()) {
+        // Copy into the next empty slot on the same layer.
+        Clip c = *selectedClip();
+        c.id = newId();
+        const Layer &l = m_project.layers[s.layer];
+        int target = s.column + 1;
+        while (target < l.clips.size() && !l.clips[target].isEmpty())
+            ++target;
+        setClip(s.layer, target, c);
+        select(Selection::ofClip(s.layer, target));
+    } else if (s.kind == Selection::Layer) {
+        Layer l = m_project.layers[s.layer];
+        l.id = newId();
+        l.name += QStringLiteral(" copy");
+        l.activeColumn = -1;
+        for (Clip &c : l.clips)
+            if (!c.isEmpty())
+                c.id = newId();
+        m_project.layers.insert(s.layer + 1, l);
+        notifyChanged(true);
+        select(Selection::ofLayer(s.layer + 1));
     }
 }
 
@@ -294,6 +494,10 @@ void Document::deleteSelection()
         removeSlice(s.screen, s.slice);
         select(Selection::ofScreen(s.screen));
         break;
+    case Selection::Clip:
+        setClip(s.layer, s.column, Clip());
+        break;
+    case Selection::Layer: removeLayer(s.layer); break;
     default: break;
     }
 }

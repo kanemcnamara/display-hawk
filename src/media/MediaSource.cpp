@@ -1,4 +1,4 @@
-#include "media/MediaSource.h"
+﻿#include "media/MediaSource.h"
 
 #include <QFileInfo>
 #include <QImageReader>

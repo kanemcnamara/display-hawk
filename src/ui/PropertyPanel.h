@@ -7,7 +7,7 @@
 #include <functional>
 
 class Document;
-class MediaSource;
+class RenderEngine;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -22,7 +22,7 @@ class PropertyPanel : public QWidget
 {
     Q_OBJECT
 public:
-    PropertyPanel(Document *doc, MediaSource *media, QWidget *parent = nullptr);
+    PropertyPanel(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
 
 signals:
     void identifyRequested();
@@ -36,33 +36,49 @@ private:
     QWidget *buildWallPage();
     QWidget *buildScreenPage();
     QWidget *buildSlicePage();
+    QWidget *buildLayerPage();
+    QWidget *buildClipPage();
     void refreshComposition();
     void refreshWall();
     void refreshScreen();
     void refreshSlice();
+    void refreshLayer();
+    void refreshClip();
     void editWall(const std::function<void(LedWall &)> &fn);
     void editSlice(const std::function<void(Slice &)> &fn);
     void editScreen(const std::function<void(Screen &)> &fn, bool structural = false);
+    void editLayer(const std::function<void(Layer &)> &fn, bool structural = false);
+    void editClip(const std::function<void(Clip &)> &fn);
     void browseMedia();
 
     Document *m_doc;
-    MediaSource *m_media;
+    RenderEngine *m_engine;
     QStackedWidget *m_stack;
     bool m_refreshing = false;
 
-    // Composition / content
+    // Composition
     QComboBox *m_compPreset;
     QSpinBox *m_compW, *m_compH;
     QPushButton *m_compBg;
-    QComboBox *m_source, *m_pattern, *m_scale, *m_target;
+    QCheckBox *m_overlay;
+    QDoubleSpinBox *m_overlayOpacity;
+
+    // Layer
+    QLineEdit *m_layerName;
+    QDoubleSpinBox *m_layerOpacity;
+    QComboBox *m_layerBlend, *m_layerTarget;
+    QSpinBox *m_layerTransition;
+    QCheckBox *m_layerBypass, *m_layerSolo;
+
+    // Clip
+    QStackedWidget *m_clipStack;
+    QLineEdit *m_clipName;
+    QComboBox *m_source, *m_pattern, *m_scale;
     QSpinBox *m_gridSpacing;
     QPushButton *m_solidColor;
     QLineEdit *m_mediaPath;
     QLabel *m_mediaStatus;
     QCheckBox *m_loop;
-    QDoubleSpinBox *m_opacity;
-    QCheckBox *m_overlay;
-    QDoubleSpinBox *m_overlayOpacity;
 
     // Wall
     QLineEdit *m_wallName;

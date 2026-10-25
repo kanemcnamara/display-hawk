@@ -1,6 +1,8 @@
 #include "model/Project.h"
 
+#include <QFileInfo>
 #include <QJsonArray>
+#include <QUuid>
 
 QString testPatternName(TestPattern p)
 {
@@ -26,11 +28,82 @@ QString scaleModeName(ScaleMode m)
     return {};
 }
 
-QRect Project::contentTarget() const
+QString blendModeName(BlendMode m)
 {
-    if (content.targetWall >= 0 && content.targetWall < walls.size())
-        return walls[content.targetWall].rect();
+    switch (m) {
+    case BlendMode::Normal: return QStringLiteral("Normal");
+    case BlendMode::Add: return QStringLiteral("Add");
+    case BlendMode::Screen: return QStringLiteral("Screen");
+    case BlendMode::Multiply: return QStringLiteral("Multiply");
+    case BlendMode::Lighten: return QStringLiteral("Lighten");
+    case BlendMode::Darken: return QStringLiteral("Darken");
+    }
+    return {};
+}
+
+QString newId()
+{
+    return QUuid::createUuid().toString(QUuid::WithoutBraces);
+}
+
+QString Clip::displayName() const
+{
+    if (!name.isEmpty())
+        return name;
+    if (source == ContentSource::Media)
+        return QFileInfo(mediaPath).completeBaseName();
+    return testPatternName(pattern);
+}
+
+Clip Clip::fromPattern(TestPattern p)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::TestPattern;
+    c.pattern = p;
+    return c;
+}
+
+Clip Clip::fromMedia(const QString &path)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Media;
+    c.mediaPath = path;
+    return c;
+}
+
+const Clip *Layer::activeClip() const
+{
+    if (activeColumn < 0 || activeColumn >= clips.size() || clips[activeColumn].isEmpty())
+        return nullptr;
+    return &clips[activeColumn];
+}
+
+QRect Project::targetRect(int wall) const
+{
+    if (wall >= 0 && wall < walls.size())
+        return walls[wall].rect();
     return QRect(0, 0, compWidth, compHeight);
+}
+
+void Project::normalizeDeck()
+{
+    columns = qMax(1, columns);
+    for (Layer &l : layers) {
+        if (l.id.isEmpty())
+            l.id = newId();
+        for (const Clip &c : std::as_const(l.clips))
+            if (!c.isEmpty())
+                columns = qMax(columns, int(l.clips.size()));
+    }
+    for (Layer &l : layers) {
+        l.clips.resize(columns);
+        if (l.activeColumn >= columns)
+            l.activeColumn = -1;
+        if (l.targetWall >= walls.size())
+            l.targetWall = -1;
+    }
 }
 
 static QJsonObject rectToJson(const QRect &r)
@@ -43,29 +116,51 @@ static QRect rectFromJson(const QJsonObject &o)
     return QRect(o["x"].toInt(), o["y"].toInt(), o["w"].toInt(), o["h"].toInt());
 }
 
+static QJsonObject clipToJson(const Clip &c)
+{
+    if (c.isEmpty())
+        return {};
+    return QJsonObject{{"id", c.id},
+                       {"name", c.name},
+                       {"source", int(c.source)},
+                       {"pattern", int(c.pattern)},
+                       {"mediaPath", c.mediaPath},
+                       {"scale", int(c.scale)},
+                       {"loop", c.loop},
+                       {"solidColor", c.solidColor.name()},
+                       {"gridSpacing", c.gridSpacing}};
+}
+
+static Clip clipFromJson(const QJsonObject &o)
+{
+    Clip c;
+    c.id = o["id"].toString();
+    if (c.isEmpty())
+        return c;
+    c.name = o["name"].toString();
+    c.source = ContentSource(o["source"].toInt(0));
+    c.pattern = TestPattern(o["pattern"].toInt(0));
+    c.mediaPath = o["mediaPath"].toString();
+    c.scale = ScaleMode(o["scale"].toInt(0));
+    c.loop = o["loop"].toBool(true);
+    c.solidColor = QColor(o["solidColor"].toString("#ffffff"));
+    c.gridSpacing = qMax(4, o["gridSpacing"].toInt(64));
+    return c;
+}
+
 QJsonObject Project::toJson() const
 {
     QJsonObject root;
     root["format"] = "display-hawk";
-    root["version"] = 1;
+    root["version"] = 2;
 
-    QJsonObject comp{{"width", compWidth},
-                     {"height", compHeight},
-                     {"background", background.name()},
-                     {"panelOverlay", panelOverlay},
-                     {"overlayOpacity", overlayOpacity}};
-    root["composition"] = comp;
-
-    QJsonObject c{{"source", int(content.source)},
-                  {"pattern", int(content.pattern)},
-                  {"mediaPath", content.mediaPath},
-                  {"scale", int(content.scale)},
-                  {"targetWall", content.targetWall},
-                  {"loop", content.loop},
-                  {"opacity", content.opacity},
-                  {"solidColor", content.solidColor.name()},
-                  {"gridSpacing", content.gridSpacing}};
-    root["content"] = c;
+    root["composition"] = QJsonObject{{"width", compWidth},
+                                      {"height", compHeight},
+                                      {"background", background.name()},
+                                      {"panelOverlay", panelOverlay},
+                                      {"overlayOpacity", overlayOpacity},
+                                      {"master", master},
+                                      {"blackout", blackout}};
 
     QJsonArray wallArr;
     for (const LedWall &w : walls) {
@@ -103,6 +198,24 @@ QJsonObject Project::toJson() const
                                      {"slices", sliceArr}});
     }
     root["screens"] = screenArr;
+
+    QJsonArray layerArr;
+    for (const Layer &l : layers) {
+        QJsonArray clipArr;
+        for (const Clip &c : l.clips)
+            clipArr.append(clipToJson(c));
+        layerArr.append(QJsonObject{{"id", l.id},
+                                    {"name", l.name},
+                                    {"opacity", l.opacity},
+                                    {"blend", int(l.blend)},
+                                    {"bypass", l.bypass},
+                                    {"solo", l.solo},
+                                    {"targetWall", l.targetWall},
+                                    {"transitionMs", l.transitionMs},
+                                    {"activeColumn", l.activeColumn},
+                                    {"clips", clipArr}});
+    }
+    root["deck"] = QJsonObject{{"columns", columns}, {"layers", layerArr}};
     return root;
 }
 
@@ -115,17 +228,8 @@ Project Project::fromJson(const QJsonObject &root)
     p.background = QColor(comp["background"].toString("#000000"));
     p.panelOverlay = comp["panelOverlay"].toBool(false);
     p.overlayOpacity = comp["overlayOpacity"].toDouble(0.6);
-
-    const QJsonObject c = root["content"].toObject();
-    p.content.source = ContentSource(c["source"].toInt(0));
-    p.content.pattern = TestPattern(c["pattern"].toInt(0));
-    p.content.mediaPath = c["mediaPath"].toString();
-    p.content.scale = ScaleMode(c["scale"].toInt(0));
-    p.content.targetWall = c["targetWall"].toInt(-1);
-    p.content.loop = c["loop"].toBool(true);
-    p.content.opacity = c["opacity"].toDouble(1.0);
-    p.content.solidColor = QColor(c["solidColor"].toString("#ffffff"));
-    p.content.gridSpacing = qMax(4, c["gridSpacing"].toInt(64));
+    p.master = comp["master"].toDouble(1.0);
+    p.blackout = comp["blackout"].toBool(false);
 
     for (const QJsonValue &v : root["walls"].toArray()) {
         const QJsonObject o = v.toObject();
@@ -166,8 +270,49 @@ Project Project::fromJson(const QJsonObject &root)
         }
         p.screens.append(s);
     }
-    if (p.content.targetWall >= p.walls.size())
-        p.content.targetWall = -1;
+
+    if (root.contains("deck")) {
+        const QJsonObject deck = root["deck"].toObject();
+        p.columns = deck["columns"].toInt(8);
+        for (const QJsonValue &v : deck["layers"].toArray()) {
+            const QJsonObject o = v.toObject();
+            Layer l;
+            l.id = o["id"].toString();
+            l.name = o["name"].toString(l.name);
+            l.opacity = o["opacity"].toDouble(1.0);
+            l.blend = BlendMode(o["blend"].toInt(0));
+            l.bypass = o["bypass"].toBool(false);
+            l.solo = o["solo"].toBool(false);
+            l.targetWall = o["targetWall"].toInt(-1);
+            l.transitionMs = qMax(0, o["transitionMs"].toInt(0));
+            l.activeColumn = o["activeColumn"].toInt(-1);
+            for (const QJsonValue &cv : o["clips"].toArray())
+                l.clips.append(clipFromJson(cv.toObject()));
+            p.layers.append(l);
+        }
+    } else {
+        // Version 1 files had a single content source: it becomes the first clip of one layer.
+        const QJsonObject c = root["content"].toObject();
+        Clip clip;
+        clip.id = newId();
+        clip.source = ContentSource(c["source"].toInt(0));
+        clip.pattern = TestPattern(c["pattern"].toInt(0));
+        clip.mediaPath = c["mediaPath"].toString();
+        clip.scale = ScaleMode(c["scale"].toInt(0));
+        clip.loop = c["loop"].toBool(true);
+        clip.solidColor = QColor(c["solidColor"].toString("#ffffff"));
+        clip.gridSpacing = qMax(4, c["gridSpacing"].toInt(64));
+        Layer l;
+        l.name = QStringLiteral("Layer 1");
+        l.opacity = c["opacity"].toDouble(1.0);
+        l.targetWall = c["targetWall"].toInt(-1);
+        l.clips.append(clip);
+        l.activeColumn = 0;
+        p.layers.append(l);
+    }
+    if (p.layers.isEmpty())
+        p.layers.append(Layer());
+    p.normalizeDeck();
     return p;
 }
 
@@ -188,5 +333,15 @@ Project Project::makeDefault()
     sl.output = QRect(0, 0, w.pixelWidth(), w.pixelHeight());
     s.slices.append(sl);
     p.screens.append(s);
+
+    Layer bottom;
+    bottom.name = QStringLiteral("Layer 1");
+    bottom.clips = {Clip::fromPattern(TestPattern::PanelMap), Clip::fromPattern(TestPattern::Grid),
+                    Clip::fromPattern(TestPattern::ColorBars), Clip::fromPattern(TestPattern::Gradient)};
+    bottom.activeColumn = 0;
+    Layer top;
+    top.name = QStringLiteral("Layer 2");
+    p.layers = {bottom, top};
+    p.normalizeDeck();
     return p;
 }

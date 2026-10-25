@@ -115,10 +115,9 @@ QImage checker(QSize size, int spacing)
 
 namespace Patterns {
 
-QImage generate(const Project &project, QSize size)
+QImage generate(const Project &project, const Clip &c, QSize size)
 {
     size = size.expandedTo(QSize(1, 1));
-    const Content &c = project.content;
     switch (c.pattern) {
     case TestPattern::Grid: return grid(size, qMax(4, c.gridSpacing));
     case TestPattern::ColorBars: return colorBars(size);

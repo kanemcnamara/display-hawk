@@ -5,6 +5,7 @@
 #include "render/RenderThread.h"
 
 #include <QOffscreenSurface>
+#include <QTimer>
 #include <algorithm>
 #include <rhi/qrhi_platform.h>
 
@@ -51,19 +52,84 @@ QVector<BackendChoice> backendCandidates()
 RenderEngine::RenderEngine(Document *doc, QObject *parent)
     : QObject(parent)
     , m_doc(doc)
-    , m_media(new MediaSource(this))
 {
-    // Frames may arrive on a decoder thread; the render thread setters are thread-safe.
-    connect(m_media, &MediaSource::videoFrame, this, [this](const QVideoFrame &f) {
-        if (m_thread)
-            m_thread->setVideoFrame(f);
-    }, Qt::DirectConnection);
-    connect(m_media, &MediaSource::stillImage, this, [this](const QImage &img) {
-        if (m_thread)
-            m_thread->setStillImage(img);
-    }, Qt::DirectConnection);
-    connect(m_doc, &Document::changed, this, &RenderEngine::pushProject);
-    connect(m_doc, &Document::mediaChanged, this, &RenderEngine::reloadMedia);
+    connect(m_doc, &Document::changed, this, [this] {
+        pushProject();
+        syncMedia();
+    });
+    connect(m_doc, &Document::clipTriggered, this, [this](const QString &clipId) {
+        // Re-triggering a playing clip restarts it, like a cue.
+        if (MediaSource *m = m_media.value(clipId))
+            m->restart();
+    });
+}
+
+void RenderEngine::syncMedia()
+{
+    if (!m_thread)
+        return;
+    QHash<QString, const Clip *> wanted;
+    int longestTransition = 0;
+    for (const Layer &l : m_doc->project().layers) {
+        longestTransition = qMax(longestTransition, l.transitionMs);
+        const Clip *c = l.activeClip();
+        if (c && c->source == ContentSource::Media && !c->mediaPath.isEmpty())
+            wanted.insert(c->id, c);
+    }
+
+    for (auto it = wanted.cbegin(); it != wanted.cend(); ++it) {
+        const QString id = it.key();
+        const Clip *clip = it.value();
+        MediaSource *m = m_media.value(id);
+        if (!m) {
+            m = new MediaSource(this);
+            // Frames may arrive on a decoder thread; the render thread setters are thread-safe.
+            connect(m, &MediaSource::videoFrame, this, [this, id](const QVideoFrame &f) {
+                if (m_thread)
+                    m_thread->setClipFrame(id, f);
+            }, Qt::DirectConnection);
+            connect(m, &MediaSource::stillImage, this, [this, id](const QImage &img) {
+                if (m_thread)
+                    m_thread->setClipImage(id, img);
+            }, Qt::DirectConnection);
+            connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
+            m_media.insert(id, m);
+        }
+        if (m_mediaPaths.value(id) != clip->mediaPath) {
+            m_mediaPaths.insert(id, clip->mediaPath);
+            m->open(clip->mediaPath);
+        }
+        m->setLoop(clip->loop);
+    }
+
+    // Keep decoders of clips that just stopped alive long enough for their crossfade to finish.
+    for (const QString &id : m_media.keys()) {
+        if (wanted.contains(id))
+            continue;
+        QTimer::singleShot(longestTransition + 500, this, [this, id] {
+            bool stillWanted = false;
+            for (const Layer &l : m_doc->project().layers)
+                if (const Clip *c = l.activeClip(); c && c->id == id && c->source == ContentSource::Media)
+                    stillWanted = true;
+            if (!stillWanted)
+                releaseMedia(id);
+        });
+    }
+    emit mediaStateChanged();
+}
+
+void RenderEngine::releaseMedia(const QString &clipId)
+{
+    MediaSource *m = m_media.take(clipId);
+    if (!m)
+        return;
+    m_mediaPaths.remove(clipId);
+    m->disconnect(this);
+    m->close();
+    m->deleteLater();
+    if (m_thread)
+        m_thread->dropClipMedia(clipId);
+    emit mediaStateChanged();
 }
 
 RenderEngine::~RenderEngine()
@@ -97,7 +163,7 @@ bool RenderEngine::start(QString *error)
         if (m_thread->waitForInit(&reason)) {
             if (!failures.isEmpty())
                 qWarning("Using %s after: %s", b.name, qPrintable(failures.join(QStringLiteral("; "))));
-            reloadMedia();
+            syncMedia();
             return true;
         }
         failures << QStringLiteral("%1: %2").arg(m_backendName, reason);
@@ -117,7 +183,8 @@ void RenderEngine::stop()
 {
     if (!m_thread)
         return;
-    m_media->close();
+    for (const QString &id : m_media.keys())
+        releaseMedia(id);
     m_thread->requestStop();
     m_thread->wait();
     delete m_thread;
@@ -148,11 +215,4 @@ void RenderEngine::pushProject()
 {
     if (m_thread)
         m_thread->setProject(m_doc->project());
-}
-
-void RenderEngine::reloadMedia()
-{
-    const Content &c = m_doc->project().content;
-    m_media->open(c.source == ContentSource::Media ? c.mediaPath : QString());
-    m_media->setLoop(c.loop);
 }

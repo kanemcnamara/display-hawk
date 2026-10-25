@@ -9,9 +9,12 @@
 enum class ContentSource { TestPattern = 0, Media = 1 };
 enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid };
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
+enum class BlendMode { Normal = 0, Add, Screen, Multiply, Lighten, Darken };
 
 QString testPatternName(TestPattern p);
 QString scaleModeName(ScaleMode m);
+QString blendModeName(BlendMode m);
+QString newId();
 
 // A physical LED wall built from a grid of identical panels (cabinets).
 struct LedWall {
@@ -57,30 +60,58 @@ struct Screen {
     QVector<Slice> slices;
 };
 
-struct Content {
+// One cell of the clip deck. An empty id means an empty slot.
+struct Clip {
+    QString id;
+    QString name;
     ContentSource source = ContentSource::TestPattern;
-    TestPattern pattern = TestPattern::PanelMap;
+    TestPattern pattern = TestPattern::Grid;
     QString mediaPath;
     ScaleMode scale = ScaleMode::Fit;
-    int targetWall = -1; // -1 = whole composition
     bool loop = true;
-    double opacity = 1.0;
     QColor solidColor = Qt::white;
     int gridSpacing = 64;
+
+    bool isEmpty() const { return id.isEmpty(); }
+    QString displayName() const;
+    static Clip fromPattern(TestPattern p);
+    static Clip fromMedia(const QString &path);
+};
+
+// A row of the clip deck. Layers are composited bottom (index 0) to top.
+struct Layer {
+    QString id;
+    QString name = QStringLiteral("Layer");
+    double opacity = 1.0;
+    BlendMode blend = BlendMode::Normal;
+    bool bypass = false;
+    bool solo = false;
+    int targetWall = -1;   // clips are fitted into this wall; -1 = whole composition
+    int transitionMs = 0;  // crossfade when the playing clip changes
+    int activeColumn = -1; // playback state: which clip is playing, -1 = none
+    QVector<Clip> clips;   // one slot per column
+
+    const Clip *activeClip() const;
 };
 
 struct Project {
     int compWidth = 1920;
     int compHeight = 1080;
     QColor background = Qt::black;
-    Content content;
     bool panelOverlay = false;
     double overlayOpacity = 0.6;
     QVector<LedWall> walls;
     QVector<Screen> screens;
 
+    int columns = 8;
+    QVector<Layer> layers;
+    double master = 1.0; // playback state
+    bool blackout = false; // playback state
+
     QSize compSize() const { return QSize(compWidth, compHeight); }
-    QRect contentTarget() const;
+    QRect targetRect(int wall) const;
+    // Pads every layer to `columns` slots.
+    void normalizeDeck();
 
     QJsonObject toJson() const;
     static Project fromJson(const QJsonObject &obj);

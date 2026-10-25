@@ -60,20 +60,22 @@ void RenderThread::setProject(const Project &project)
     m_projectDirty = true;
 }
 
-void RenderThread::setVideoFrame(const QVideoFrame &frame)
+void RenderThread::setClipFrame(const QString &clipId, const QVideoFrame &frame)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedFrame = frame;
-    m_sharedImage = QImage();
-    m_mediaDirty = true;
+    m_sharedMedia[clipId] = {frame, QImage(), false};
 }
 
-void RenderThread::setStillImage(const QImage &image)
+void RenderThread::setClipImage(const QString &clipId, const QImage &image)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedFrame = QVideoFrame();
-    m_sharedImage = image;
-    m_mediaDirty = true;
+    m_sharedMedia[clipId] = {QVideoFrame(), image, false};
+}
+
+void RenderThread::dropClipMedia(const QString &clipId)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedMedia[clipId] = {QVideoFrame(), QImage(), true};
 }
 
 void RenderThread::setPreview(int view, const PreviewRequest &request)
@@ -170,6 +172,7 @@ void RenderThread::run()
     int frames = 0;
     m_previewClock[0].start();
     m_previewClock[1].start();
+    m_clock.start();
 
     for (;;) {
         {
@@ -248,10 +251,14 @@ void RenderThread::run()
     releaseTarget(m_comp);
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
-    delete m_mediaTex;
-    delete m_patternTex;
+    for (ClipTex &ct : m_clipTex)
+        delete ct.tex;
+    m_clipTex.clear();
+    for (LayerState &ls : m_layers)
+        releaseTarget(ls.target);
+    m_layers.clear();
     delete m_overlayTex;
-    m_mediaTex = m_patternTex = m_overlayTex = nullptr;
+    m_overlayTex = nullptr;
     m_quad.release();
     delete m_rhi;
     m_rhi = nullptr;
@@ -264,12 +271,20 @@ void RenderThread::syncState()
         m_project = m_sharedProject;
         m_projectDirty = false;
     }
-    if (m_mediaDirty) {
-        m_videoFrame = m_sharedFrame;
-        m_stillImage = m_sharedImage;
-        m_newMedia = true;
-        m_mediaDirty = false;
+    for (auto it = m_sharedMedia.cbegin(); it != m_sharedMedia.cend(); ++it) {
+        ClipTex &ct = m_clipTex[it.key()];
+        if (it->remove) {
+            ct.hasMedia = false;
+            ct.newMedia = false;
+            ct.frame = QVideoFrame();
+            ct.image = QImage();
+        } else {
+            ct.frame = it->frame;
+            ct.image = it->image;
+            ct.newMedia = true;
+        }
     }
+    m_sharedMedia.clear();
     m_preview[0] = m_sharedPreview[0];
     m_preview[1] = m_sharedPreview[1];
 
@@ -389,16 +404,14 @@ void RenderThread::uploadImage(QRhiResourceUpdateBatch *u, QRhiTexture *&tex, co
     u->uploadTexture(tex, rgba);
 }
 
-QByteArray RenderThread::patternKey() const
+QByteArray RenderThread::patternKey(const Clip &c) const
 {
     const Project &p = m_project;
-    const Content &c = p.content;
     QJsonObject o{{"pattern", int(c.pattern)},
                   {"spacing", c.gridSpacing},
-                  {"solid", c.solidColor.name(QColor::HexArgb)}};
-    const QRect t = c.pattern == TestPattern::PanelMap ? QRect(QPoint(), p.compSize()) : p.contentTarget();
-    o["w"] = t.width();
-    o["h"] = t.height();
+                  {"solid", c.solidColor.name(QColor::HexArgb)},
+                  {"w", p.compWidth},
+                  {"h", p.compHeight}};
     if (c.pattern == TestPattern::PanelMap)
         o["walls"] = p.toJson()["walls"];
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
@@ -411,56 +424,120 @@ QByteArray RenderThread::overlayKey() const
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
 }
 
+void RenderThread::appendClipDraw(QVector<RhiQuad::Params> &draws, QRhiResourceUpdateBatch *u, const Clip &clip,
+                                  const QRect &target, const QSize &compSize, float opacity)
+{
+    ClipTex &ct = m_clipTex[clip.id];
+    ct.lastUsed = m_clock.elapsed();
+
+    RhiQuad::Params qp;
+    qp.target = compSize;
+    qp.opacity = opacity;
+    qp.clip = target;
+
+    if (clip.source == ContentSource::Media) {
+        if (ct.newMedia) {
+            ct.newMedia = false;
+            const QImage img = ct.frame.isValid() ? ct.frame.toImage() : ct.image;
+            ct.frame = QVideoFrame();
+            ct.image = QImage();
+            ct.hasMedia = !img.isNull();
+            if (ct.hasMedia) {
+                uploadImage(u, ct.tex, img);
+                ct.patternKey.clear();
+            }
+        }
+        if (!ct.hasMedia || !ct.tex)
+            return;
+        qp.texture = ct.tex;
+        qp.dst = scaledRect(ct.tex->pixelSize(), target, clip.scale);
+    } else {
+        // Patterns are drawn for the target area; the panel map always covers the whole composition.
+        const bool panelMap = clip.pattern == TestPattern::PanelMap;
+        const QSize size = panelMap ? m_project.compSize() : target.size();
+        QByteArray key = patternKey(clip);
+        key += QByteArray::number(size.width()) + 'x' + QByteArray::number(size.height());
+        if (key != ct.patternKey || !ct.tex) {
+            uploadImage(u, ct.tex, Patterns::generate(m_project, clip, size));
+            ct.patternKey = key;
+            ct.hasMedia = false;
+        }
+        if (!ct.tex)
+            return;
+        qp.texture = ct.tex;
+        qp.dst = panelMap ? QRectF(QPointF(), m_project.compSize()) : QRectF(target);
+        if (panelMap)
+            qp.clip = QRect();
+    }
+    draws.append(qp);
+}
+
 void RenderThread::renderComposition(QRhiCommandBuffer *cb)
 {
     const Project &p = m_project;
+    const qint64 now = m_clock.elapsed();
     const int maxSize = m_rhi->resourceLimit(QRhi::TextureSizeMax);
     const QSize compSize = p.compSize().boundedTo(QSize(maxSize, maxSize));
     if (!ensureTarget(m_comp, compSize, false))
         return;
 
-    QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
-    const Content &c = p.content;
-    const QRect target = p.contentTarget();
-    QVector<RhiQuad::Params> draws;
+    bool anySolo = false;
+    for (const Layer &l : p.layers)
+        anySolo = anySolo || (l.solo && !l.bypass);
 
-    if (m_newMedia) {
-        m_newMedia = false;
-        const QImage img = m_videoFrame.isValid() ? m_videoFrame.toImage() : m_stillImage;
-        m_hasMedia = !img.isNull();
-        if (m_hasMedia)
-            uploadImage(u, m_mediaTex, img);
-    }
-
-    RhiQuad::Params content;
-    content.target = compSize;
-    content.opacity = float(c.opacity);
-    if (c.source == ContentSource::Media) {
-        if (m_hasMedia && m_mediaTex) {
-            content.texture = m_mediaTex;
-            content.dst = scaledRect(m_mediaTex->pixelSize(), target, c.scale);
-            content.clip = target;
-            draws.append(content);
+    // Each layer renders its clip(s) into its own texture (premultiplied), then is blended into the
+    // composition with its opacity and blend mode, bottom layer first.
+    QVector<RhiQuad::Params> compDraws;
+    for (const Layer &layer : p.layers) {
+        LayerState &st = m_layers[layer.id];
+        st.lastUsed = now;
+        const Clip *active = layer.activeClip();
+        const QString activeId = active ? active->id : QString();
+        if (activeId != st.current.id) {
+            // Crossfade from the outgoing clip unless this layer cuts.
+            st.previous = layer.transitionMs > 0 ? st.current : Clip();
+            st.current = active ? *active : Clip();
+            st.since = now;
+            st.duration = layer.transitionMs;
+        } else if (active) {
+            st.current = *active; // pick up edits to the playing clip
         }
-    } else {
-        const QByteArray key = patternKey();
-        if (key != m_patternKey || !m_patternTex) {
-            const QSize size = c.pattern == TestPattern::PanelMap ? p.compSize() : target.size();
-            uploadImage(u, m_patternTex, Patterns::generate(p, size));
-            m_patternKey = key;
-        }
-        if (m_patternTex) {
-            content.texture = m_patternTex;
-            if (c.pattern == TestPattern::PanelMap) {
-                content.dst = QRectF(QPointF(), p.compSize());
-            } else {
-                content.dst = target;
-                content.clip = target;
+        float mix = 1.0f;
+        if (!st.previous.isEmpty()) {
+            mix = st.duration > 0 ? float(now - st.since) / float(st.duration) : 1.0f;
+            if (mix >= 1.0f) {
+                st.previous = Clip();
+                mix = 1.0f;
             }
-            draws.append(content);
         }
+
+        if (layer.bypass || (anySolo && !layer.solo) || layer.opacity <= 0.0)
+            continue;
+        if (st.current.isEmpty() && st.previous.isEmpty())
+            continue;
+        if (!ensureTarget(st.target, compSize, false))
+            continue;
+
+        QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
+        QVector<RhiQuad::Params> draws;
+        const QRect target = p.targetRect(layer.targetWall);
+        if (!st.previous.isEmpty())
+            appendClipDraw(draws, u, st.previous, target, compSize, 1.0f);
+        if (!st.current.isEmpty())
+            appendClipDraw(draws, u, st.current, target, compSize, mix);
+        m_quad.recordPass(cb, st.target.rt, Qt::transparent, draws, u);
+
+        RhiQuad::Params lp;
+        lp.target = compSize;
+        lp.dst = QRectF(QPointF(), compSize);
+        lp.texture = st.target.tex;
+        lp.texFlipY = m_rhi->isYUpInFramebuffer();
+        lp.opacity = float(layer.opacity);
+        lp.blend = RhiQuad::fromLayer(layer.blend);
+        compDraws.append(lp);
     }
 
+    QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
     if (p.panelOverlay && !p.walls.isEmpty()) {
         const QByteArray key = overlayKey();
         if (key != m_overlayKey || !m_overlayTex) {
@@ -473,11 +550,56 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
             ov.dst = QRectF(QPointF(), compSize);
             ov.texture = m_overlayTex;
             ov.opacity = float(p.overlayOpacity);
-            draws.append(ov);
+            compDraws.append(ov);
         }
     }
 
-    m_quad.recordPass(cb, m_comp.rt, p.background, draws, u);
+    // Master fader and blackout dim everything, including the background.
+    const double master = p.blackout ? 0.0 : p.master;
+    if (master < 1.0) {
+        RhiQuad::Params dim;
+        dim.target = compSize;
+        dim.dst = QRectF(QPointF(), compSize);
+        dim.color = Qt::black;
+        dim.opacity = float(1.0 - master);
+        compDraws.append(dim);
+    }
+
+    m_quad.recordPass(cb, m_comp.rt, p.background, compDraws, u);
+
+    if (now - m_lastGc > 1000)
+        collectGarbage(now);
+}
+
+void RenderThread::collectGarbage(qint64 now)
+{
+    // Free textures of clips and layers that have not been drawn for a while.
+    constexpr qint64 kIdleMs = 5000;
+    m_lastGc = now;
+    for (auto it = m_clipTex.begin(); it != m_clipTex.end();) {
+        if (now - it->lastUsed > kIdleMs && !it->newMedia) {
+            if (it->tex) {
+                m_quad.forgetTexture(it->tex);
+                it->tex->deleteLater();
+            }
+            it = m_clipTex.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = m_layers.begin(); it != m_layers.end();) {
+        if (now - it->lastUsed > kIdleMs) {
+            if (it->target.tex) {
+                m_quad.forgetTexture(it->target.tex);
+                it->target.rt->deleteLater();
+                it->target.rp->deleteLater();
+                it->target.tex->deleteLater();
+            }
+            it = m_layers.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const QSizeF &target,

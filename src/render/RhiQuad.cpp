@@ -84,20 +84,54 @@ QRhiShaderResourceBindings *RhiQuad::srbFor(QRhiTexture *tex)
     return srb;
 }
 
-QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp)
+QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp, Blend mode)
 {
-    const QVector<quint32> format = rp->serializedFormat();
+    const PipelineKey key{rp->serializedFormat(), mode};
     for (const auto &p : std::as_const(m_pipelines))
-        if (p.first == format)
+        if (p.first == key)
             return p.second;
 
+    using P = QRhiGraphicsPipeline;
     QRhiGraphicsPipeline *ps = m_rhi->newGraphicsPipeline();
-    QRhiGraphicsPipeline::TargetBlend blend;
+    P::TargetBlend blend;
     blend.enable = true;
-    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
-    blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
-    blend.srcAlpha = QRhiGraphicsPipeline::One;
-    blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    // Layer modes composite premultiplied colour onto the opaque composition and leave its alpha alone.
+    blend.srcAlpha = P::Zero;
+    blend.dstAlpha = P::One;
+    switch (mode) {
+    case Blend::Straight:
+        blend.srcColor = P::SrcAlpha;
+        blend.dstColor = P::OneMinusSrcAlpha;
+        blend.srcAlpha = P::One;
+        blend.dstAlpha = P::OneMinusSrcAlpha;
+        break;
+    case Blend::Normal:
+        blend.srcColor = P::One;
+        blend.dstColor = P::OneMinusSrcAlpha;
+        break;
+    case Blend::Add:
+        blend.srcColor = P::One;
+        blend.dstColor = P::One;
+        break;
+    case Blend::Screen: // src + dst * (1 - src)
+        blend.srcColor = P::One;
+        blend.dstColor = P::OneMinusSrcColor;
+        break;
+    case Blend::Multiply: // dst * (1 - a + a * src)
+        blend.srcColor = P::DstColor;
+        blend.dstColor = P::OneMinusSrcAlpha;
+        break;
+    case Blend::Lighten:
+        blend.srcColor = P::One;
+        blend.dstColor = P::One;
+        blend.opColor = P::Max;
+        break;
+    case Blend::Darken:
+        blend.srcColor = P::One;
+        blend.dstColor = P::One;
+        blend.opColor = P::Min;
+        break;
+    }
     ps->setTargetBlends({blend});
     ps->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     ps->setFlags(QRhiGraphicsPipeline::UsesScissor);
@@ -110,7 +144,7 @@ QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp)
         delete ps;
         return nullptr;
     }
-    m_pipelines.append({format, ps});
+    m_pipelines.append({key, ps});
     return ps;
 }
 
@@ -145,8 +179,9 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
                               p.color.redF(),      p.color.greenF(),    p.color.blueF(),         p.color.alphaF(),
                               float(p.target.width()), float(p.target.height()), p.opacity, p.brightness};
         std::memcpy(fp + 16, vecs, sizeof(vecs));
+        const qint32 inputMode = p.blend == Blend::Straight ? 0 : (p.blend == Blend::Darken ? 2 : 1);
         const qint32 ints[] = {p.rotation & 3, p.flipH ? 1 : 0, p.flipV ? 1 : 0, p.texFlipY ? 1 : 0,
-                               p.texture ? 1 : 0, 0, 0, 0};
+                               p.texture ? 1 : 0, inputMode, 0, 0};
         std::memcpy(data + 128, ints, sizeof(ints));
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
@@ -155,12 +190,18 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
 
     const QSize px = rt->pixelSize();
     cb->beginPass(rt, clear, {1.0f, 0}, u);
-    QRhiGraphicsPipeline *ps = pipelineFor(rt->renderPassDescriptor());
-    if (ps) {
-        cb->setGraphicsPipeline(ps);
-        cb->setViewport(QRhiViewport(0, 0, px.width(), px.height()));
+    {
+        QRhiGraphicsPipeline *bound = nullptr;
         for (int i = 0; i < offsets.size(); ++i) {
             const Params &p = draws[i];
+            QRhiGraphicsPipeline *ps = pipelineFor(rt->renderPassDescriptor(), p.blend);
+            if (!ps)
+                continue;
+            if (ps != bound) {
+                cb->setGraphicsPipeline(ps);
+                cb->setViewport(QRhiViewport(0, 0, px.width(), px.height()));
+                bound = ps;
+            }
             QRhiShaderResourceBindings *srb = srbFor(p.texture ? p.texture : m_white);
             if (!srb)
                 continue;

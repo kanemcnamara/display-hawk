@@ -89,27 +89,110 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
                      [&previews](int view, const QImage &img) { previews[view] = img; });
     QObject::connect(&engine, &RenderEngine::statsUpdated, &app, [&fps](int f) { fps = f; });
     // A local loop: QCoreApplication::quit() would try to close the windows (and prompt to save).
-    QEventLoop loop;
-    QTimer::singleShot(3500, &loop, &QEventLoop::quit);
-    loop.exec();
-
-    const char *names[] = {"input", "output"};
-    for (int v = 0; v < 2; ++v) {
-        const QImage &img = previews[v];
+    auto waitMs = [](int ms) {
+        QEventLoop loop;
+        QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+        loop.exec();
+    };
+    auto litPercent = [](const QImage &img) {
         int lit = 0, samples = 0;
         for (int y = 0; y < img.height(); y += 4)
             for (int x = 0; x < img.width(); x += 4, ++samples)
                 if (qGray(img.pixel(x, y)) > 16)
                     ++lit;
-        const QString path = QStringLiteral("%1/preview-%2.png").arg(outDir, QLatin1String(names[v]));
+        return samples ? lit * 100 / samples : 0;
+    };
+    auto save = [&outDir](const QImage &img, const char *name) {
+        const QString path = QStringLiteral("%1/%2.png").arg(outDir, QLatin1String(name));
         if (!img.isNull())
             img.save(path);
-        qInfo("selftest: %s preview %dx%d, %d%% lit -> %s", names[v], img.width(), img.height(),
-              samples ? lit * 100 / samples : 0, qPrintable(path));
-        check(!img.isNull() && lit * 20 > samples, names[v]);
+        return path;
+    };
+    waitMs(3500);
+
+    const char *names[] = {"preview-input", "preview-output"};
+    for (int v = 0; v < 2; ++v) {
+        const QImage &img = previews[v];
+        const int lit = litPercent(img);
+        const QString path = save(img, names[v]);
+        qInfo("selftest: %s %dx%d, %d%% lit -> %s", names[v], img.width(), img.height(), lit, qPrintable(path));
+        check(!img.isNull() && lit > 5, names[v]);
     }
     qInfo("selftest: %d fps while live on %s", fps, qPrintable(engine.backendName()));
     check(fps > 0, "render loop is running");
+
+    // Clip deck: playback is not part of undo, blackout is black, triggering changes the picture.
+    const QImage panelMap = previews[0];
+    doc.triggerColumn(2); // colour bars
+    check(doc.project().layers[0].activeColumn == 2, "column trigger starts the clip");
+    doc.project().compHeight += 8;
+    doc.notifyChanged();
+    doc.commitUndo();
+    doc.undo();
+    check(doc.project().layers[0].activeColumn == 2, "undo leaves playback alone");
+    waitMs(400);
+    const QImage bars = previews[0];
+    save(bars, "deck-colour-bars");
+    check(!bars.isNull() && bars != panelMap && litPercent(bars) > 50, "triggered clip reaches the composition");
+
+    // Blend modes: a red solid on the top layer over the colour bars. Bars are white, yellow, cyan,
+    // green, magenta, red, blue, black across the top three quarters.
+    Clip red = Clip::fromPattern(TestPattern::Solid);
+    red.solidColor = Qt::red;
+    doc.setClip(1, 2, red);
+    doc.project().layers[1].blend = BlendMode::Multiply;
+    doc.notifyChanged();
+    doc.triggerColumn(2);
+    auto barColor = [&previews](int bar) {
+        const QImage &img = previews[0];
+        return img.isNull() ? QColor() : QColor(img.pixel(img.width() * (2 * bar + 1) / 16, img.height() / 3));
+    };
+    auto near = [](const QColor &c, int r, int g, int b) {
+        return qAbs(c.red() - r) < 40 && qAbs(c.green() - g) < 40 && qAbs(c.blue() - b) < 40;
+    };
+    waitMs(400);
+    save(previews[0], "deck-multiply");
+    check(near(barColor(0), 255, 0, 0) && near(barColor(3), 0, 0, 0), "multiply blend (white->red, green->black)");
+    doc.project().layers[1].blend = BlendMode::Add;
+    doc.notifyChanged();
+    waitMs(400);
+    save(previews[0], "deck-add");
+    check(near(barColor(3), 255, 255, 0) && near(barColor(6), 255, 0, 255), "add blend (green->yellow, blue->magenta)");
+    doc.clearLayer(1);
+
+    // Optional: DISPLAYHAWK_TEST_VIDEO=<file> checks that a video clip decodes and keeps moving.
+    const QString video = qEnvironmentVariable("DISPLAYHAWK_TEST_VIDEO");
+    if (!video.isEmpty()) {
+        doc.setClip(0, 3, Clip::fromMedia(video));
+        doc.triggerClip(0, 3);
+        // Decoder start-up varies (FFmpeg loads on first use); allow up to 3 s for frames to arrive.
+        for (int i = 0; i < 30 && litPercent(previews[0]) <= 20; ++i)
+            waitMs(100);
+        const QImage first = previews[0];
+        waitMs(500);
+        const QImage second = previews[0];
+        save(first, "deck-video-a");
+        save(second, "deck-video-b");
+        check(litPercent(first) > 20, "video clip shows frames");
+        check(!first.isNull() && first != second, "video clip is playing");
+    }
+
+    doc.setBlackout(true);
+    waitMs(400);
+    save(previews[0], "deck-blackout");
+    check(litPercent(previews[0]) < 2, "blackout sends black");
+    doc.setBlackout(false);
+
+    // A crossfade must render without errors and end on the new clip.
+    doc.project().layers[0].transitionMs = 300;
+    doc.notifyChanged();
+    doc.triggerColumn(0);
+    waitMs(800);
+    save(previews[0], "deck-after-crossfade");
+    check(litPercent(previews[0]) > 50, "crossfade finishes on the new clip");
+
+    // The app's own window (not the desktop), for checking the UI layout.
+    window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));
     window.setLive(false);
     return ok ? 0 : 1;
 }

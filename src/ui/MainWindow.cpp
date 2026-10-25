@@ -3,6 +3,7 @@
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/CanvasView.h"
+#include "ui/ClipDeck.h"
 #include "ui/IdentifyOverlay.h"
 #include "ui/OutputWindow.h"
 #include "ui/PropertyPanel.h"
@@ -113,13 +114,19 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
 
     buildTree();
 
-    m_props = new PropertyPanel(doc, engine->media());
+    m_props = new PropertyPanel(doc, engine);
     auto *propDock = new QDockWidget(tr("Properties"));
     propDock->setObjectName(QStringLiteral("properties"));
     propDock->setWidget(m_props);
     propDock->setMinimumWidth(360);
     addDockWidget(Qt::RightDockWidgetArea, propDock);
     connect(m_props, &PropertyPanel::identifyRequested, this, &MainWindow::identifyDisplays);
+
+    auto *deckDock = new QDockWidget(tr("Clip Deck"));
+    deckDock->setObjectName(QStringLiteral("deck"));
+    deckDock->setWidget(new ClipDeck(doc));
+    addDockWidget(Qt::BottomDockWidgetArea, deckDock);
+    resizeDocks({deckDock}, {280}, Qt::Vertical);
 
     m_cursorLabel = new QLabel;
     m_fpsLabel = new QLabel;
