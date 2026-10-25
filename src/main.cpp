@@ -15,6 +15,12 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <QJsonDocument>
+#include <QNetworkReply>
+#include <QNetworkAccessManager>
+#include "control/WebRemote.h"
+#include "control/Timecode.h"
+#include "control/CueList.h"
 #include <QLineEdit>
 #include <QKeyEvent>
 #include "model/Library.h"
@@ -1913,6 +1919,136 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
                   && doc.project().layers[0].activeColumn == -1,
               "templates open as new setups with nothing playing");
         QFile::remove(Library::templatePath(QStringLiteral("selftest template")));
+    }
+
+    // Show control: timecode (MTC and LTC), the cue list, the web remote.
+    {
+        Project &p = doc.project();
+        bool ok = false;
+        check(timecodeText(3723.5, 25) == QLatin1String("01:02:03:12")
+                  && qAbs(timecodeFromText(QStringLiteral("01:02:03:12"), 25, &ok) - 3723.48) < 0.001 && ok,
+              "timecode text round-trips");
+
+        // MTC: the eight quarter frames of 01:02:03:04 at 25 fps, through the MIDI input's signal.
+        TimecodeInput *tc = window.timecodeInput();
+        p.timecodeSource = TimecodeSource::Mtc;
+        doc.notifyChanged();
+        double got = -1;
+        const QMetaObject::Connection c = QObject::connect(tc, &TimecodeInput::timecode, &app, [&](double sec) { got = sec; });
+        const int values[8] = {4, 0, 3, 0, 2, 0, 1, (1 << 1)}; // rate code 1 = 25 fps
+        for (int piece = 0; piece < 8; ++piece)
+            emit window.controlRouter()->midi()->timecodeQuarterFrame(quint8(piece << 4 | values[piece]));
+        waitFor([&] { return got >= 0; }, 1000);
+        check(qAbs(got - (3723.0 + 6.0 / 25.0)) < 0.001 && tc->fps() == 25.0, "MIDI timecode decodes");
+
+        // LTC: two seconds of biphase-mark audio from 00:00:10:00 at 25 fps, 48 kHz.
+        QVector<float> audio;
+        float level = 0.5f;
+        for (int f = 0; f < 50; ++f) {
+            const int frame = f % 25, sec = 10 + f / 25;
+            int bits[80] = {};
+            auto put = [&](int first, int count, int value) {
+                for (int b = 0; b < count; ++b)
+                    bits[first + b] = (value >> b) & 1;
+            };
+            put(0, 4, frame % 10);
+            put(8, 2, frame / 10);
+            put(16, 4, sec % 10);
+            put(24, 3, sec / 10);
+            const int sync[16] = {0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1};
+            for (int b = 0; b < 16; ++b)
+                bits[64 + b] = sync[b];
+            for (int b = 0; b < 80; ++b) { // 24 samples a bit: a transition at its start, and mid-bit for a 1
+                level = -level;
+                for (int i = 0; i < 24; ++i) {
+                    if (i == 12 && bits[b])
+                        level = -level;
+                    audio << level;
+                }
+            }
+        }
+        level = -level; // the edge that closes the last bit (a live signal always has one)
+        for (int i = 0; i < 24; ++i)
+            audio << level;
+        p.timecodeSource = TimecodeSource::Ltc;
+        doc.notifyChanged();
+        got = -1;
+        tc->feedLtc(audio.constData(), int(audio.size()), 48000);
+        QObject::disconnect(c);
+        check(qAbs(got - 12.0) < 0.001 && tc->fps() == 25.0,
+              qPrintable(QStringLiteral("LTC decodes from audio (%1)").arg(timecodeText(got, 25))));
+        p.timecodeSource = TimecodeSource::Off;
+        doc.notifyChanged();
+
+        // The cue list: GO and back, timecode chase, and a locate that does not fire anything.
+        CueList *cues = window.cueList();
+        const int col = p.columns;
+        doc.addColumn();
+        doc.addColumn();
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        doc.setClip(0, col + 1, Clip::fromPattern(TestPattern::Grid));
+        doc.clearLayer(0);
+        doc.setMaster(1.0);
+        Cue first, second, third;
+        first.action = CueAction::TriggerClip;
+        first.layer = 0;
+        first.column = col;
+        first.time = 10.0;
+        second.action = CueAction::Master;
+        second.value = 0.5;
+        second.time = 10.5;
+        third.action = CueAction::TriggerClip;
+        third.layer = 0;
+        third.column = col + 1;
+        p.cues = {first, second, third};
+        doc.notifyChanged(true);
+        cues->setCurrent(-1);
+        cues->go();
+        const bool go1 = p.layers[0].activeColumn == col && cues->current() == 0;
+        cues->go();
+        cues->go();
+        const bool go3 = p.layers[0].activeColumn == col + 1 && qAbs(p.master - 0.5) < 0.001 && cues->current() == 2;
+        cues->back();
+        check(go1 && go3 && cues->current() == 1, "cue list GO and back");
+        doc.clearLayer(0);
+        doc.setMaster(1.0);
+        cues->onTimecode(9.9);  // starts: find the place
+        cues->onTimecode(10.2); // runs past cue 1
+        const bool chased = p.layers[0].activeColumn == col && p.master > 0.99;
+        cues->onTimecode(10.6); // and cue 2
+        const bool chased2 = qAbs(p.master - 0.5) < 0.001;
+        doc.setMaster(1.0);
+        doc.clearLayer(0);
+        cues->onTimecode(500.0); // a locate: no firing, but the position follows
+        check(chased && chased2 && p.layers[0].activeColumn == -1 && p.master > 0.99 && cues->current() == 1,
+              "cues fire as timecode passes them; a locate does not fire");
+
+        // The web remote: state, a REST action, and the page.
+        WebRemote *web = window.webRemote();
+        const bool listening = web->setEnabled(true, 0, true);
+        QNetworkAccessManager net;
+        auto request = [&](const QByteArray &method, const QString &path) {
+            QNetworkRequest req(QUrl(QStringLiteral("http://127.0.0.1:%1%2").arg(web->port()).arg(path)));
+            QNetworkReply *reply = method == "POST" ? net.post(req, QByteArray()) : net.get(req);
+            waitFor([&] { return reply->isFinished(); }, 3000);
+            const QByteArray body = reply->readAll();
+            reply->deleteLater();
+            return body;
+        };
+        const QJsonObject state = QJsonDocument::fromJson(request("GET", QStringLiteral("/api/state"))).object();
+        request("POST", QStringLiteral("/api/master?value=0.25"));
+        const bool rest = qAbs(p.master - 0.25) < 0.001;
+        request("POST", QStringLiteral("/api/layer/1/clip/%1/trigger").arg(col + 1));
+        const bool triggered = p.layers[0].activeColumn == col;
+        const QByteArray page = request("GET", QStringLiteral("/"));
+        check(listening && state["layers"].toArray().size() == p.layers.size() && state["cues"].toArray().size() == 3
+                  && rest && triggered && page.contains("Display Hawk remote"),
+              "web remote: state, REST actions and the page");
+        web->setEnabled(false, 0);
+        doc.setMaster(1.0);
+        p.cues.clear();
+        doc.notifyChanged(true);
+        doc.clearLayer(0);
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

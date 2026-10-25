@@ -297,6 +297,25 @@ struct Layer {
     const Clip *activeClip() const;
 };
 
+// A cue: something the show does at once, fired by GO, by its number, or when incoming
+// timecode reaches its time.
+enum class CueAction { TriggerColumn = 0, TriggerClip, ClearLayer, ClearAll, Master, Blackout, Crossfader, Bpm };
+constexpr int kCueActionCount = int(CueAction::Bpm) + 1;
+QString cueActionName(CueAction a);
+struct Cue {
+    QString name;
+    CueAction action = CueAction::TriggerColumn;
+    int layer = 0;
+    int column = 0;
+    double value = 1.0;    // Master / Crossfader 0..1, Blackout 0/1, Bpm
+    double time = -1.0;    // timecode position in seconds; < 0 = fired by GO only
+    QString description() const;
+};
+// Where timecode comes from: MIDI timecode (any MIDI input) or LTC on an audio input.
+enum class TimecodeSource { Off = 0, Mtc, Ltc };
+QString timecodeText(double seconds, double fps); // HH:MM:SS:FF
+double timecodeFromText(const QString &text, double fps, bool *ok = nullptr);
+
 // Layers mixed together first, then into the composition as one, with the group's own opacity,
 // blend mode and effects. A group's layers are the ones naming it (adjacent ones mix together).
 struct LayerGroup {
@@ -334,8 +353,10 @@ enum class ControlAction {
     TapTempo,       // trigger
     TempoResync,    // trigger: now is the first beat of a bar
     Crossfader,     // continuous: 0 = A, 1 = B
+    CueGo,          // trigger: the next cue
+    CueBack,        // trigger: back one cue (fires it again)
 };
-constexpr int kControlActionCount = int(ControlAction::Crossfader) + 1;
+constexpr int kControlActionCount = int(ControlAction::CueBack) + 1;
 QString controlActionName(ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
@@ -442,6 +463,9 @@ struct Project {
     double crossfader = 0.5; // playback state: 0 = A only, 0.5 = both, 1 = B only
     QVector<LayerGroup> groups;
     QVector<Deck> decks; // empty = one deck with every column
+    QVector<Cue> cues;
+    TimecodeSource timecodeSource = TimecodeSource::Off;
+    double timecodeFps = 25.0; // for showing and typing cue times (incoming timecode reports its own)
     const LayerGroup *groupById(const QString &id) const;
     // Multiplier for a layer's opacity from the crossfader (both sides full in the middle).
     double crossfadeGain(CrossfadeSide side) const;

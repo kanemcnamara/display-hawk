@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Display Hawk remote</title>
+<style>
+  :root { --bg: #18181b; --panel: #232328; --cell: #2c2c33; --text: #e6e6ea; --dim: #8a8a95; --live: #3ccf6a; --accent: #20a4f3; --warn: #e53935; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 12px; background: var(--panel); position: sticky; top: 0; z-index: 1; }
+  header h1 { font-size: 16px; margin: 0 8px 0 0; }
+  button { background: var(--cell); color: var(--text); border: 1px solid #3a3a44; border-radius: 6px; padding: 10px 14px; font: inherit; cursor: pointer; touch-action: manipulation; }
+  button:active { filter: brightness(1.4); }
+  .on { background: var(--warn); border-color: var(--warn); color: #fff; font-weight: 600; }
+  .go { background: #2e7d32; border-color: #2e7d32; font-weight: 700; }
+  label { display: flex; align-items: center; gap: 6px; color: var(--dim); }
+  input[type=range] { width: 140px; }
+  main { padding: 12px; overflow-x: auto; }
+  table { border-collapse: separate; border-spacing: 6px; }
+  th { color: var(--dim); font-weight: 500; text-align: left; white-space: nowrap; padding-right: 6px; }
+  td button { width: 120px; height: 56px; padding: 4px; font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+  td button.live { border: 2px solid var(--live); color: var(--live); font-weight: 600; }
+  td button.empty { opacity: 0.25; }
+  .cols button { height: 34px; }
+  #cues { margin-top: 16px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  #cue { color: var(--dim); }
+  #status { color: var(--dim); font-size: 12px; margin-left: auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Display Hawk</h1>
+  <label>Master <input id="master" type="range" min="0" max="1" step="0.01"></label>
+  <button id="blackout">Blackout</button>
+  <label>A <input id="xfade" type="range" min="0" max="1" step="0.01"> B</label>
+  <button id="tap">Tap <span id="bpm"></span></button>
+  <span id="status">connecting...</span>
+</header>
+<main>
+  <table id="grid"></table>
+  <div id="cues">
+    <button id="back">Back</button>
+    <button id="go" class="go">GO</button>
+    <span id="cue"></span>
+  </div>
+</main>
+<script>
+const post = (path, value) =>
+  fetch('/api/' + path + (value === undefined ? '' : '?value=' + value), { method: 'POST' }).then(r => r.json()).then(render).catch(() => {});
+let dragging = false;
+document.querySelectorAll('input[type=range]').forEach(i => {
+  i.addEventListener('pointerdown', () => dragging = true);
+  i.addEventListener('pointerup', () => dragging = false);
+});
+document.getElementById('master').oninput = e => post('master', e.target.value);
+document.getElementById('xfade').oninput = e => post('crossfader', e.target.value);
+document.getElementById('blackout').onclick = () => post('blackout');
+document.getElementById('tap').onclick = () => post('tempo/tap', 1);
+document.getElementById('go').onclick = () => post('cue/go', 1);
+document.getElementById('back').onclick = () => post('cue/back', 1);
+
+let shape = '';
+function render(s) {
+  document.getElementById('status').textContent = 'connected';
+  if (!dragging) {
+    document.getElementById('master').value = s.master;
+    document.getElementById('xfade').value = s.crossfader;
+  }
+  document.getElementById('blackout').className = s.blackout ? 'on' : '';
+  document.getElementById('bpm').textContent = s.bpm.toFixed(1);
+  const grid = document.getElementById('grid');
+  const key = s.columns + '|' + s.layers.map(l => l.name + ':' + l.clips.join(',')).join(';');
+  if (key !== shape) { // rebuild only when layers or clips change
+    shape = key;
+    grid.innerHTML = '';
+    const head = grid.insertRow();
+    head.className = 'cols';
+    head.insertCell().textContent = '';
+    for (let c = 1; c <= s.columns; ++c) {
+      const b = document.createElement('button');
+      b.textContent = 'Column ' + c;
+      b.onclick = () => post('column/' + c + '/trigger', 1);
+      head.insertCell().appendChild(b);
+    }
+    s.layers.forEach(l => {
+      const row = grid.insertRow();
+      const th = document.createElement('th');
+      th.textContent = l.name;
+      row.appendChild(th);
+      l.clips.forEach((name, i) => {
+        const b = document.createElement('button');
+        b.textContent = name || '';
+        b.dataset.layer = l.index;
+        b.dataset.column = i + 1;
+        if (!name) b.className = 'empty';
+        else b.onclick = () => post('layer/' + l.index + '/clip/' + (i + 1) + '/trigger', 1);
+        row.insertCell().appendChild(b);
+      });
+    });
+  }
+  s.layers.forEach(l => grid.querySelectorAll('button[data-layer="' + l.index + '"]').forEach(b => {
+    if (b.className !== 'empty') b.className = (+b.dataset.column === l.active) ? 'live' : '';
+  }));
+  const cue = s.cues[s.currentCue - 1];
+  const next = s.cues[s.currentCue];
+  document.getElementById('cue').textContent = s.cues.length
+    ? (cue ? 'Last: ' + s.currentCue + ' ' + cue.name : 'Ready') + (next ? '  |  Next: ' + (s.currentCue + 1) + ' ' + next.name : '  |  end of list')
+    : 'No cues';
+}
+function poll() {
+  fetch('/api/state').then(r => r.json()).then(render)
+    .catch(() => document.getElementById('status').textContent = 'disconnected')
+    .finally(() => setTimeout(poll, 500));
+}
+poll();
+</script>
+</body>
+</html>

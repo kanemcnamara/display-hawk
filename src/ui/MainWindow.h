@@ -8,6 +8,10 @@ class AudioReactive;
 class LfoDialog;
 class ClipPreviewPanel;
 class OutputRecorder;
+class CueList;
+class TimecodeInput;
+class WebRemote;
+class QDialog;
 class ModulationHub;
 class TempoClock;
 class AudioReactiveDialog;
@@ -39,6 +43,10 @@ public:
     ModulationHub *modulationHub() const { return m_modulation; }
     ClipPreviewPanel *clipPreview() const { return m_clipPreview; }
     OutputRecorder *recorder() const { return m_recorder; }
+    CueList *cueList() const { return m_cueList; }
+    TimecodeInput *timecodeInput() const { return m_timecode; }
+    WebRemote *webRemote() const { return m_webRemote; }
+    void showCueList();
     void showControls();
     void showAudioReactive();
     void showLfos();
@@ -81,6 +89,10 @@ private:
     TempoClock *m_tempo;
     ClipPreviewPanel *m_clipPreview;
     OutputRecorder *m_recorder;
+    TimecodeInput *m_timecode;
+    CueList *m_cueList;
+    WebRemote *m_webRemote;
+    QDialog *m_cueDialog = nullptr;
     QAction *m_recordAction;
     ModulationHub *m_modulation;
     AudioReactiveDialog *m_audioReactiveDialog = nullptr;

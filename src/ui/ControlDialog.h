@@ -3,6 +3,7 @@
 #include <QDialog>
 
 class ControlRouter;
+class WebRemote;
 class Document;
 class QCheckBox;
 class QComboBox;
@@ -18,7 +19,7 @@ class ControlDialog : public QDialog
 {
     Q_OBJECT
 public:
-    ControlDialog(Document *doc, ControlRouter *router, QWidget *parent = nullptr);
+    ControlDialog(Document *doc, ControlRouter *router, WebRemote *web, QWidget *parent = nullptr);
 
     // Adds a mapping for `action` (layer/column 0-based) and starts learning it.
     void learnNew(int action, int layer, int column, int param = 0);

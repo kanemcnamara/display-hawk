@@ -95,6 +95,12 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - **Projection masks** per screen: polygons that black out light (or with *Invert*, everything outside them), with a soft *feather*. *Edit* a mask to drag its points on the output map; double-click an edge to add a point, Alt+click a point to remove it, drag inside it to move it.
 - **Output → Identify Slices on Outputs** also draws an 8 x 8 alignment grid through every warped slice on the projectors, for lining warps up on the surface.
 
+## Show control
+
+- **Control → Cue list…** (Ctrl/Cmd+K): cues that trigger a column or clip, stop a layer or everything, or set the master, blackout, crossfader or tempo. **GO** fires the next cue, *Back* the previous one, *Fire* any one; OSC `/dh/cue/go`, `/dh/cue/back`, `/dh/cue/<n>/fire`, and *Cue GO* / *Cue back* can be mapped to keys or MIDI.
+- **Timecode**: a cue with a time (HH:MM:SS:FF) fires when incoming timecode passes it: **MIDI timecode** (MTC quarter frames on any MIDI input) or **LTC** decoded from an audio input. A jump in timecode (a locate or rewind) moves the cue position without firing everything in between. The status bar shows the incoming time.
+- **Web remote** (Control → OSC, MIDI & DMX → OSC tab): an HTTP server for phones, tablets and show-control systems. `/` is a touch-friendly remote (clip grid, columns, master, blackout, crossfader, tap, cue GO/back); `GET /api/state` returns the show as JSON; `POST /api/<OSC path without /dh>` runs any OSC action (`/api/column/2/trigger`, `/api/master?value=0.5`, `/api/cue/go`…). Off by default.
+
 ## Workflow
 
 - **Preview** monitor (dock next to the clip deck): the clip selected in the deck, with its transform and effects, as it would look in its layer's area, without sending it to the outputs. Movies run muted while previewed.

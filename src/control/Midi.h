@@ -38,6 +38,8 @@ signals:
     // System real-time bytes (0xF8 clock, 0xFA start, 0xFB continue, 0xFC stop) with the time they
     // arrived, in nanoseconds on the steady clock (taken on the driver thread, before queueing).
     void realtime(quint8 byte, qint64 ns);
+    // MIDI timecode quarter frame (0xF1 and its data byte).
+    void timecodeQuarterFrame(quint8 data);
 
 public:
     static qint64 nowNs(); // the steady clock the timestamps above use

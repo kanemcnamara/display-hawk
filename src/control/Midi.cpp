@@ -39,8 +39,23 @@ void dispatch(MidiInput *owner, const QString &device, const quint8 *bytes, int 
             ++i;
             continue;
         }
-        if (b >= 0xF0) { // other system messages: not used
-            ++i;
+        if (b >= 0xF0) {
+            // System common messages cancel running status. MTC quarter frames (F1) are passed on;
+            // song position (F2) and song select (F3) carry data bytes that must be skipped too.
+            running = 0;
+            if (b == 0xF1 && i + 1 < length) {
+                const quint8 d = bytes[i + 1];
+                QMetaObject::invokeMethod(owner, [owner, d] { emit owner->timecodeQuarterFrame(d); }, Qt::QueuedConnection);
+                i += 2;
+            } else if (b == 0xF2) {
+                i += 3;
+            } else if (b == 0xF3) {
+                i += 2;
+            } else {
+                ++i; // sysex bytes and the rest: not used
+                while (i < length && bytes[i] < 0x80)
+                    ++i;
+            }
             continue;
         }
         if (b & 0x80) {

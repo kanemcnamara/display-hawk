@@ -148,6 +148,12 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         apply(ControlAction::AudioMaster, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("mute"))
         apply(ControlAction::AudioMute, 0, 0, value, toggleMode);
+    else if (p[1] == QLatin1String("cue") && p.value(2) == QLatin1String("go") && value != 0.0)
+        apply(ControlAction::CueGo, 0, 0, 1.0, Mode::Press);
+    else if (p[1] == QLatin1String("cue") && p.value(2) == QLatin1String("back") && value != 0.0)
+        apply(ControlAction::CueBack, 0, 0, 1.0, Mode::Press);
+    else if (p[1] == QLatin1String("cue") && p.value(3) == QLatin1String("fire") && value != 0.0)
+        emit cueFireRequested(index(2));
     else if (p[1] == QLatin1String("crossfader") && hasArg)
         apply(ControlAction::Crossfader, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("tap") && value != 0.0)
@@ -353,6 +359,12 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
         break;
     case ControlAction::Crossfader:
         m_doc->setCrossfader(value);
+        break;
+    case ControlAction::CueGo:
+        emit cueGoRequested();
+        break;
+    case ControlAction::CueBack:
+        emit cueBackRequested();
         break;
     case ControlAction::TempoResync:
         emit tempoResyncRequested();

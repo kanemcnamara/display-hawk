@@ -59,6 +59,12 @@ qt_add_executable(DisplayHawk
     src/control/ControlRouter.h
     src/control/AutopilotController.h
     src/control/TempoClock.h
+    src/control/Timecode.h
+    src/control/Timecode.cpp
+    src/control/CueList.h
+    src/control/CueList.cpp
+    src/control/WebRemote.h
+    src/control/WebRemote.cpp
     src/control/TempoClock.cpp
     src/control/ModulationHub.h
     src/control/ModulationHub.cpp
@@ -91,6 +97,8 @@ qt_add_executable(DisplayHawk
     src/ui/ClipPreviewPanel.h
     src/ui/ClipPreviewPanel.cpp
     src/ui/MediaBrowser.h
+    src/ui/CueListDialog.h
+    src/ui/CueListDialog.cpp
     src/ui/MediaBrowser.cpp
     src/ui/MaskEditor.h
     src/ui/MaskEditor.cpp
@@ -129,6 +137,11 @@ qt_add_resources(DisplayHawk "isf"
         "assets/isf/Colour Pulse.fs"
         "assets/isf/Spiral Rays.fs"
         "assets/isf/Metaballs.fs"
+)
+qt_add_resources(DisplayHawk "web"
+    PREFIX "/web"
+    BASE "assets/web"
+    FILES assets/web/index.html
 )
 qt_add_resources(DisplayHawk "icons"
     PREFIX "/"

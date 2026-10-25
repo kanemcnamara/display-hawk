@@ -2,6 +2,7 @@
 
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
+#include "control/WebRemote.h"
 #include "control/Sacn.h"
 #include "model/Document.h"
 
@@ -17,6 +18,7 @@
 #include <QNetworkInterface>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTableWidget>
@@ -25,7 +27,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *parent)
+ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *web, QWidget *parent)
     : QDialog(parent)
     , m_doc(doc)
     , m_router(router)
@@ -154,6 +156,53 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     auto *oscPage = new QWidget;
     auto *ol = new QVBoxLayout(oscPage);
     ol->addWidget(osc);
+
+    // Web remote: HTTP on the network, for phones, tablets and show-control systems.
+    auto *webBox = new QGroupBox(tr("Web remote (HTTP)"));
+    auto *wl = new QVBoxLayout(webBox);
+    auto *webEnabled = new QCheckBox(tr("Serve a web remote and REST API on port"));
+    auto *webPort = new QSpinBox;
+    webPort->setRange(1024, 65535);
+    QSettings settings;
+    webPort->setValue(settings.value(QStringLiteral("web/port"), 8080).toInt());
+    webEnabled->setChecked(web->isEnabled());
+    auto *webRow = new QHBoxLayout;
+    webRow->addWidget(webEnabled);
+    webRow->addWidget(webPort);
+    webRow->addStretch();
+    auto *webInfo = new QLabel;
+    webInfo->setWordWrap(true);
+    webInfo->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    wl->addLayout(webRow);
+    wl->addWidget(webInfo);
+    auto showWeb = [web, webInfo] {
+        webInfo->setText(web->isEnabled()
+                             ? tr("Open on a phone or tablet on the same network: %1\nREST: POST /api/<OSC path without /dh>, "
+                                  "e.g. /api/column/2/trigger or /api/master?value=0.5; GET /api/state.")
+                                   .arg(web->urls().join(QStringLiteral("  ")))
+                             : tr("Off. When on, anyone on the network can control the show: use it on show networks only."));
+    };
+    auto applyWeb = [web, webEnabled, webPort, webInfo, showWeb] {
+        QString error;
+        const bool ok = web->setEnabled(webEnabled->isChecked(), webPort->value(), false, &error);
+        QSettings s;
+        s.setValue(QStringLiteral("web/enabled"), webEnabled->isChecked() && ok);
+        s.setValue(QStringLiteral("web/port"), webPort->value());
+        if (!ok) {
+            const QSignalBlocker b(webEnabled);
+            webEnabled->setChecked(false);
+            webInfo->setText(tr("Cannot listen: %1").arg(error));
+            return;
+        }
+        showWeb();
+    };
+    connect(webEnabled, &QCheckBox::toggled, this, applyWeb);
+    connect(webPort, &QSpinBox::editingFinished, this, [webEnabled, applyWeb] {
+        if (webEnabled->isChecked())
+            applyWeb();
+    });
+    showWeb();
+    ol->addWidget(webBox);
     ol->addStretch();
     auto *midiPage = new QWidget;
     auto *ml = new QVBoxLayout(midiPage);

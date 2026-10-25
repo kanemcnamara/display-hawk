@@ -13,6 +13,10 @@
 #include "ui/LfoDialog.h"
 #include "ui/ClipPreviewPanel.h"
 #include "ui/MediaBrowser.h"
+#include "control/CueList.h"
+#include "control/Timecode.h"
+#include "control/WebRemote.h"
+#include "ui/CueListDialog.h"
 #include "model/Library.h"
 #include <QInputDialog>
 #include "media/OutputRecorder.h"
@@ -169,6 +173,15 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     connect(m_audioReactive, &AudioReactive::beatDetected, m_tempo, [this] { m_tempo->audioBeat(); });
     connect(m_router, &ControlRouter::tapTempoRequested, m_tempo, [this] { m_tempo->tap(); });
     connect(m_router, &ControlRouter::tempoResyncRequested, m_tempo, [this] { m_tempo->resync(); });
+    // Show control: timecode in, the cue list, and the web remote.
+    m_timecode = new TimecodeInput(m_router->midi(), this);
+    m_cueList = new CueList(doc, m_timecode, this);
+    connect(m_router, &ControlRouter::cueGoRequested, m_cueList, &CueList::go);
+    connect(m_router, &ControlRouter::cueBackRequested, m_cueList, &CueList::back);
+    connect(m_router, &ControlRouter::cueFireRequested, m_cueList, &CueList::fire);
+    m_webRemote = new WebRemote(doc, m_router, m_cueList, this);
+    if (QSettings().value(QStringLiteral("web/enabled"), false).toBool())
+        m_webRemote->setEnabled(true, QSettings().value(QStringLiteral("web/port"), 8080).toInt());
     new AutopilotController(doc, engine, this); // clip ends: autopilot and "play once and clear"
     connect(m_router, &ControlRouter::liveRequested, this, [this](int state) { setLive(state < 0 ? !m_live : state == 1); });
 
@@ -351,6 +364,23 @@ void MainWindow::buildActions()
             m_recordAction->setChecked(false);
         }
     });
+    // Incoming timecode, when a source is chosen.
+    auto *tcIndicator = new QLabel;
+    tcIndicator->setStyleSheet(QStringLiteral("font-family: Consolas, monospace;"));
+    statusBar()->addPermanentWidget(tcIndicator);
+    auto *tcTimer = new QTimer(this);
+    tcTimer->setInterval(100);
+    connect(tcTimer, &QTimer::timeout, this, [this, tcIndicator] {
+        if (m_doc->project().timecodeSource == TimecodeSource::Off) {
+            tcIndicator->clear();
+            return;
+        }
+        const double fps = m_timecode->running() ? m_timecode->fps() : m_doc->project().timecodeFps;
+        tcIndicator->setText(tr("TC %1").arg(timecodeText(m_timecode->seconds(), fps)));
+        tcIndicator->setStyleSheet(m_timecode->running() ? QStringLiteral("color: #60e070; font-family: Consolas, monospace;")
+                                                         : QStringLiteral("color: #888; font-family: Consolas, monospace;"));
+    });
+    tcTimer->start();
     auto *recIndicator = new QLabel;
     recIndicator->setStyleSheet(QStringLiteral("color: #ff4040; font-weight: bold;"));
     statusBar()->addPermanentWidget(recIndicator);
@@ -406,6 +436,7 @@ void MainWindow::buildActions()
     QMenu *control = menuBar()->addMenu(tr("&Control"));
     control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
     control->addAction(tr("LFOs..."), QKeySequence(tr("Ctrl+L")), this, &MainWindow::showLfos);
+    control->addAction(tr("Cue list..."), QKeySequence(tr("Ctrl+K")), this, &MainWindow::showCueList);
 
     QMenu *effects = menuBar()->addMenu(tr("&Effects"));
     effects->addAction(tr("Open ISF folder"), this, [] {
@@ -824,6 +855,14 @@ void MainWindow::showAudioReactive()
     m_audioReactiveDialog->raise();
 }
 
+void MainWindow::showCueList()
+{
+    if (!m_cueDialog)
+        m_cueDialog = new CueListDialog(m_doc, m_cueList, this);
+    m_cueDialog->show();
+    m_cueDialog->raise();
+}
+
 void MainWindow::showLfos()
 {
     if (!m_lfoDialog)
@@ -835,7 +874,7 @@ void MainWindow::showLfos()
 void MainWindow::showControls()
 {
     if (!m_controlDialog)
-        m_controlDialog = new ControlDialog(m_doc, m_router, this);
+        m_controlDialog = new ControlDialog(m_doc, m_router, m_webRemote, this);
     m_controlDialog->show();
     m_controlDialog->raise();
     m_controlDialog->activateWindow();

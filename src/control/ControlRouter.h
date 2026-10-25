@@ -69,6 +69,9 @@ signals:
     void liveRequested(int state);       // -1 toggle, 0 off, 1 on
     void oscStateChanged();
     void tapTempoRequested();
+    void cueGoRequested();
+    void cueBackRequested();
+    void cueFireRequested(int index);
     void tempoResyncRequested();
 
 private:

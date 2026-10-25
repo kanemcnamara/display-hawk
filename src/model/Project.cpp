@@ -3,6 +3,7 @@
 #include <QTransform>
 
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QJsonArray>
 #include <QUuid>
 
@@ -263,6 +264,69 @@ double Project::crossfadeGain(CrossfadeSide side) const
     return 1.0;
 }
 
+QString cueActionName(CueAction a)
+{
+    switch (a) {
+    case CueAction::TriggerColumn: return QStringLiteral("Trigger column");
+    case CueAction::TriggerClip: return QStringLiteral("Trigger clip");
+    case CueAction::ClearLayer: return QStringLiteral("Stop layer");
+    case CueAction::ClearAll: return QStringLiteral("Stop all layers");
+    case CueAction::Master: return QStringLiteral("Master to");
+    case CueAction::Blackout: return QStringLiteral("Blackout");
+    case CueAction::Crossfader: return QStringLiteral("Crossfader to");
+    case CueAction::Bpm: return QStringLiteral("Tempo to");
+    }
+    return {};
+}
+
+QString Cue::description() const
+{
+    switch (action) {
+    case CueAction::TriggerColumn: return QStringLiteral("Column %1").arg(column + 1);
+    case CueAction::TriggerClip: return QStringLiteral("Layer %1, clip %2").arg(layer + 1).arg(column + 1);
+    case CueAction::ClearLayer: return QStringLiteral("Stop layer %1").arg(layer + 1);
+    case CueAction::ClearAll: return QStringLiteral("Stop everything");
+    case CueAction::Master: return QStringLiteral("Master %1%").arg(qRound(value * 100));
+    case CueAction::Blackout: return value >= 0.5 ? QStringLiteral("Blackout on") : QStringLiteral("Blackout off");
+    case CueAction::Crossfader: return QStringLiteral("Crossfader %1%").arg(qRound(value * 100));
+    case CueAction::Bpm: return QStringLiteral("%1 BPM").arg(value, 0, 'f', 1);
+    }
+    return {};
+}
+
+QString timecodeText(double seconds, double fps)
+{
+    if (seconds < 0)
+        return QStringLiteral("--:--:--:--");
+    const double rate = qMax(1.0, fps);
+    const qint64 frames = qint64(seconds * rate + 1e-6); // the frame in progress, as timecode counts
+    const int perSecond = qRound(rate);
+    const qint64 total = frames / perSecond;
+    return QStringLiteral("%1:%2:%3:%4")
+        .arg(total / 3600, 2, 10, QLatin1Char('0'))
+        .arg((total / 60) % 60, 2, 10, QLatin1Char('0'))
+        .arg(total % 60, 2, 10, QLatin1Char('0'))
+        .arg(frames % perSecond, 2, 10, QLatin1Char('0'));
+}
+
+double timecodeFromText(const QString &text, double fps, bool *ok)
+{
+    const QStringList parts = text.trimmed().split(QRegularExpression(QStringLiteral("[:;.]")));
+    bool good = parts.size() >= 3 && parts.size() <= 4;
+    double seconds = 0;
+    if (good) {
+        const int n = int(parts.size());
+        int fields[4] = {0, 0, 0, 0};
+        for (int i = 0; i < n && good; ++i)
+            fields[i] = parts[i].toInt(&good);
+        // HH:MM:SS[:FF]
+        seconds = fields[0] * 3600.0 + fields[1] * 60.0 + fields[2] + (n == 4 ? fields[3] / qMax(1.0, fps) : 0.0);
+    }
+    if (ok)
+        *ok = good;
+    return good ? seconds : -1.0;
+}
+
 QString tempoSourceName(TempoSource s)
 {
     switch (s) {
@@ -348,6 +412,8 @@ QString controlActionName(ControlAction a)
     case ControlAction::TapTempo: return QStringLiteral("Tap tempo");
     case ControlAction::TempoResync: return QStringLiteral("Tempo resync (bar start)");
     case ControlAction::Crossfader: return QStringLiteral("Crossfader (A/B)");
+    case ControlAction::CueGo: return QStringLiteral("Cue GO");
+    case ControlAction::CueBack: return QStringLiteral("Cue back");
     }
     return {};
 }
@@ -855,6 +921,12 @@ QJsonObject Project::toJson() const
     for (const Deck &d : decks)
         deckArr.append(QJsonObject{{"name", d.name}, {"first", d.firstColumn}, {"count", d.columnCount}});
     root["decks"] = deckArr;
+    QJsonArray cueArr;
+    for (const Cue &c : cues)
+        cueArr.append(QJsonObject{{"name", c.name}, {"action", int(c.action)}, {"layer", c.layer}, {"column", c.column},
+                                  {"value", c.value}, {"time", c.time}});
+    root["cues"] = cueArr;
+    root["timecode"] = QJsonObject{{"source", int(timecodeSource)}, {"fps", timecodeFps}};
     QJsonArray linkArr;
     for (const AudioLink &l : audioReactive.links)
         linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer},
@@ -1057,6 +1129,20 @@ Project Project::fromJson(const QJsonObject &root)
         if (!g.id.isEmpty())
             p.groups.append(g);
     }
+    for (const QJsonValue &v : root["cues"].toArray()) {
+        const QJsonObject o = v.toObject();
+        Cue c;
+        c.name = o["name"].toString();
+        c.action = CueAction(qBound(0, o["action"].toInt(0), kCueActionCount - 1));
+        c.layer = qMax(0, o["layer"].toInt(0));
+        c.column = qMax(0, o["column"].toInt(0));
+        c.value = o["value"].toDouble(1.0);
+        c.time = o["time"].toDouble(-1.0);
+        p.cues.append(c);
+    }
+    const QJsonObject tc = root["timecode"].toObject();
+    p.timecodeSource = TimecodeSource(qBound(0, tc["source"].toInt(0), 2));
+    p.timecodeFps = qBound(1.0, tc["fps"].toDouble(25.0), 120.0);
     for (const QJsonValue &v : root["decks"].toArray()) {
         const QJsonObject o = v.toObject();
         Deck d;
