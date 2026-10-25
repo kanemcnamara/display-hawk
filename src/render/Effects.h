@@ -21,7 +21,7 @@ struct EffectDef {
     QString id;
     QString name;
     QString category;
-    int shaderMode = 0;
+    int shaderMode = 0; // -1: an ISF shader (the id is "isf:" + its path)
     int passes = 1;
     bool usesPanels = false; // reads the LED panel map (outline, chase...)
     QVector<EffectParamDef> params;

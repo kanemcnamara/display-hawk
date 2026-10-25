@@ -27,6 +27,10 @@ qt_add_executable(DisplayHawk
     src/render/GeneratorRenderer.h
     src/render/GeneratorRenderer.cpp
     src/render/TextRenderer.h
+    src/render/Isf.h
+    src/render/Isf.cpp
+    src/render/IsfRenderer.h
+    src/render/IsfRenderer.cpp
     src/render/TextRenderer.cpp
     src/render/BlendCompositor.cpp
     src/render/EffectRenderer.cpp
@@ -108,6 +112,16 @@ elseif(APPLE)
     target_sources(DisplayHawk PRIVATE "${DISPLAYHAWK_ICNS}")
     set_source_files_properties("${DISPLAYHAWK_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
 endif()
+# Bundled ISF examples (more go in Documents/Display Hawk/ISF).
+qt_add_resources(DisplayHawk "isf"
+    PREFIX "/isf"
+    BASE "assets/isf"
+    FILES
+        "assets/isf/Ripple.fs"
+        "assets/isf/Colour Pulse.fs"
+        "assets/isf/Spiral Rays.fs"
+        "assets/isf/Metaballs.fs"
+)
 qt_add_resources(DisplayHawk "icons"
     PREFIX "/"
     FILES assets/icon/displayhawk.png
@@ -148,6 +162,7 @@ target_include_directories(DisplayHawk PRIVATE src)
 
 target_link_libraries(DisplayHawk PRIVATE
     Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia Qt6::Network
+    Qt6::ShaderToolsPrivate # runtime shader compilation for ISF
 )
 
 # GPU texture sharing with other apps: Spout (Windows, vendored SpoutDX) / Syphon (macOS, vendored).

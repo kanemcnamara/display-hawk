@@ -12,6 +12,7 @@
 #include "model/Document.h"
 #include "render/Effects.h"
 #include "render/Generators.h"
+#include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
 #include "ui/ReportExporter.h"
@@ -1681,6 +1682,96 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(0);
     }
 
+    // ISF shaders: the bundled examples are found, compile at runtime and render; a broken one is
+    // reported and skipped.
+    {
+        Project &p = doc.project();
+        const QStringList filters = Isf::filterIds(), generators = Isf::generatorIds();
+        auto has = [](const QStringList &ids, const char *name) {
+            for (const QString &id : ids)
+                if (id.endsWith(QLatin1String(name)))
+                    return true;
+            return false;
+        };
+        check(has(filters, "Ripple.fs") && has(filters, "Colour Pulse.fs") && has(generators, "Spiral Rays.fs")
+                  && has(generators, "Metaballs.fs"),
+              "ISF examples are found (filters as effects, the rest as generators)");
+        const Isf::Info bad = Isf::parse(QStringLiteral("bad.fs"), QByteArray("void main() {}"));
+        check(!bad.error.isEmpty(), "ISF without a JSON header is rejected");
+
+        const int col = p.columns;
+        doc.addColumn();
+        doc.clearLayer(1);
+        p.layers[0].transitionMs = 0;
+        p.layers[0].effects.clear();
+        p.compEffects.clear();
+        QImage last = previews[0];
+        for (const QString &id : generators) {
+            Clip g = Clip::fromGenerator(id, {});
+            doc.setClip(0, col, g);
+            doc.triggerClip(0, col);
+            // A new picture, not the previous test's.
+            const bool lit = waitFor([&] { return litPercent(previews[0]) > 5 && previews[0] != last; }, 5000);
+            waitMs(150);
+            last = previews[0];
+            save(previews[0], qPrintable(QStringLiteral("isf-%1").arg(QFileInfo(id).completeBaseName())));
+            check(lit, qPrintable(QStringLiteral("ISF generator %1 compiles and renders").arg(QFileInfo(id).completeBaseName())));
+        }
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        doc.triggerClip(0, col);
+        waitFor([&] { return near(barColor(0), 255, 255, 255); });
+        const QImage plain = previews[0];
+        last = plain;
+        for (const QString &id : filters) {
+            p.layers[0].effects = {makeEffect(id)};
+            doc.notifyChanged(true);
+            const bool changed = waitFor([&] { return litPercent(previews[0]) > 5 && previews[0] != plain && previews[0] != last; }, 5000);
+            waitMs(150);
+            last = previews[0];
+            save(previews[0], qPrintable(QStringLiteral("isf-%1").arg(QFileInfo(id).completeBaseName())));
+            check(changed, qPrintable(QStringLiteral("ISF effect %1 compiles and renders").arg(QFileInfo(id).completeBaseName())));
+        }
+        // Ripple bends the vertical bar edges: one row's colours no longer match the next's.
+        p.layers[0].effects.clear();
+        for (const QString &id : filters)
+            if (id.endsWith(QLatin1String("Ripple.fs"))) {
+                EffectInstance ripple = makeEffect(id);
+                ripple.params[2] = 0.05; // amplitude
+                p.layers[0].effects = {ripple};
+            }
+        doc.notifyChanged(true);
+        check(waitFor([&] {
+                  const QImage &img = previews[0];
+                  if (img.isNull())
+                      return false;
+                  int differ = 0;
+                  for (int x = 0; x < img.width(); x += 2)
+                      differ += img.pixel(x, img.height() / 4) != img.pixel(x, img.height() / 2) ? 1 : 0;
+                  return differ > img.width() / 40;
+              }, 5000),
+              "ISF ripple distorts the picture");
+
+        // A user shader that does not compile: listed, but the effect is skipped and nothing breaks.
+        const QString dir = QDir::temp().filePath(QStringLiteral("displayhawk-isf-test"));
+        QDir().mkpath(dir);
+        QFile broken(dir + QStringLiteral("/Broken.fs"));
+        if (broken.open(QIODevice::WriteOnly)) {
+            broken.write("/*{ \"INPUTS\": [ { \"NAME\": \"inputImage\", \"TYPE\": \"image\" } ] }*/\n"
+                         "void main() { gl_FragColor = this is not glsl; }\n");
+            broken.close();
+        }
+        Isf::scan({dir});
+        const QString brokenId = QStringLiteral("isf:") + broken.fileName();
+        p.layers[0].effects = {makeEffect(brokenId)};
+        doc.notifyChanged(true);
+        waitMs(500);
+        check(Isf::info(brokenId) != nullptr && waitFor([&] { return near(barColor(0), 255, 255, 255); }, 3000),
+              "an ISF shader that does not compile is skipped");
+        p.layers[0].effects.clear();
+        doc.notifyChanged(true);
+        doc.clearLayer(0);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
@@ -1708,6 +1799,7 @@ int main(int argc, char *argv[])
     QApplication::setOrganizationName(QStringLiteral("Display Hawk"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/icon/displayhawk.png")));
     applyDarkTheme(app);
+    Isf::scan({Isf::defaultFolder()}); // bundled and user ISF shaders, before any project uses them
     qInstallMessageHandler(logToFile);
 
     Document doc;

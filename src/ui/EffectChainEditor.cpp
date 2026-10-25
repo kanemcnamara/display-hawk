@@ -2,6 +2,7 @@
 
 #include "model/Document.h"
 #include "render/Effects.h"
+#include "render/Isf.h"
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -60,17 +61,34 @@ EffectChainEditor::EffectChainEditor(Document *doc, QWidget *parent)
 
     auto *add = new QPushButton(tr("Add effect"));
     auto *menu = new QMenu(add);
-    QString category;
-    QMenu *sub = nullptr;
+    QHash<QString, QMenu *> categories; // one submenu per category, in catalogue order
     for (const EffectDef &d : effectDefs()) {
-        if (d.category != category) {
-            category = d.category;
-            sub = menu->addMenu(category);
-        }
+        QMenu *&sub = categories[d.category];
+        if (!sub)
+            sub = menu->addMenu(d.category);
         sub->addAction(d.name, this, [this, id = d.id] {
             edit([&](QVector<EffectInstance> &c) { c.append(makeEffect(id)); }, true);
         });
     }
+    // ISF filters from the ISF folder (listed when the menu opens, so new ones show up).
+    QMenu *isf = menu->addMenu(tr("ISF"));
+    connect(isf, &QMenu::aboutToShow, this, [this, isf] {
+        isf->clear();
+        const QStringList ids = Isf::filterIds();
+        for (const QString &id : ids) {
+            const EffectDef *d = effectDef(id);
+            if (!d)
+                continue;
+            QAction *a = isf->addAction(d->name, this, [this, id] {
+                edit([&](QVector<EffectInstance> &c) { c.append(makeEffect(id)); }, true);
+            });
+            if (const Isf::Info *info = Isf::info(id))
+                a->setToolTip(info->description);
+        }
+        if (ids.isEmpty())
+            isf->addAction(tr("(none: put .fs files in Documents/Display Hawk/ISF)"))->setEnabled(false);
+    });
+    isf->setToolTipsVisible(true);
     add->setMenu(menu);
     v->addWidget(add);
 }

@@ -1,5 +1,7 @@
 #include "render/Generators.h"
 
+#include "render/Isf.h"
+
 namespace {
 
 EffectParamDef num(const char *name, double min, double max, double def, const char *suffix = "")
@@ -55,6 +57,8 @@ const QVector<GeneratorDef> &generatorDefs()
 
 const GeneratorDef *generatorDef(const QString &id)
 {
+    if (id.startsWith(QLatin1String("isf:")))
+        return Isf::generatorDef(id);
     for (const GeneratorDef &d : generatorDefs())
         if (d.id == id)
             return &d;

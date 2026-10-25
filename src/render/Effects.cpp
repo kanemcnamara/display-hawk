@@ -1,5 +1,7 @@
 #include "render/Effects.h"
 
+#include "render/Isf.h"
+
 namespace {
 
 EffectParamDef num(const char *name, double min, double max, double def, const char *suffix = "")
@@ -101,6 +103,8 @@ const QVector<EffectDef> &effectDefs()
 
 const EffectDef *effectDef(const QString &id)
 {
+    if (id.startsWith(QLatin1String("isf:")))
+        return Isf::effectDef(id);
     for (const EffectDef &d : effectDefs())
         if (d.id == id)
             return &d;

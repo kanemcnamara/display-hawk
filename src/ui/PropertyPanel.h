@@ -111,6 +111,8 @@ private:
     QString m_builtGenerator;
     QVector<std::function<void(double)>> m_genSetters;
     void rebuildGeneratorParams(const Clip &clip);
+    void fillGenerators(QComboBox *combo);
+    QComboBox *m_newGenerator;
     QCheckBox *m_reverse;
     QSlider *m_position;
     QLabel *m_positionText;

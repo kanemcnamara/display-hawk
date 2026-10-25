@@ -7,6 +7,8 @@
 
 // Runs effect chains (shaders/fx.frag) on the render thread. Each chain has its own pair of
 // ping-pong targets, keyed by the caller (a layer id, or the composition). Not thread-safe.
+class IsfRenderer;
+
 class EffectRenderer
 {
 public:
@@ -23,6 +25,7 @@ public:
 
     // Call once per frame before apply(): the project whose LED walls the panel effects follow.
     void setFrame(qint64 now, const Project *project) { m_now = now; m_project = project; }
+    void setIsf(IsfRenderer *isf) { m_isf = isf; }
 
     // Applies the enabled effects of `chain` to `input` (premultiplied, rendered, `size` pixels) and
     // returns the result: `input` itself when nothing is enabled. `timeSec` drives animated effects.
@@ -75,6 +78,7 @@ private:
     quint32 m_offset = 0;
     qint64 m_now = 0;
     const Project *m_project = nullptr;
+    IsfRenderer *m_isf = nullptr;
     bool m_warnedFull = false;
     QRhiResourceUpdateBatch *m_pendingUpload = nullptr;
 };

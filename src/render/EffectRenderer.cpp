@@ -1,6 +1,7 @@
 #include "render/EffectRenderer.h"
 
 #include "render/Effects.h"
+#include "render/IsfRenderer.h"
 
 #include <QDataStream>
 #include <QFile>
@@ -161,6 +162,8 @@ void EffectRenderer::clearSrbs()
 
 void EffectRenderer::forgetTexture(QRhiTexture *tex)
 {
+    if (m_isf)
+        m_isf->forgetTexture(tex);
     for (auto it = m_srbs.begin(); it != m_srbs.end();) {
         if (it.key().first == tex || it.key().second == tex) {
             it.value()->deleteLater();
@@ -430,6 +433,24 @@ QRhiTexture *EffectRenderer::apply(QRhiCommandBuffer *cb, const QString &key, QR
                          kMaxPassesPerFrame);
             m_warnedFull = true;
             break;
+        }
+        if (pass.def->shaderMode < 0) { // ISF: its own shader and parameters
+            const EffectInstance &e = chain[pass.index];
+            QVector<double> values(pass.def->params.size());
+            for (int k = 0; k < values.size(); ++k)
+                values[k] = effectParam(e, k);
+            for (const Override &o : overrides)
+                if (o.effect == pass.index && o.param >= 0 && o.param < values.size())
+                    values[o.param] = o.value;
+            if (m_pendingUpload) { // the panel textures may be waiting: submit them now
+                cb->resourceUpdate(m_pendingUpload);
+                m_pendingUpload = nullptr;
+            }
+            if (m_isf && m_isf->render(cb, c.rt[ping], e.type, values, current, timeSec, true)) {
+                current = c.tex[ping];
+                ping ^= 1;
+            }
+            continue;
         }
         QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
         QRhiTexture *history = pass.def->usesHistory ? historyFor(c, pass.index, size, u) : nullptr;

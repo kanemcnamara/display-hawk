@@ -148,6 +148,10 @@ Empty clip slots can hold **text** (*Add text*) or a **generator** as well as me
 - **Text**: any lines of text in any installed font, a size in pixels or *Fit* (as large as the layer's area allows), bold, colour, outline (colour and width), background (with transparency), alignment, and motion: still, blinking, scrolling left/right as a **ticker** (one line, repeating) or up/down as **credits**. Fitted into a wall like any clip.
 - **Generators**, drawn on the GPU at the area's resolution in two colours: Shapes (circle, square, triangle, star, ring, hexagon; size, rotation, spin, grid repeat, pulse), Lines (stripes: angle, count, width, speed), Gradient (linear, radial, angular, diamond; moving, mirrored), Plasma, Noise, Particles (drifting in any direction or out from the centre, twinkling), Starfield, Tunnel, Radar sweep and Moving checker.
 
+### ISF shaders
+
+Display Hawk loads **ISF** (Interactive Shader Format, isf.video) shaders: put `.fs` files in *Documents/Display Hawk/ISF* (**Effects → Open ISF folder**, then **Rescan ISF folder**). Shaders with an `inputImage` are effects (*Add effect → ISF*), the rest generators (in the generator list, marked ISF). Their inputs become controls automatically: float sliders, bool and long choices, colour buttons and point X/Y. They are translated to Display Hawk's shader dialect and compiled at runtime for Direct3D, Metal or OpenGL; a shader that does not compile is reported in the log and skipped. Four examples are built in (Ripple, Colour Pulse, Spiral Rays, Metaballs). Not supported yet: multi-pass/persistent buffers, custom vertex shaders, and image inputs other than `inputImage`.
+
 ### Mixing
 
 - **Blend modes** per layer (and group): Normal, Add, Screen, Multiply, Lighten, Darken (GPU blender) and Subtract, Difference, Exclusion, Overlay, Soft light, Hard light, Colour dodge, Colour burn, Hue, Saturation, Colour, Luminosity (a shader that reads everything below). **Mask** modes turn a layer into a mask for everything below it: *alpha*, *luma* or *inverse luma*.

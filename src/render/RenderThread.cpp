@@ -372,9 +372,12 @@ void RenderThread::run()
     }
     m_gen.onTextureRelease = [this](QRhiTexture *tex) {
         m_quad.forgetTexture(tex);
-        m_fx.forgetTexture(tex);
+        m_fx.forgetTexture(tex); // and the ISF renderer's
     };
-    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi) || !m_blend.init(m_rhi) || !m_gen.init(m_rhi)) {
+    m_fx.setIsf(&m_isf);
+    m_gen.setIsf(&m_isf);
+    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi) || !m_blend.init(m_rhi) || !m_gen.init(m_rhi)
+        || !m_isf.init(m_rhi)) {
         m_initError = tr("Could not load shaders.");
         delete m_rhi;
         m_rhi = nullptr;
@@ -487,6 +490,7 @@ void RenderThread::run()
     m_fx.release();
     m_blend.release();
     m_gen.release();
+    m_isf.release();
     releaseMixer(m_compMix, false);
     for (Mixer &gm : m_groupMix)
         releaseMixer(gm, false);
@@ -965,6 +969,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     m_compSize = compSize;
     m_blend.newFrame();
     m_gen.newFrame();
+    m_isf.newFrame();
     mixBegin(m_compMix, p.background);
     const double timeSec = now / 1000.0;
     m_fx.setFrame(now, &p);

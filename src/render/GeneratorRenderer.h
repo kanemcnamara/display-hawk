@@ -8,6 +8,8 @@
 #include <rhi/qrhi.h>
 
 // Draws generator clips (shaders/gen.frag) into a texture of their own each frame. Render thread only.
+class IsfRenderer;
+
 class GeneratorRenderer
 {
 public:
@@ -21,6 +23,7 @@ public:
     void collectGarbage(qint64 now, qint64 idleMs);
     // Called before a texture it handed out is destroyed (others cache bindings by texture).
     std::function<void(QRhiTexture *)> onTextureRelease;
+    void setIsf(IsfRenderer *isf) { m_isf = isf; }
 
 private:
     struct Target {
@@ -32,6 +35,7 @@ private:
     void releaseTarget(Target &t, bool deferred);
 
     QRhi *m_rhi = nullptr;
+    IsfRenderer *m_isf = nullptr;
     QShader m_vs, m_fs;
     QRhiBuffer *m_ubuf = nullptr;
     QRhiShaderResourceBindings *m_layoutSrb = nullptr;

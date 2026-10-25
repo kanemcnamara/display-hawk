@@ -7,6 +7,7 @@
 #include "model/CabinetMapping.h"
 #include "ui/CabinetLayoutEditor.h"
 #include "render/Generators.h"
+#include "render/Isf.h"
 #include "ui/EffectChainEditor.h"
 #include "ui/MaskEditor.h"
 #include "ui/PanelGridEditor.h"
@@ -545,8 +546,8 @@ QWidget *PropertyPanel::buildClipPage()
     ef->addRow(addMedia);
     auto *addText = new QPushButton(tr("Add text"));
     auto *newGenerator = new QComboBox;
-    for (const GeneratorDef &d : generatorDefs())
-        newGenerator->addItem(d.name, d.id);
+    m_newGenerator = newGenerator;
+    fillGenerators(newGenerator);
     auto *addGenerator = new QPushButton(tr("Add"));
     ef->addRow(addText);
     ef->addRow(tr("Generator"), row({newGenerator, addGenerator}));
@@ -727,8 +728,7 @@ QWidget *PropertyPanel::buildClipPage()
     auto *gv = new QVBoxLayout(genBox);
     auto *gf = new QFormLayout;
     m_generator = new QComboBox;
-    for (const GeneratorDef &d : generatorDefs())
-        m_generator->addItem(d.name, d.id);
+    fillGenerators(m_generator);
     m_genColor1 = new QPushButton;
     m_genColor2 = new QPushButton;
     gf->addRow(tr("Generator"), m_generator);
@@ -936,6 +936,10 @@ void PropertyPanel::refreshClip()
         m_textMotion->setCurrentIndex(int(c->textMotion));
         setValue(m_textSpeed, c->textSpeed);
     }
+    if (m_generator->count() != int(generatorDefs().size() + Isf::generatorIds().size()) + (Isf::generatorIds().isEmpty() ? 0 : 1)) {
+        fillGenerators(m_generator); // the ISF folder was rescanned
+        fillGenerators(m_newGenerator);
+    }
     if (c->source == ContentSource::Generator) {
         m_generator->setCurrentIndex(qMax(0, m_generator->findData(c->generator)));
         setButtonColor(m_genColor1, c->solidColor);
@@ -1016,6 +1020,23 @@ void PropertyPanel::refreshClip()
             status = tr("Loading...");
     }
     m_mediaStatus->setText(status);
+}
+
+void PropertyPanel::fillGenerators(QComboBox *combo)
+{
+    // Built in, then ISF generators from the ISF folder.
+    const QString current = combo->currentData().toString();
+    const QSignalBlocker b(combo);
+    combo->clear();
+    for (const GeneratorDef &d : generatorDefs())
+        combo->addItem(d.name, d.id);
+    const QStringList isf = Isf::generatorIds();
+    if (!isf.isEmpty())
+        combo->insertSeparator(combo->count());
+    for (const QString &id : isf)
+        if (const GeneratorDef *d = generatorDef(id))
+            combo->addItem(tr("%1 (ISF)").arg(d->name), id);
+    combo->setCurrentIndex(qMax(0, combo->findData(current)));
 }
 
 void PropertyPanel::rebuildGeneratorParams(const Clip &clip)

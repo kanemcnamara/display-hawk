@@ -11,6 +11,10 @@
 #include "control/ModulationHub.h"
 #include "control/TempoClock.h"
 #include "ui/LfoDialog.h"
+#include "render/Isf.h"
+#include <QDesktopServices>
+#include <QStatusBar>
+#include <QUrl>
 #include "ui/AudioReactiveDialog.h"
 #include "ui/CanvasView.h"
 #include "ui/ControlDialog.h"
@@ -322,6 +326,16 @@ void MainWindow::buildActions()
     QMenu *control = menuBar()->addMenu(tr("&Control"));
     control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
     control->addAction(tr("LFOs..."), QKeySequence(tr("Ctrl+L")), this, &MainWindow::showLfos);
+
+    QMenu *effects = menuBar()->addMenu(tr("&Effects"));
+    effects->addAction(tr("Open ISF folder"), this, [] {
+        QDesktopServices::openUrl(QUrl::fromLocalFile(Isf::defaultFolder()));
+    });
+    effects->addAction(tr("Rescan ISF folder"), this, [this] {
+        Isf::scan({Isf::defaultFolder()});
+        m_doc->notifyChanged(true); // lists refresh
+        statusBar()->showMessage(tr("%1 ISF effects, %2 ISF generators").arg(Isf::filterIds().size()).arg(Isf::generatorIds().size()), 4000);
+    });
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Reset input view"), this, [this] { m_inputView->resetView(); });

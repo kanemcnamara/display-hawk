@@ -1,6 +1,7 @@
 #include "render/GeneratorRenderer.h"
 
 #include "render/Generators.h"
+#include "render/IsfRenderer.h"
 
 #include <QFile>
 #include <QMatrix4x4>
@@ -104,6 +105,12 @@ QRhiTexture *GeneratorRenderer::render(QRhiCommandBuffer *cb, const Clip &clip, 
         t.rp = t.rt->newCompatibleRenderPassDescriptor();
         t.rt->setRenderPassDescriptor(t.rp);
         t.rt->create();
+    }
+    if (def->shaderMode < 0) { // ISF generator
+        QVector<double> values(def->params.size());
+        for (int k = 0; k < values.size(); ++k)
+            values[k] = generatorParam(clip, k);
+        return m_isf && m_isf->render(cb, t.rt, clip.generator, values, nullptr, timeSec, false) ? t.tex : nullptr;
     }
     if (!m_pipeline || m_pipelineFormat != t.rp->serializedFormat()) {
         delete m_pipeline;
