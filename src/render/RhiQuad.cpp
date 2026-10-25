@@ -9,7 +9,8 @@
 
 namespace {
 
-constexpr quint32 kUniformSize = 272; // must match the std140 block in quad.vert / quad.frag
+constexpr quint32 kUniformSize = 304;
+constexpr quint32 kMeshBufferBytes = 16 * 1024 * 1024; // mesh-warped slice vertices per frame // must match the std140 block in quad.vert / quad.frag
 constexpr quint32 kMaxDrawsPerFrame = 8192; // cabinet layouts add a slice per cabinet
 
 QShader loadShader(const QString &path)
@@ -48,7 +49,8 @@ bool RhiQuad::init(QRhi *rhi)
     m_rhi = rhi;
     m_vs = loadShader(QStringLiteral(":/shaders/quad.vert.qsb"));
     m_fs = loadShader(QStringLiteral(":/shaders/quad.frag.qsb"));
-    if (!m_vs.isValid() || !m_fs.isValid())
+    m_meshVs = loadShader(QStringLiteral(":/shaders/mesh.vert.qsb"));
+    if (!m_vs.isValid() || !m_fs.isValid() || !m_meshVs.isValid())
         return false;
 
     const quint32 align = quint32(rhi->ubufAlignment());
@@ -57,7 +59,8 @@ bool RhiQuad::init(QRhi *rhi)
     m_sampler = rhi->newSampler(QRhiSampler::Linear, QRhiSampler::Linear, QRhiSampler::None,
                                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     m_white = rhi->newTexture(QRhiTexture::RGBA8, QSize(4, 4));
-    if (!m_ubuf->create() || !m_sampler->create() || !m_white->create())
+    m_vbuf = rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::VertexBuffer, kMeshBufferBytes);
+    if (!m_ubuf->create() || !m_sampler->create() || !m_white->create() || !m_vbuf->create())
         return false;
     m_layoutSrb = srbFor(m_white);
     return m_layoutSrb != nullptr;
@@ -77,6 +80,8 @@ void RhiQuad::release()
     m_sampler = nullptr;
     delete m_ubuf;
     m_ubuf = nullptr;
+    delete m_vbuf;
+    m_vbuf = nullptr;
     m_whiteUploaded = false;
 }
 
@@ -105,9 +110,9 @@ QRhiShaderResourceBindings *RhiQuad::srbFor(QRhiTexture *tex)
     return srb;
 }
 
-QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp, Blend mode)
+QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp, Blend mode, bool mesh)
 {
-    const PipelineKey key{rp->serializedFormat(), mode};
+    const PipelineKey key{rp->serializedFormat(), mode, mesh};
     for (const auto &p : std::as_const(m_pipelines))
         if (p.first == key)
             return p.second;
@@ -154,10 +159,19 @@ QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp, Blend m
         break;
     }
     ps->setTargetBlends({blend});
-    ps->setTopology(QRhiGraphicsPipeline::TriangleStrip);
     ps->setFlags(QRhiGraphicsPipeline::UsesScissor);
-    ps->setShaderStages({{QRhiShaderStage::Vertex, m_vs}, {QRhiShaderStage::Fragment, m_fs}});
-    ps->setVertexInputLayout({}); // positions come from the vertex index
+    if (mesh) {
+        ps->setTopology(QRhiGraphicsPipeline::Triangles);
+        ps->setShaderStages({{QRhiShaderStage::Vertex, m_meshVs}, {QRhiShaderStage::Fragment, m_fs}});
+        QRhiVertexInputLayout layout;
+        layout.setBindings({{4 * sizeof(float)}});
+        layout.setAttributes({{0, 0, QRhiVertexInputAttribute::Float4, 0}});
+        ps->setVertexInputLayout(layout);
+    } else {
+        ps->setTopology(QRhiGraphicsPipeline::TriangleStrip);
+        ps->setShaderStages({{QRhiShaderStage::Vertex, m_vs}, {QRhiShaderStage::Fragment, m_fs}});
+        ps->setVertexInputLayout({}); // positions come from the vertex index
+    }
     ps->setShaderResourceBindings(m_layoutSrb);
     ps->setRenderPassDescriptor(rp);
     if (!ps->create()) {
@@ -184,6 +198,7 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
     const QMatrix4x4 corr = m_rhi->clipSpaceCorrMatrix();
     QVector<quint32> offsets;
     offsets.reserve(draws.size());
+    QVector<QPair<quint32, quint32>> meshes(draws.size(), {0, 0}); // vertex buffer offset, vertex count
     for (const Params &p : draws) {
         if (m_offset + m_stride > m_ubuf->size()) {
             if (!m_warnedFull)
@@ -220,6 +235,21 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
             const float weights[] = {q.x(), q.y(), q.w(), q.z()}; // tl, tr, bl, br
             std::memcpy(data + 256, weights, sizeof(weights));
         }
+        if (p.edgeBlend) {
+            const float blend[] = {p.edgeWidths[0], p.edgeWidths[1], p.edgeWidths[2], p.edgeWidths[3],
+                                   qMax(0.1f, p.blendCurve), 1.0f / qMax(0.1f, p.blendGamma), 1.0f, 0.0f};
+            std::memcpy(data + 272, blend, sizeof(blend));
+        }
+        if (!p.mesh.isEmpty()) {
+            const quint32 bytes = quint32(p.mesh.size() * sizeof(QVector4D));
+            if (m_vOffset + bytes <= kMeshBufferBytes) {
+                u->updateDynamicBuffer(m_vbuf, m_vOffset, bytes, p.mesh.constData());
+                meshes[offsets.size()] = {m_vOffset, quint32(p.mesh.size())};
+                m_vOffset += bytes;
+            } else {
+                qWarning("RhiQuad: mesh vertex buffer full, mesh drawn unwarped");
+            }
+        }
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
         m_offset += m_stride;
@@ -231,7 +261,8 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         QRhiGraphicsPipeline *bound = nullptr;
         for (int i = 0; i < offsets.size(); ++i) {
             const Params &p = draws[i];
-            QRhiGraphicsPipeline *ps = pipelineFor(rt->renderPassDescriptor(), p.blend);
+            const bool mesh = meshes[i].second > 0;
+            QRhiGraphicsPipeline *ps = pipelineFor(rt->renderPassDescriptor(), p.blend, mesh);
             if (!ps)
                 continue;
             if (ps != bound) {
@@ -249,7 +280,13 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
             cb->setScissor(QRhiScissor(clip.x(), px.height() - (clip.y() + clip.height()), clip.width(), clip.height()));
             const QRhiCommandBuffer::DynamicOffset off(0, offsets[i]);
             cb->setShaderResources(srb, 1, &off);
-            cb->draw(4);
+            if (mesh) {
+                const QRhiCommandBuffer::VertexInput input(m_vbuf, meshes[i].first);
+                cb->setVertexInput(0, 1, &input);
+                cb->draw(meshes[i].second);
+            } else {
+                cb->draw(4);
+            }
         }
     }
     cb->endPass(after);

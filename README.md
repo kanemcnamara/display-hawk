@@ -73,6 +73,15 @@ Each parameter can be driven live: OSC `/dh/layer/<l>/effect/<e>/<p>` or `/dh/co
 - **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
 - **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
 
+## Projection tools
+
+For projectors, on each slice (*Warp and edge blend*) and screen (*Projection masks*):
+
+- **Warp**: *Corner pin* (four corners, with perspective) or *Mesh* (2 x 2 up to 33 x 33 control points, interpolated smoothly with Catmull-Rom and finely tessellated on the GPU) for curved and uneven surfaces. Drag the points on the output map; changing the mesh size re-samples it keeping its shape, *Flatten* resets it to the corner pin / output rect.
+- **Edge blending** for overlapping projectors: a soft edge on any side (width in output pixels), with the ramp's *curve* (1 = linear, higher = steeper S-curve) and the projector *gamma* it compensates, so the overlap adds up to even brightness.
+- **Projection masks** per screen: polygons that black out light (or with *Invert*, everything outside them), with a soft *feather*. *Edit* a mask to drag its points on the output map; double-click an edge to add a point, Alt+click a point to remove it, drag inside it to move it.
+- **Output → Identify Slices on Outputs** also draws an 8 x 8 alignment grid through every warped slice on the projectors, for lining warps up on the surface.
+
 ## Remote control: OSC, MIDI and DMX
 
 **Control → OSC, MIDI & DMX…** (Ctrl/Cmd+M).

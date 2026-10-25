@@ -88,8 +88,82 @@ QRect LedWall::bounds() const
     return outline().boundingRect().toAlignedRect();
 }
 
+namespace {
+
+// Catmull-Rom through p0..p3 at f in [0, 1] between p1 and p2.
+QPointF catmullRom(const QPointF &p0, const QPointF &p1, const QPointF &p2, const QPointF &p3, double f)
+{
+    const double f2 = f * f, f3 = f2 * f;
+    return 0.5 * ((2 * p1) + (-p0 + p2) * f + (2 * p0 - 5 * p1 + 4 * p2 - p3) * f2 + (-p0 + 3 * p1 - 3 * p2 + p3) * f3);
+}
+
+} // namespace
+
+QPointF Slice::outputPoint(double s, double t) const
+{
+    if (isMeshed()) {
+        // Bicubic Catmull-Rom over the control grid; the edge rows/columns are repeated.
+        const double u = qBound(0.0, s, 1.0) * (meshW - 1), v = qBound(0.0, t, 1.0) * (meshH - 1);
+        const int i = qMin(int(u), meshW - 2), j = qMin(int(v), meshH - 2);
+        const double fu = u - i, fv = v - j;
+        auto at = [this](int x, int y) {
+            return mesh[qBound(0, y, meshH - 1) * meshW + qBound(0, x, meshW - 1)];
+        };
+        QPointF rows[4];
+        for (int k = 0; k < 4; ++k) {
+            const int y = j - 1 + k;
+            rows[k] = catmullRom(at(i - 1, y), at(i, y), at(i + 1, y), at(i + 2, y), fu);
+        }
+        return catmullRom(rows[0], rows[1], rows[2], rows[3], fv);
+    }
+    if (isWarped()) {
+        QTransform t2;
+        if (QTransform::quadToQuad(QPolygonF({QPointF(0, 0), QPointF(1, 0), QPointF(1, 1), QPointF(0, 1)}), warp, t2))
+            return t2.map(QPointF(s, t));
+    }
+    return QPointF(output.x() + s * output.width(), output.y() + t * output.height());
+}
+
+void Slice::resetMesh(int w, int h)
+{
+    w = qBound(2, w, 33);
+    h = qBound(2, h, 33);
+    QVector<QPointF> pts;
+    pts.reserve(w * h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            pts << outputPointFlat(double(x) / (w - 1), double(y) / (h - 1));
+    meshW = w;
+    meshH = h;
+    mesh = pts;
+}
+
+void Slice::resizeMesh(int w, int h)
+{
+    w = qBound(2, w, 33);
+    h = qBound(2, h, 33);
+    QVector<QPointF> pts;
+    pts.reserve(w * h);
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+            pts << outputPoint(double(x) / (w - 1), double(y) / (h - 1));
+    meshW = w;
+    meshH = h;
+    mesh = pts;
+}
+
+QPointF Slice::outputPointFlat(double s, double t) const
+{
+    Slice flat = *this;
+    flat.mesh.clear();
+    flat.meshW = flat.meshH = 0;
+    return flat.outputPoint(s, t);
+}
+
 QPolygonF Slice::outputQuad() const
 {
+    if (isMeshed()) // the mesh's outer corners
+        return QPolygonF({mesh[0], mesh[meshW - 1], mesh[meshW * meshH - 1], mesh[meshW * (meshH - 1)]});
     if (isWarped())
         return warp;
     const QRectF r(output);
@@ -438,6 +512,17 @@ QJsonObject Project::toJson() const
                                         {"flipH", sl.flipH},
                                         {"flipV", sl.flipV},
                                         {"angle", sl.angle},
+                                        {"meshW", sl.meshW},
+                                        {"meshH", sl.meshH},
+                                        {"mesh", [&sl] {
+                                             QJsonArray a;
+                                             for (const QPointF &pt : sl.mesh)
+                                                 a << pt.x() << pt.y();
+                                             return a;
+                                         }()},
+                                        {"blend", QJsonArray{sl.blendLeft, sl.blendRight, sl.blendTop, sl.blendBottom}},
+                                        {"blendCurve", sl.blendCurve},
+                                        {"blendGamma", sl.blendGamma},
                                         {"warp", [&sl] {
                                              QJsonArray a;
                                              for (const QPointF &pt : sl.warp)
@@ -469,13 +554,22 @@ QJsonObject Project::toJson() const
                                          {"portCapacity", c.portCapacity},
                                          {"firstPort", c.firstPort},
                                          {"newLinePerPort", c.newLinePerPort}});
+        QJsonArray maskArr;
+        for (const ProjectionMask &m : s.masks) {
+            QJsonArray pts;
+            for (const QPointF &pt : m.points)
+                pts << pt.x() << pt.y();
+            maskArr.append(QJsonObject{{"name", m.name}, {"enabled", m.enabled}, {"invert", m.invert},
+                                       {"feather", m.feather}, {"points", pts}});
+        }
         screenArr.append(QJsonObject{{"name", s.name},
                                      {"width", s.width},
                                      {"height", s.height},
                                      {"display", s.display},
                                      {"enabled", s.enabled},
                                      {"slices", sliceArr},
-                                     {"cabinetLayouts", layoutArr}});
+                                     {"cabinetLayouts", layoutArr},
+                                     {"masks", maskArr}});
     }
     root["screens"] = screenArr;
 
@@ -582,6 +676,24 @@ Project Project::fromJson(const QJsonObject &root)
             sl.flipH = so["flipH"].toBool(false);
             sl.flipV = so["flipV"].toBool(false);
             sl.angle = so["angle"].toDouble(0.0);
+            sl.meshW = so["meshW"].toInt(0);
+            sl.meshH = so["meshH"].toInt(0);
+            const QJsonArray mesh = so["mesh"].toArray();
+            for (int k = 0; k + 1 < mesh.size(); k += 2)
+                sl.mesh << QPointF(mesh[k].toDouble(), mesh[k + 1].toDouble());
+            if (!sl.isMeshed()) {
+                sl.mesh.clear();
+                sl.meshW = sl.meshH = 0;
+            }
+            const QJsonArray blend = so["blend"].toArray();
+            if (blend.size() == 4) {
+                sl.blendLeft = qMax(0.0, blend[0].toDouble());
+                sl.blendRight = qMax(0.0, blend[1].toDouble());
+                sl.blendTop = qMax(0.0, blend[2].toDouble());
+                sl.blendBottom = qMax(0.0, blend[3].toDouble());
+            }
+            sl.blendCurve = qBound(0.5, so["blendCurve"].toDouble(2.0), 8.0);
+            sl.blendGamma = qBound(1.0, so["blendGamma"].toDouble(2.2), 3.5);
             const QJsonArray warp = so["warp"].toArray();
             if (warp.size() == 8)
                 for (int k = 0; k < 8; k += 2)
@@ -615,6 +727,19 @@ Project Project::fromJson(const QJsonObject &root)
             c.firstPort = qMax(1, lo["firstPort"].toInt(1));
             c.newLinePerPort = lo["newLinePerPort"].toBool(false);
             s.cabinetLayouts.append(c);
+        }
+        for (const QJsonValue &mv : o["masks"].toArray()) {
+            const QJsonObject mo = mv.toObject();
+            ProjectionMask m;
+            m.name = mo["name"].toString(m.name);
+            m.enabled = mo["enabled"].toBool(true);
+            m.invert = mo["invert"].toBool(false);
+            m.feather = qMax(0.0, mo["feather"].toDouble(20.0));
+            const QJsonArray pts = mo["points"].toArray();
+            for (int k = 0; k + 1 < pts.size(); k += 2)
+                m.points << QPointF(pts[k].toDouble(), pts[k + 1].toDouble());
+            if (m.points.size() >= 3)
+                s.masks.append(m);
         }
         p.screens.append(s);
     }

@@ -205,6 +205,44 @@ void RenderThread::syncScreenOverlays(QRhiResourceUpdateBatch *u)
     }
 }
 
+void RenderThread::syncMaskOverlays(QRhiResourceUpdateBatch *u)
+{
+    const Project &p = m_project;
+    while (m_maskOverlays.size() > p.screens.size()) {
+        ScreenOverlay o = m_maskOverlays.takeLast();
+        if (o.tex) {
+            m_quad.forgetTexture(o.tex);
+            o.tex->deleteLater();
+        }
+    }
+    m_maskOverlays.resize(p.screens.size());
+    for (int i = 0; i < p.screens.size(); ++i) {
+        const Screen &s = p.screens[i];
+        QJsonArray masks;
+        for (const ProjectionMask &m : s.masks) {
+            QJsonArray pts;
+            for (const QPointF &pt : m.points)
+                pts << pt.x() << pt.y();
+            masks.append(QJsonArray{m.enabled, m.invert, m.feather, pts});
+        }
+        const QByteArray key = QJsonDocument(QJsonArray{s.width, s.height, masks}).toJson(QJsonDocument::Compact);
+        ScreenOverlay &o = m_maskOverlays[i];
+        if (key == o.key)
+            continue;
+        o.key = key;
+        const QImage img = Patterns::maskOverlay(s);
+        if (img.isNull()) {
+            if (o.tex) {
+                m_quad.forgetTexture(o.tex);
+                o.tex->deleteLater();
+                o.tex = nullptr;
+            }
+        } else {
+            uploadImage(u, o.tex, img);
+        }
+    }
+}
+
 void RenderThread::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
 {
     QMutexLocker lock(&m_mutex);
@@ -457,6 +495,9 @@ void RenderThread::run()
     delete m_overlayTex;
     m_overlayTex = nullptr;
     releaseScreenOverlays();
+    for (ScreenOverlay &o : m_maskOverlays)
+        delete o.tex;
+    m_maskOverlays.clear();
     delete m_maskTex;
     m_maskTex = nullptr;
     m_yuv.release();
@@ -934,6 +975,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
 
     QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
     syncScreenOverlays(u); // uploaded with the composition pass, before any output is drawn
+    syncMaskOverlays(u);
     if (p.maskToPanels && !p.walls.isEmpty()) {
         // Multiply by white-where-there-are-panels: what the real wall can show, nothing else.
         const QByteArray key = overlayKey();
@@ -1028,6 +1070,31 @@ QVector<EffectRenderer::Override> RenderThread::effectOverrides(int layer) const
     return out;
 }
 
+// A mesh-warped slice as a triangle list fine enough for the curve to look smooth.
+static QVector<QVector4D> tessellate(const Slice &sl, const QPointF &origin, double sx, double sy)
+{
+    const int perCellX = qBound(2, 64 / (sl.meshW - 1), 16), perCellY = qBound(2, 64 / (sl.meshH - 1), 16);
+    const int nx = (sl.meshW - 1) * perCellX, ny = (sl.meshH - 1) * perCellY;
+    QVector<QPointF> grid((nx + 1) * (ny + 1));
+    for (int y = 0; y <= ny; ++y)
+        for (int x = 0; x <= nx; ++x) {
+            const QPointF pt = sl.outputPoint(double(x) / nx, double(y) / ny);
+            grid[y * (nx + 1) + x] = QPointF(origin.x() + pt.x() * sx, origin.y() + pt.y() * sy);
+        }
+    QVector<QVector4D> tris;
+    tris.reserve(nx * ny * 6);
+    auto vertex = [&](int x, int y) {
+        const QPointF &pt = grid[y * (nx + 1) + x];
+        return QVector4D(float(pt.x()), float(pt.y()), float(double(x) / nx), float(double(y) / ny));
+    };
+    for (int y = 0; y < ny; ++y)
+        for (int x = 0; x < nx; ++x) {
+            const QVector4D a = vertex(x, y), b = vertex(x + 1, y), c = vertex(x, y + 1), d = vertex(x + 1, y + 1);
+            tris << a << b << c << b << d << c;
+        }
+    return tris;
+}
+
 QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const QSizeF &target,
                                                    const QRectF &screenRect) const
 {
@@ -1053,9 +1120,20 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
             qp.srcU = QPointF((q[1].x() - q[0].x()) / cw, (q[1].y() - q[0].y()) / ch);
             qp.srcV = QPointF((q[3].x() - q[0].x()) / cw, (q[3].y() - q[0].y()) / ch);
         }
-        if (sl.isWarped()) {
+        if (sl.isMeshed()) {
+            qp.mesh = tessellate(sl, screenRect.topLeft(), sx, sy);
+        } else if (sl.isWarped()) {
             for (const QPointF &pt : sl.warp)
                 qp.quad << QPointF(screenRect.x() + pt.x() * sx, screenRect.y() + pt.y() * sy);
+        }
+        if (sl.hasBlend() && !sl.output.isEmpty()) {
+            qp.edgeBlend = true;
+            qp.edgeWidths[0] = float(sl.blendLeft / sl.output.width());
+            qp.edgeWidths[1] = float(sl.blendRight / sl.output.width());
+            qp.edgeWidths[2] = float(sl.blendTop / sl.output.height());
+            qp.edgeWidths[3] = float(sl.blendBottom / sl.output.height());
+            qp.blendCurve = float(sl.blendCurve);
+            qp.blendGamma = float(sl.blendGamma);
         }
         qp.rotation = sl.rotation;
         qp.flipH = sl.flipH;
@@ -1072,6 +1150,13 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         draws.append(qp);
     }
     const int index = int(&screen - m_project.screens.constData());
+    if (index >= 0 && index < m_maskOverlays.size() && m_maskOverlays[index].tex) {
+        RhiQuad::Params mask; // projection masks black out over every slice
+        mask.target = target;
+        mask.dst = screenRect;
+        mask.texture = m_maskOverlays[index].tex;
+        draws.append(mask);
+    }
     if (m_identify && index >= 0 && index < m_screenOverlays.size() && m_screenOverlays[index].tex) {
         RhiQuad::Params ov;
         ov.target = target;

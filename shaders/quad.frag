@@ -1,6 +1,7 @@
 #version 440
 
 layout(location = 0) in vec3 vUV;
+layout(location = 1) in vec3 vLocal;
 layout(location = 0) out vec4 fragColor;
 
 layout(std140, binding = 0) uniform Buf {
@@ -18,9 +19,23 @@ layout(std140, binding = 0) uniform Buf {
     vec4 quadTop;   // flags2.w == 1: corner-pinned destination, top-left and top-right corners
     vec4 quadBottom;// bottom-left and bottom-right corners (target pixels)
     vec4 quadQ;     // projective weights for top-left, top-right, bottom-left, bottom-right
+    vec4 blend;       // edge blend widths, fractions of the output: left, right, top, bottom
+    vec4 blendParams; // x curve steepness, y 1 / projector gamma, z 1 = blending on
 } ubuf;
 
 layout(binding = 1) uniform sampler2D tex;
+
+// Soft-edge ramp for overlapping projectors: an S-curve of steepness `curve` (1 = linear) from the
+// edge inwards, then gamma-corrected so two overlapping projectors add up to even light.
+float edgeRamp(float distance, float width)
+{
+    if (width <= 0.0)
+        return 1.0;
+    float x = clamp(distance / width, 0.0, 1.0);
+    float p = ubuf.blendParams.x;
+    float g = x < 0.5 ? 0.5 * pow(2.0 * x, p) : 1.0 - 0.5 * pow(2.0 * (1.0 - x), p);
+    return pow(g, ubuf.blendParams.y);
+}
 
 void main()
 {
@@ -47,6 +62,12 @@ void main()
         vec3 rgb = clamp(c.rgb * ubuf.gain.rgb, 0.0, 1.0);
         rgb = pow(rgb, vec3(ubuf.grade.x));
         c.rgb = ubuf.grade.y + (1.0 - ubuf.grade.y) * rgb;
+    }
+    if (ubuf.blendParams.z > 0.5) {
+        vec2 l = vLocal.xy / vLocal.z;
+        float f = edgeRamp(l.x, ubuf.blend.x) * edgeRamp(1.0 - l.x, ubuf.blend.y)
+                * edgeRamp(l.y, ubuf.blend.z) * edgeRamp(1.0 - l.y, ubuf.blend.w);
+        c.rgb *= f;
     }
     fragColor = c;
 }

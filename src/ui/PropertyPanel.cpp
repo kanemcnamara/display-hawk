@@ -7,6 +7,7 @@
 #include "model/CabinetMapping.h"
 #include "ui/CabinetLayoutEditor.h"
 #include "ui/EffectChainEditor.h"
+#include "ui/MaskEditor.h"
 #include "ui/PanelGridEditor.h"
 #include "model/Document.h"
 
@@ -885,6 +886,12 @@ QWidget *PropertyPanel::buildScreenPage()
     m_cabinets = new CabinetLayoutEditor(m_doc);
     cabl->addWidget(m_cabinets);
     v->addWidget(cab);
+
+    auto *masks = new QGroupBox(tr("Projection masks"));
+    auto *ml = new QVBoxLayout(masks);
+    m_masks = new MaskEditor(m_doc);
+    ml->addWidget(m_masks);
+    v->addWidget(masks);
     v->addStretch();
 
     connect(m_screenName, &QLineEdit::textEdited, this, [this](const QString &t) {
@@ -988,6 +995,7 @@ void PropertyPanel::refreshScreen()
     setValue(m_screenW, s->width);
     setValue(m_screenH, s->height);
     m_cabinets->setScreen(m_doc->selection().screen);
+    m_masks->setScreen(m_doc->selection().screen);
     int di = m_display->findData(s->display);
     if (di < 0 && !s->display.isEmpty()) {
         m_display->addItem(tr("%1 (not connected)").arg(s->display), s->display);
@@ -1066,14 +1074,45 @@ QWidget *PropertyPanel::buildSlicePage()
     outf->addRow(tr("W / H"), row({m_outW, m_outH}));
     outf->addRow(tr("Rotation"), m_rotation);
     outf->addRow(QString(), row({m_flipH, m_flipV}));
-    m_cornerPin = new QCheckBox(tr("Corner pin"));
-    m_cornerPin->setToolTip(tr("Place the slice as a free four-cornered shape on the output (with perspective): "
-                               "drag the numbered corners on the output map"));
-    outf->addRow(QString(), m_cornerPin);
     outf->addRow(tr("Brightness"), m_brightness);
     outf->addRow(oneToOne);
     outf->addRow(row({fitScreen, fillScreen}));
     v->addWidget(out);
+
+    // Projection: warping onto the surface and soft edges where projectors overlap.
+    auto *proj = new QGroupBox(tr("Warp and edge blend"));
+    auto *pf = new QFormLayout(proj);
+    m_warpMode = new QComboBox;
+    m_warpMode->addItems({tr("None"), tr("Corner pin"), tr("Mesh")});
+    m_warpMode->setToolTip(tr("Corner pin: drag the four numbered corners on the output map (with perspective).\n"
+                              "Mesh: drag the grid points to fit curved or uneven surfaces."));
+    m_meshW = makeSpin(2, 33, QString());
+    m_meshH = makeSpin(2, 33, QString());
+    m_meshW->setToolTip(tr("Mesh points across"));
+    m_meshH->setToolTip(tr("Mesh points down"));
+    m_meshReset = new QPushButton(tr("Flatten"));
+    m_meshReset->setToolTip(tr("Reset the mesh to the corner pin / output rect, keeping its size"));
+    pf->addRow(tr("Warp"), m_warpMode);
+    pf->addRow(tr("Mesh points"), row({m_meshW, m_meshH, m_meshReset}));
+    auto blendSpin = [] {
+        QDoubleSpinBox *s = makeDouble(0, 8192, 0, QStringLiteral(" px"));
+        s->setToolTip(QObject::tr("Soft-edge width on this side, in output pixels (the overlap with the neighbouring projector)"));
+        return s;
+    };
+    m_blendL = blendSpin();
+    m_blendR = blendSpin();
+    m_blendT = blendSpin();
+    m_blendB = blendSpin();
+    m_blendCurve = makeDouble(0.5, 8, 2, QString());
+    m_blendCurve->setSingleStep(0.1);
+    m_blendCurve->setToolTip(tr("Shape of the ramp: 1 = linear, higher = steeper S-curve"));
+    m_blendGamma = makeDouble(1, 3.5, 2, QString());
+    m_blendGamma->setSingleStep(0.05);
+    m_blendGamma->setToolTip(tr("Projector gamma the ramp compensates, so overlaps add up to even brightness"));
+    pf->addRow(tr("Blend left / right"), row({m_blendL, m_blendR}));
+    pf->addRow(tr("Blend top / bottom"), row({m_blendT, m_blendB}));
+    pf->addRow(tr("Curve / gamma"), row({m_blendCurve, m_blendGamma}));
+    v->addWidget(proj);
 
     auto *colour = new QGroupBox(tr("Colour correction"));
     colour->setToolTip(tr("Match cabinets from different batches, or this wall to its neighbours"));
@@ -1166,18 +1205,52 @@ QWidget *PropertyPanel::buildSlicePage()
         if (!m_refreshing)
             editSlice([&](Slice &s) { s.flipH = on; });
     });
-    connect(m_cornerPin, &QCheckBox::toggled, this, [this](bool on) {
+    connect(m_warpMode, &QComboBox::activated, this, [this](int mode) {
+        editSlice([&](Slice &s) {
+            const QRectF r(s.output);
+            const QPolygonF rect({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+            if (mode == 0) {
+                s.warp.clear();
+                s.mesh.clear();
+                s.meshW = s.meshH = 0;
+            } else if (mode == 1) {
+                if (!s.isWarped())
+                    s.warp = s.isMeshed() ? s.outputQuad() : rect; // a mesh hands over its corners
+                s.mesh.clear();
+                s.meshW = s.meshH = 0;
+            } else if (!s.isMeshed()) {
+                s.resetMesh(5, 5); // starts flat over the current shape (corner pin included)
+            }
+        });
+    });
+    auto meshSize = [this] {
         if (m_refreshing)
             return;
         editSlice([&](Slice &s) {
-            if (!on) {
-                s.warp.clear();
-                return;
-            }
-            const QRectF r(s.output);
-            s.warp = QPolygonF({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+            if (s.isMeshed())
+                s.resizeMesh(m_meshW->value(), m_meshH->value()); // keeps the current shape
+        });
+    };
+    connect(m_meshW, &QSpinBox::valueChanged, this, meshSize);
+    connect(m_meshH, &QSpinBox::valueChanged, this, meshSize);
+    connect(m_meshReset, &QPushButton::clicked, this, [this] {
+        editSlice([&](Slice &s) {
+            if (s.isMeshed())
+                s.resetMesh(s.meshW, s.meshH);
         });
     });
+    auto blendField = [this](QDoubleSpinBox *spin, double Slice::*field) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, [this, field](double v) {
+            if (!m_refreshing)
+                editSlice([&](Slice &s) { s.*field = v; });
+        });
+    };
+    blendField(m_blendL, &Slice::blendLeft);
+    blendField(m_blendR, &Slice::blendRight);
+    blendField(m_blendT, &Slice::blendTop);
+    blendField(m_blendB, &Slice::blendBottom);
+    blendField(m_blendCurve, &Slice::blendCurve);
+    blendField(m_blendGamma, &Slice::blendGamma);
     connect(m_flipV, &QCheckBox::toggled, this, [this](bool on) {
         if (!m_refreshing)
             editSlice([&](Slice &s) { s.flipV = on; });
@@ -1259,7 +1332,18 @@ void PropertyPanel::refreshSlice()
                                    .arg(s->port > 0 ? tr(" on port %1").arg(s->port) : QString()));
     m_flipH->setChecked(s->flipH);
     m_flipV->setChecked(s->flipV);
-    m_cornerPin->setChecked(s->isWarped());
+    m_warpMode->setCurrentIndex(s->isMeshed() ? 2 : (s->isWarped() ? 1 : 0));
+    setValue(m_meshW, s->isMeshed() ? s->meshW : 5);
+    setValue(m_meshH, s->isMeshed() ? s->meshH : 5);
+    m_meshW->setEnabled(s->isMeshed());
+    m_meshH->setEnabled(s->isMeshed());
+    m_meshReset->setEnabled(s->isMeshed());
+    setValue(m_blendL, s->blendLeft);
+    setValue(m_blendR, s->blendRight);
+    setValue(m_blendT, s->blendTop);
+    setValue(m_blendB, s->blendBottom);
+    setValue(m_blendCurve, s->blendCurve);
+    setValue(m_blendGamma, s->blendGamma);
     setValue(m_brightness, qRound(s->brightness * 100.0));
     setValue(m_gainR, s->gainR * 100.0);
     setValue(m_gainG, s->gainG * 100.0);

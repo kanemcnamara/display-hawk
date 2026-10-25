@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QRectF>
 #include <QVector>
+#include <QVector4D>
 #include <rhi/qrhi.h>
 
 #include "model/Project.h"
@@ -30,6 +31,14 @@ public:
         // Corner pin: when set (4 points: top-left, top-right, bottom-right, bottom-left, in target
         // pixels) the destination is this quad, mapped with perspective; dst is then unused.
         QPolygonF quad;
+        // Mesh warp: a triangle list of (x, y target pixels, s, t of the upright output rect).
+        // When set it replaces dst and quad.
+        QVector<QVector4D> mesh;
+        // Edge blending: soft-edge widths as fractions of the output (left, right, top, bottom).
+        bool edgeBlend = false;
+        float edgeWidths[4] = {0, 0, 0, 0};
+        float blendCurve = 2.0f;
+        float blendGamma = 2.2f;
         int rotation = 0;          // quarter turns clockwise
         bool flipH = false;
         bool flipV = false;
@@ -51,7 +60,11 @@ public:
     void release();
 
     // Call once per QRhi frame, before recording any pass.
-    void newFrame() { m_offset = 0; }
+    void newFrame()
+    {
+        m_offset = 0;
+        m_vOffset = 0;
+    }
 
     // Records one render pass: clears rt, then draws in order. `before` and `after` are optional
     // update batches submitted at the start and end of the pass (uploads, readbacks).
@@ -62,11 +75,13 @@ public:
     void forgetTexture(QRhiTexture *tex);
 
 private:
-    QRhiGraphicsPipeline *pipelineFor(QRhiRenderPassDescriptor *rp, Blend blend);
+    QRhiGraphicsPipeline *pipelineFor(QRhiRenderPassDescriptor *rp, Blend blend, bool mesh);
     QRhiShaderResourceBindings *srbFor(QRhiTexture *tex);
 
     QRhi *m_rhi = nullptr;
-    QShader m_vs, m_fs;
+    QShader m_vs, m_fs, m_meshVs;
+    QRhiBuffer *m_vbuf = nullptr; // mesh vertices, refilled every frame
+    quint32 m_vOffset = 0;
     QRhiBuffer *m_ubuf = nullptr;
     QRhiSampler *m_sampler = nullptr;
     QRhiTexture *m_white = nullptr;
@@ -75,7 +90,8 @@ private:
     struct PipelineKey {
         QVector<quint32> format;
         Blend blend;
-        bool operator==(const PipelineKey &o) const { return blend == o.blend && format == o.format; }
+        bool mesh;
+        bool operator==(const PipelineKey &o) const { return blend == o.blend && mesh == o.mesh && format == o.format; }
     };
     QVector<QPair<PipelineKey, QRhiGraphicsPipeline *>> m_pipelines;
     quint32 m_stride = 0;

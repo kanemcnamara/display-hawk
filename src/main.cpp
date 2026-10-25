@@ -982,6 +982,83 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         save(previews[1], "slice-corner-pin");
         check(pinned, "corner-pinned slice fills its quad");
 
+        // Mesh warp: a flat 3 x 3 mesh shows the bars as before; pulling the centre point right
+        // stretches the left half, so green (bar 3 of 8) reaches x = 540 on the middle row.
+        Slice meshed;
+        meshed.input = QRect(QPoint(), p.compSize());
+        meshed.output = QRect(0, 0, 960, 540);
+        meshed.resetMesh(3, 3);
+        p.screens[0].slices = {meshed};
+        doc.notifyChanged(true);
+        auto isGreen = [](const QColor &c) { return c.green() > 200 && c.red() < 60 && c.blue() < 60; };
+        auto isMagenta = [](const QColor &c) { return c.red() > 200 && c.blue() > 200 && c.green() < 60; };
+        const bool flat = waitFor([&] {
+            return isWhite(pixelAt(1, {60, 200}, screen)) && isBlue(pixelAt(1, {780, 200}, screen))
+                   && isMagenta(pixelAt(1, {540, 270}, screen));
+        });
+        p.screens[0].slices[0].mesh[4] = QPointF(680, 270);
+        doc.notifyChanged();
+        const bool bent = waitFor([&] {
+            return isGreen(pixelAt(1, {540, 270}, screen)) && isWhite(pixelAt(1, {60, 270}, screen));
+        });
+        save(previews[1], "slice-mesh-warp");
+        check(flat && bent, "mesh warp bends the slice smoothly");
+        doc.select(Selection::ofSlice(0, 0));
+        waitMs(300);
+        window.grab().save(QStringLiteral("%1/projection-window.png").arg(outDir));
+
+        // Edge blend over white: a linear 240 px ramp on the right goes from full to black.
+        Clip whiteSolid = Clip::fromPattern(TestPattern::Solid);
+        whiteSolid.solidColor = Qt::white;
+        doc.setClip(0, 2, whiteSolid);
+        doc.triggerClip(0, 2);
+        Slice blended;
+        blended.input = QRect(QPoint(), p.compSize());
+        blended.output = QRect(0, 0, 960, 540);
+        blended.blendRight = 240;
+        blended.blendCurve = 1.0;
+        blended.blendGamma = 1.0;
+        p.screens[0].slices = {blended};
+        doc.notifyChanged(true);
+        const bool ramp = waitFor([&] {
+            const int full = qGray(pixelAt(1, {400, 270}, screen).rgb());
+            const int mid = qGray(pixelAt(1, {840, 270}, screen).rgb());
+            const int edge = qGray(pixelAt(1, {956, 270}, screen).rgb());
+            return full > 240 && mid > 100 && mid < 160 && edge < 40;
+        });
+        save(previews[1], "slice-edge-blend");
+        check(ramp, "edge blend ramps the overlap down");
+
+        // Projection masks: the middle blacked out; inverted, only the middle stays.
+        Slice plain;
+        plain.input = QRect(QPoint(), p.compSize());
+        plain.output = QRect(0, 0, p.screens[0].width, p.screens[0].height);
+        p.screens[0].slices = {plain};
+        ProjectionMask mask;
+        mask.feather = 0;
+        mask.points = QPolygonF(QRectF(660, 340, 600, 400)).mid(0, 4);
+        p.screens[0].masks = {mask};
+        doc.notifyChanged(true);
+        const bool masked = waitFor([&] {
+            return qGray(pixelAt(1, {960, 540}, screen).rgb()) < 10 && qGray(pixelAt(1, {200, 200}, screen).rgb()) > 240;
+        });
+        p.screens[0].masks[0].invert = true;
+        doc.notifyChanged();
+        const bool inverted = waitFor([&] {
+            return qGray(pixelAt(1, {960, 540}, screen).rgb()) > 240 && qGray(pixelAt(1, {200, 200}, screen).rgb()) < 10;
+        });
+        save(previews[1], "projection-mask");
+        p.screens[0].masks[0].invert = false;
+        p.screens[0].masks[0].feather = 120;
+        doc.notifyChanged();
+        const bool soft = waitFor([&] { // on the edge of a 120 px feather: half way
+            const int g = qGray(pixelAt(1, {660, 540}, screen).rgb());
+            return g > 70 && g < 190;
+        });
+        check(masked && inverted && soft, "projection masks black out with soft edges");
+        p.screens[0].masks.clear();
+        doc.setClip(0, 2, Clip::fromPattern(TestPattern::ColorBars));
+
         p.screens[0].slices = savedSlices;
         doc.notifyChanged(true);
     }

@@ -46,6 +46,10 @@ public:
     void notifyMediaChanged();
 
     Selection selection() const { return m_selection; }
+    // The projection mask whose points the output map edits (-1 = none).
+    int activeMaskScreen() const { return m_maskScreen; }
+    int activeMask() const { return m_mask; }
+    void setActiveMask(int screen, int mask);
     void select(const Selection &sel);
 
     LedWall *selectedWall();
@@ -136,6 +140,8 @@ private:
 
     Project m_project;
     Selection m_selection;
+    int m_maskScreen = -1;
+    int m_mask = -1;
     QString m_filePath;
     bool m_modified = false;
     QJsonObject m_savedJson;

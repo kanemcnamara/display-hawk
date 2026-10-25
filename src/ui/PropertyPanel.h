@@ -8,6 +8,7 @@
 
 class Document;
 class CabinetLayoutEditor;
+class MaskEditor;
 class EffectChainEditor;
 class PanelGridEditor;
 class RenderEngine;
@@ -108,6 +109,7 @@ private:
     QComboBox *m_display;
     QLabel *m_screenInfo;
     CabinetLayoutEditor *m_cabinets;
+    MaskEditor *m_masks;
 
     // Slice
     QLineEdit *m_sliceName;
@@ -119,6 +121,9 @@ private:
     QDoubleSpinBox *m_gainR, *m_gainG, *m_gainB, *m_gamma, *m_blackLevel;
     QComboBox *m_sliceWall;
     QDoubleSpinBox *m_angle;
-    QCheckBox *m_cornerPin;
+    QComboBox *m_warpMode;
+    QSpinBox *m_meshW, *m_meshH;
+    QPushButton *m_meshReset;
+    QDoubleSpinBox *m_blendL, *m_blendR, *m_blendT, *m_blendB, *m_blendCurve, *m_blendGamma;
     QLabel *m_cabinetInfo;
 };

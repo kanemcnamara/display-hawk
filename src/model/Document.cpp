@@ -133,8 +133,20 @@ void Document::select(const Selection &sel)
     emit selectionChanged();
 }
 
+void Document::setActiveMask(int screen, int mask)
+{
+    if (screen == m_maskScreen && mask == m_mask)
+        return;
+    m_maskScreen = screen;
+    m_mask = mask;
+    emit selectionChanged();
+}
+
 void Document::validateSelection()
 {
+    if (m_maskScreen >= m_project.screens.size()
+        || (m_maskScreen >= 0 && m_mask >= m_project.screens[m_maskScreen].masks.size()))
+        m_maskScreen = m_mask = -1;
     Selection &s = m_selection;
     bool ok = true;
     switch (s.kind) {

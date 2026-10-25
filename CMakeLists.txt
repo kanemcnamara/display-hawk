@@ -64,6 +64,8 @@ qt_add_executable(DisplayHawk
     src/ui/AudioReactiveDialog.cpp
     src/ui/CabinetLayoutEditor.h
     src/ui/CabinetLayoutEditor.cpp
+    src/ui/MaskEditor.h
+    src/ui/MaskEditor.cpp
     src/ui/EffectChainEditor.h
     src/ui/EffectChainEditor.cpp
     src/ui/ControlDialog.h
@@ -117,6 +119,7 @@ qt_add_shaders(DisplayHawk "shaders"
         shaders/quad.frag
         shaders/yuv.vert
         shaders/yuv.frag
+        shaders/mesh.vert
         shaders/fx.vert
         shaders/fx.frag
 )

@@ -19,4 +19,8 @@ QImage panelMask(const Project &project);
 // column/row and port), and each port's chain route. Transparent elsewhere; screen-sized.
 QImage outputOverlay(const Project &project, const Screen &screen);
 
+// The screen's projection masks as black with alpha (1 = blacked out), feathered; null if none
+// are enabled.
+QImage maskOverlay(const Screen &screen);
+
 } // namespace Patterns

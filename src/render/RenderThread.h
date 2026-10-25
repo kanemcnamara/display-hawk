@@ -119,6 +119,8 @@ private:
         QByteArray key;
     };
     QVector<ScreenOverlay> m_screenOverlays;
+    QVector<ScreenOverlay> m_maskOverlays; // projection masks, per screen (tex null = no masks)
+    void syncMaskOverlays(QRhiResourceUpdateBatch *u);
     void syncScreenOverlays(QRhiResourceUpdateBatch *u);
     void releaseScreenOverlays();
     double m_masterMod = 1.0;      // render-thread copies

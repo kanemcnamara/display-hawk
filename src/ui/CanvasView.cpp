@@ -199,7 +199,15 @@ QVector<CanvasView::Item> CanvasView::items() const
             Item item{Selection::ofSlice(m_screen, i), sl.output,
                       sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40), label, true,
                       !sl.enabled, {}};
-            if (sl.isWarped()) { // corner pin: its corners are the handles
+            if (sl.isMeshed()) { // its outline follows the mesh; the points are the handles
+                for (int side = 0; side < 4; ++side) // clockwise round the edge from the top-left
+                    for (int k = 0; k < 16; ++k) {
+                        const double f = k / 16.0;
+                        const QPointF st[] = {{f, 0}, {1, f}, {1 - f, 1}, {0, 1 - f}};
+                        item.poly << sl.outputPoint(st[side].x(), st[side].y());
+                    }
+                item.resizable = false;
+            } else if (sl.isWarped()) { // corner pin: its corners are the handles
                 item.poly = sl.warp;
                 item.resizable = false;
             }
@@ -239,8 +247,13 @@ void CanvasView::setRectFor(const Selection &s, const QRect &r)
         m_doc->applyWall(s.wall, w);
     } else if (s.kind == Selection::Slice) {
         Slice &sl = p.screens[s.screen].slices[s.slice];
-        if (m_mode == OutputMap && sl.isWarped()) // moving a pinned slice moves its corners
-            sl.warp.translate(QPointF(r.topLeft() - sl.output.topLeft()));
+        if (m_mode == OutputMap) { // moving a warped slice moves its corners / mesh
+            const QPointF d(r.topLeft() - sl.output.topLeft());
+            if (sl.isWarped())
+                sl.warp.translate(d);
+            for (QPointF &pt : sl.mesh)
+                pt += d;
+        }
         (m_mode == InputMap ? sl.input : sl.output) = r;
         m_doc->notifyChanged();
     }
@@ -260,7 +273,30 @@ QPolygonF CanvasView::selectedWarp() const
     if (m_mode != OutputMap || sel.kind != Selection::Slice || sel.screen != m_screen || sel.screen >= p.screens.size()
         || sel.slice < 0 || sel.slice >= p.screens[sel.screen].slices.size())
         return {};
-    return p.screens[sel.screen].slices[sel.slice].warp;
+    const Slice &sl = p.screens[sel.screen].slices[sel.slice];
+    return sl.isMeshed() ? QPolygonF(sl.mesh) : sl.warp;
+}
+
+ProjectionMask *CanvasView::activeMask()
+{
+    Project &p = m_doc->project();
+    const int s = m_doc->activeMaskScreen(), m = m_doc->activeMask();
+    if (m_mode != OutputMap || s != m_screen || s < 0 || s >= p.screens.size() || m < 0 || m >= p.screens[s].masks.size())
+        return nullptr;
+    return &p.screens[s].masks[m];
+}
+
+int CanvasView::hitMaskPoint(const QPointF &pos)
+{
+    const ProjectionMask *m = activeMask();
+    if (!m)
+        return -1;
+    for (int k = 0; k < m->points.size(); ++k) {
+        const QPointF h = toWidget(m->points[k]);
+        if (qAbs(h.x() - pos.x()) <= kHandleSize && qAbs(h.y() - pos.y()) <= kHandleSize)
+            return k;
+    }
+    return -1;
 }
 
 int CanvasView::hitHandle(const QPointF &pos) const
@@ -269,8 +305,8 @@ int CanvasView::hitHandle(const QPointF &pos) const
     if (!ownsSelection(sel) || sel.kind != Selection::Slice)
         return -1;
     const QPolygonF warp = selectedWarp();
-    if (warp.size() == 4) {
-        for (int k = 0; k < 4; ++k) {
+    if (warp.size() >= 4) { // corner pin or mesh points
+        for (int k = 0; k < warp.size(); ++k) {
             const QPointF h = toWidget(warp[k]);
             if (qAbs(h.x() - pos.x()) <= kHandleSize + 2 && qAbs(h.y() - pos.y()) <= kHandleSize + 2)
                 return kCornerHandle + k;
@@ -345,8 +381,12 @@ void CanvasView::dragTo(const QPointF &widgetPos, bool snapping)
             pt = QPointF(snapValue(qRound(pt.x()), xs, threshold), snapValue(qRound(pt.y()), ys, threshold));
         }
         warp[m_handle - kCornerHandle] = pt;
-        sl.warp = warp;
-        sl.output = warp.boundingRect().toAlignedRect(); // keeps the slice's bounds for sizing and reports
+        if (sl.isMeshed()) {
+            sl.mesh[m_handle - kCornerHandle] = pt;
+        } else {
+            sl.warp = warp;
+            sl.output = warp.boundingRect().toAlignedRect(); // keeps the slice's bounds for sizing and reports
+        }
         m_doc->notifyChanged();
         return;
     }
@@ -438,6 +478,29 @@ void CanvasView::paintEvent(QPaintEvent *)
         }
     }
 
+    // Projection masks: dashed outlines; the one being edited gets point handles.
+    if (m_mode == OutputMap && validScreen) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        const Screen &sc = p.screens[m_screen];
+        for (int i = 0; i < sc.masks.size(); ++i) {
+            const ProjectionMask &m = sc.masks[i];
+            const bool active = m_doc->activeMaskScreen() == m_screen && m_doc->activeMask() == i;
+            QColor c(80, 220, 255);
+            if (!m.enabled)
+                c.setAlpha(100);
+            painter.setPen(QPen(c, active ? 2 : 1, active ? Qt::SolidLine : Qt::DashLine));
+            painter.drawPolygon(toWidget(m.points));
+            if (active) {
+                painter.setPen(QPen(Qt::black, 1));
+                painter.setBrush(c);
+                for (const QPointF &pt : m.points)
+                    painter.drawRect(QRectF(toWidget(pt) - QPointF(kHandleSize / 2, kHandleSize / 2), QSizeF(kHandleSize, kHandleSize)));
+                painter.setBrush(Qt::NoBrush);
+            }
+        }
+        painter.setRenderHint(QPainter::Antialiasing, false);
+    }
+
     // Processor port routes through the cabinets, in chain order, with an arrow at each step.
     if (m_mode == OutputMap && validScreen) {
         painter.setRenderHint(QPainter::Antialiasing);
@@ -470,7 +533,36 @@ void CanvasView::paintEvent(QPaintEvent *)
     if (selected) {
         const QRectF wr = toWidget(selected->rect);
         const QPolygonF warp = selectedWarp();
-        if (warp.size() == 4) { // corner-pin handles, numbered clockwise from the top-left
+        const Selection ss = m_doc->selection();
+        const Slice *meshed = nullptr;
+        if (warp.size() >= 4 && ss.kind == Selection::Slice) {
+            const Slice &sl = p.screens[ss.screen].slices[ss.slice];
+            if (sl.isMeshed())
+                meshed = &sl;
+        }
+        if (meshed) { // mesh: its grid lines, as warped, and a handle per point
+            painter.setRenderHint(QPainter::Antialiasing);
+            painter.setPen(QPen(QColor(255, 210, 60, 170), 1));
+            const int w = meshed->meshW, h = meshed->meshH;
+            for (int y = 0; y < h; ++y) {
+                QPolygonF line;
+                for (int k = 0; k <= 8 * (w - 1); ++k)
+                    line << toWidget(meshed->outputPoint(double(k) / (8 * (w - 1)), double(y) / (h - 1)));
+                painter.drawPolyline(line);
+            }
+            for (int x = 0; x < w; ++x) {
+                QPolygonF line;
+                for (int k = 0; k <= 8 * (h - 1); ++k)
+                    line << toWidget(meshed->outputPoint(double(x) / (w - 1), double(k) / (8 * (h - 1))));
+                painter.drawPolyline(line);
+            }
+            painter.setPen(QPen(Qt::black, 1));
+            painter.setBrush(QColor(255, 210, 60));
+            for (const QPointF &pt : warp)
+                painter.drawEllipse(toWidget(pt), kHandleSize - 2, kHandleSize - 2);
+            painter.setBrush(Qt::NoBrush);
+            painter.setRenderHint(QPainter::Antialiasing, false);
+        } else if (warp.size() == 4) { // corner-pin handles, numbered clockwise from the top-left
             painter.setRenderHint(QPainter::Antialiasing);
             for (int k = 0; k < 4; ++k) {
                 const QPointF h = toWidget(warp[k]);
@@ -524,6 +616,25 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
     if (e->button() != Qt::LeftButton)
         return;
 
+    // The mask being edited: drag a point (Alt+click removes it), or drag inside to move it all.
+    if (ProjectionMask *mask = activeMask()) {
+        const int k = hitMaskPoint(e->position());
+        if (k >= 0 && (e->modifiers() & Qt::AltModifier)) {
+            if (mask->points.size() > 3) {
+                mask->points.removeAt(k);
+                m_doc->notifyChanged();
+                m_doc->commitUndo();
+            }
+            return;
+        }
+        if (k >= 0 || mask->points.containsPoint(toCanvas(e->position()), Qt::OddEvenFill)) {
+            m_drag = k >= 0 ? MaskPoint : MaskMove;
+            m_handle = k;
+            m_startWarp = mask->points;
+            return;
+        }
+    }
+
     const int handle = hitHandle(e->position());
     if (handle >= kCornerHandle) {
         m_drag = Corner;
@@ -573,6 +684,17 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
     if (m_drag == Pan) {
         m_pan += pos - m_lastPos;
         update();
+    } else if (m_drag == MaskPoint || m_drag == MaskMove) {
+        if (ProjectionMask *mask = activeMask()) {
+            const QPointF d = toCanvas(pos) - toCanvas(m_pressPos);
+            const QPointF step(qRound(d.x()), qRound(d.y()));
+            mask->points = m_startWarp;
+            if (m_drag == MaskPoint)
+                mask->points[m_handle] += step;
+            else
+                mask->points.translate(step);
+            m_doc->notifyChanged();
+        }
     } else if (m_drag == Move || m_drag == Resize || m_drag == Corner) {
         dragTo(pos, !(e->modifiers() & Qt::ShiftModifier));
     } else {
@@ -590,7 +712,7 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
 
 void CanvasView::mouseReleaseEvent(QMouseEvent *)
 {
-    if (m_drag == Move || m_drag == Resize || m_drag == Corner)
+    if (m_drag == Move || m_drag == Resize || m_drag == Corner || m_drag == MaskPoint || m_drag == MaskMove)
         m_doc->commitUndo(); // one undo step per drag
     m_drag = NoDrag;
     m_handle = -1;
@@ -599,6 +721,30 @@ void CanvasView::mouseReleaseEvent(QMouseEvent *)
 
 void CanvasView::mouseDoubleClickEvent(QMouseEvent *e)
 {
+    // Editing a mask: a double-click near one of its edges adds a point there.
+    if (ProjectionMask *mask = activeMask()) {
+        const QPointF c = toCanvas(e->position());
+        int best = -1;
+        double bestDist = 12.0 / scale();
+        for (int k = 0; k < mask->points.size(); ++k) {
+            const QPointF a = mask->points[k], b = mask->points[(k + 1) % mask->points.size()];
+            const QPointF ab = b - a;
+            const double len2 = QPointF::dotProduct(ab, ab);
+            const double t = len2 > 0 ? qBound(0.0, QPointF::dotProduct(c - a, ab) / len2, 1.0) : 0.0;
+            const QPointF d = c - (a + ab * t);
+            const double dist = qSqrt(QPointF::dotProduct(d, d));
+            if (dist < bestDist) {
+                bestDist = dist;
+                best = k;
+            }
+        }
+        if (best >= 0) {
+            mask->points.insert(best + 1, QPointF(qRound(c.x()), qRound(c.y())));
+            m_doc->notifyChanged();
+            m_doc->commitUndo();
+            return;
+        }
+    }
     if (hitItem(items(), e->position()) < 0)
         resetView();
 }

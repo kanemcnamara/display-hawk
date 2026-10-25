@@ -219,10 +219,30 @@ QImage outputOverlay(const Project &project, const Screen &screen)
         if (!sl.enabled)
             continue;
         const QColor c = sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40);
-        const QPolygonF quad = sl.outputQuad();
+        // The outline as warped; warped slices also get an 8 x 8 alignment grid.
+        QPolygonF quad;
+        const int steps = sl.isMeshed() ? 32 : 1;
+        for (int side = 0; side < 4; ++side)
+            for (int k = 0; k < steps; ++k) {
+                const double f = double(k) / steps;
+                const QPointF st[] = {{f, 0}, {1, f}, {1 - f, 1}, {0, 1 - f}};
+                quad << sl.outputPoint(st[side].x(), st[side].y());
+            }
         p.setPen(QPen(c, line));
         p.setBrush(Qt::NoBrush);
         p.drawPolygon(quad);
+        if (sl.isMeshed() || sl.isWarped()) {
+            p.setPen(QPen(QColor(255, 255, 255, 150), qMax(1, line / 2)));
+            for (int g = 1; g < 8; ++g) {
+                QPolygonF across, down;
+                for (int k = 0; k <= 32; ++k) {
+                    across << sl.outputPoint(k / 32.0, g / 8.0);
+                    down << sl.outputPoint(g / 8.0, k / 32.0);
+                }
+                p.drawPolyline(across);
+                p.drawPolyline(down);
+            }
+        }
         const QRectF box = quad.boundingRect();
         const QString title = sl.isCabinet() ? QStringLiteral("C%1 R%2").arg(sl.cabinet.x() + 1).arg(sl.cabinet.y() + 1)
                                              : sl.name;
@@ -261,6 +281,86 @@ QImage outputOverlay(const Project &project, const Screen &screen)
         p.setBrush(Qt::NoBrush);
     }
     return img;
+}
+
+namespace {
+
+// Three passes of a running-sum box blur approximate a Gaussian; radius in pixels.
+void boxBlur(QImage &img, int radius)
+{
+    if (radius < 1)
+        return;
+    const int w = img.width(), h = img.height();
+    QVector<int> line(qMax(w, h));
+    for (int pass = 0; pass < 3; ++pass) {
+        for (int y = 0; y < h; ++y) { // horizontal
+            uchar *row = img.scanLine(y);
+            int sum = 0;
+            for (int x = -radius; x <= radius; ++x)
+                sum += row[qBound(0, x, w - 1)];
+            for (int x = 0; x < w; ++x) {
+                line[x] = sum / (2 * radius + 1);
+                sum += row[qMin(w - 1, x + radius + 1)] - row[qMax(0, x - radius)];
+            }
+            for (int x = 0; x < w; ++x)
+                row[x] = uchar(line[x]);
+        }
+        for (int x = 0; x < w; ++x) { // vertical
+            int sum = 0;
+            for (int y = -radius; y <= radius; ++y)
+                sum += img.scanLine(qBound(0, y, h - 1))[x];
+            for (int y = 0; y < h; ++y) {
+                line[y] = sum / (2 * radius + 1);
+                sum += img.scanLine(qMin(h - 1, y + radius + 1))[x] - img.scanLine(qMax(0, y - radius))[x];
+            }
+            for (int y = 0; y < h; ++y)
+                img.scanLine(y)[x] = uchar(line[y]);
+        }
+    }
+}
+
+} // namespace
+
+QImage maskOverlay(const Screen &screen)
+{
+    const QSize size = QSize(screen.width, screen.height).expandedTo(QSize(1, 1));
+    QImage blackout(size, QImage::Format_Grayscale8); // 255 = blacked out
+    blackout.fill(0);
+    bool any = false;
+    for (const ProjectionMask &m : screen.masks) {
+        if (!m.enabled || m.points.size() < 3)
+            continue;
+        any = true;
+        QImage shape(size, QImage::Format_Grayscale8);
+        shape.fill(m.invert ? 255 : 0);
+        {
+            QPainter p(&shape);
+            p.setRenderHint(QPainter::Antialiasing);
+            p.setPen(Qt::NoPen);
+            p.setBrush(m.invert ? Qt::black : Qt::white);
+            p.drawPolygon(m.points);
+        }
+        // Three box passes of radius r spread an edge over about 3r pixels.
+        boxBlur(shape, qRound(m.feather / 3.0));
+        for (int y = 0; y < size.height(); ++y) {
+            uchar *dst = blackout.scanLine(y);
+            const uchar *src = shape.constScanLine(y);
+            for (int x = 0; x < size.width(); ++x)
+                dst[x] = qMax(dst[x], src[x]);
+        }
+    }
+    if (!any)
+        return {};
+    QImage out(size, QImage::Format_RGBA8888);
+    for (int y = 0; y < size.height(); ++y) {
+        const uchar *a = blackout.constScanLine(y);
+        uchar *o = out.scanLine(y);
+        for (int x = 0; x < size.width(); ++x) {
+            o[4 * x] = o[4 * x + 1] = o[4 * x + 2] = 0;
+            o[4 * x + 3] = a[x];
+        }
+    }
+    return out;
 }
 
 QImage panelMask(const Project &project)

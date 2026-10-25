@@ -71,9 +71,11 @@ private:
     double m_zoom = 1.0;
     QPointF m_pan;
 
-    enum DragKind { NoDrag, Pan, Move, Resize, Corner };
+    enum DragKind { NoDrag, Pan, Move, Resize, Corner, MaskPoint, MaskMove };
     static constexpr int kCornerHandle = 100; // hitHandle() result for corner-pin corner k: 100 + k
-    QPolygonF selectedWarp() const; // corner pin of the selected slice on this output map, if any
+    QPolygonF selectedWarp() const; // corner pin or mesh points of the selected slice on this output map
+    ProjectionMask *activeMask();    // the mask being edited on this output map, if any
+    int hitMaskPoint(const QPointF &pos);
     DragKind m_drag = NoDrag;
     int m_handle = -1;
     Selection m_dragSel;

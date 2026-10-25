@@ -1,6 +1,7 @@
 #version 440
 
 layout(location = 0) out vec3 vUV; // (u, v) * q and q: perspective-correct for corner pins
+layout(location = 1) out vec3 vLocal; // point of the upright output rect (s, t) * q and q (edge blending)
 
 layout(std140, binding = 0) uniform Buf {
     mat4 clipCorr;  // QRhi clip-space correction for the active backend
@@ -17,6 +18,8 @@ layout(std140, binding = 0) uniform Buf {
     vec4 quadTop;   // flags2.w == 1: corner-pinned destination, top-left and top-right corners
     vec4 quadBottom;// bottom-left and bottom-right corners (target pixels)
     vec4 quadQ;     // projective weights for top-left, top-right, bottom-left, bottom-right
+    vec4 blend;       // edge blend widths, fractions of the output: left, right, top, bottom
+    vec4 blendParams; // x curve steepness, y 1 / projector gamma, z 1 = blending on
 } ubuf;
 
 void main()
@@ -51,4 +54,5 @@ void main()
                                  : ubuf.src.xy + s * ubuf.src.zw;
     if (ubuf.flags.w == 1) uv.y = 1.0 - uv.y;
     vUV = vec3(uv * q, q);
+    vLocal = vec3(c * q, q);
 }

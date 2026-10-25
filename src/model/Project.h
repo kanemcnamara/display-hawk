@@ -66,6 +66,17 @@ struct Slice {
     // Corner pin: the output as a free quad (top-left, top-right, bottom-right, bottom-left, screen
     // pixels), mapped with perspective. Empty = the output rect.
     QPolygonF warp;
+    // Mesh warp (projection on uneven surfaces): meshW x meshH control points, row by row from the
+    // top-left, in screen pixels, interpolated smoothly (Catmull-Rom). Empty = no mesh. A mesh
+    // takes precedence over the corner pin.
+    int meshW = 0;
+    int meshH = 0;
+    QVector<QPointF> mesh;
+    // Edge blending for overlapping projectors: soft-edge widths in output pixels on each side,
+    // the blend curve's steepness (1 = linear) and the projector gamma it compensates.
+    double blendLeft = 0.0, blendRight = 0.0, blendTop = 0.0, blendBottom = 0.0;
+    double blendCurve = 2.0;
+    double blendGamma = 2.2;
     int rotation = 0; // quarter turns clockwise, 0..3
     bool flipH = false;
     bool flipV = false;
@@ -89,10 +100,30 @@ struct Slice {
     }
     bool isCabinet() const { return wall >= 0 && cabinet.x() >= 0; }
     bool isWarped() const { return warp.size() == 4; }
+    bool isMeshed() const { return meshW >= 2 && meshH >= 2 && mesh.size() == meshW * meshH; }
+    bool hasBlend() const { return blendLeft > 0 || blendRight > 0 || blendTop > 0 || blendBottom > 0; }
+    // Where the point (s, t) of the upright output rect (0..1 from its top-left) lands on the screen:
+    // through the mesh, the corner pin (with perspective) or the output rect.
+    QPointF outputPoint(double s, double t) const;
+    // A flat mesh of w x h points over the current output shape.
+    void resetMesh(int w, int h);
+    QPointF outputPointFlat(double s, double t) const; // ignoring the mesh
+    // Re-samples the mesh to w x h points, keeping its current shape.
+    void resizeMesh(int w, int h);
     // Where the slice lands on the screen: the corner pin, or the output rect's corners.
     QPolygonF outputQuad() const;
     // The sampled area: the input rect turned by `angle`, corners clockwise from the top-left.
     QPolygonF inputPolygon() const;
+};
+
+// A projection mask on a screen: a polygon (screen pixels) whose inside is blacked out, or with
+// `invert` everything outside it, with a soft edge `feather` pixels wide.
+struct ProjectionMask {
+    QString name = QStringLiteral("Mask");
+    bool enabled = true;
+    bool invert = false;
+    double feather = 20.0;
+    QPolygonF points;
 };
 
 // How a wall's cabinets are laid out on a processor's output canvas, one slice per fitted cabinet.
@@ -127,6 +158,7 @@ struct Screen {
     bool enabled = true;
     QVector<Slice> slices;
     QVector<CabinetLayout> cabinetLayouts; // regenerated into cabinet slices when walls change
+    QVector<ProjectionMask> masks;         // drawn over the output, after every slice
 };
 
 // One cell of the clip deck. An empty id means an empty slot.
