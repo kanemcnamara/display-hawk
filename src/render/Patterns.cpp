@@ -1,6 +1,7 @@
 ﻿#include "render/Patterns.h"
 
 #include <QPainter>
+#include "model/CabinetMapping.h"
 #include <QPainterPath>
 #include <QtMath>
 
@@ -204,6 +205,61 @@ QImage panelMap(const Project &project, bool transparentBackground)
         p.drawText(nameRect, Qt::AlignLeft | Qt::AlignTop, label);
     }
     p.resetTransform();
+    return img;
+}
+
+QImage outputOverlay(const Project &project, const Screen &screen)
+{
+    QImage img(QSize(screen.width, screen.height).expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::transparent);
+    QPainter p(&img);
+    p.setRenderHint(QPainter::Antialiasing);
+    const int line = qMax(2, screen.width / 640);
+    for (const Slice &sl : screen.slices) {
+        if (!sl.enabled)
+            continue;
+        const QColor c = sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40);
+        const QPolygonF quad = sl.outputQuad();
+        p.setPen(QPen(c, line));
+        p.setBrush(Qt::NoBrush);
+        p.drawPolygon(quad);
+        const QRectF box = quad.boundingRect();
+        const QString title = sl.isCabinet() ? QStringLiteral("C%1 R%2").arg(sl.cabinet.x() + 1).arg(sl.cabinet.y() + 1)
+                                             : sl.name;
+        const QString sub = sl.port > 0 ? QStringLiteral("P%1").arg(sl.port) : QString();
+        const int fontPx = qBound(8, int(qMin(box.width() / qMax<qsizetype>(4, title.size()), box.height() / 4)), 120);
+        p.setFont(pixelFont(fontPx));
+        const QRectF titleRect(box.x(), box.center().y() - fontPx, box.width(), fontPx * 1.3);
+        p.setPen(QColor(0, 0, 0, 220));
+        p.drawText(titleRect.translated(2, 2), Qt::AlignCenter, title);
+        p.setPen(Qt::white);
+        p.drawText(titleRect, Qt::AlignCenter, title);
+        if (!sub.isEmpty()) {
+            p.setFont(pixelFont(qMax(8, fontPx * 3 / 4)));
+            p.setPen(c);
+            p.drawText(QRectF(box.x(), titleRect.bottom(), box.width(), fontPx * 1.1), Qt::AlignCenter, sub);
+        }
+    }
+    // Port routes: where each port's data enters and the order it runs through the cabinets.
+    for (const CabinetMapping::PortRoute &route : CabinetMapping::portRoutes(screen)) {
+        p.setPen(QPen(route.color, line * 2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(route.points);
+        p.setBrush(route.color);
+        for (int i = 1; i < route.points.size(); ++i) {
+            const QPointF a = route.points[i - 1], b = route.points[i];
+            const QPointF d = b - a;
+            const double len = qSqrt(d.x() * d.x() + d.y() * d.y());
+            if (len < 1)
+                continue;
+            const QPointF dir = d / len, n(-dir.y(), dir.x()), mid = (a + b) / 2;
+            const double s = line * 5;
+            p.drawPolygon(QPolygonF({mid + dir * s, mid - dir * s * 0.8 + n * s * 0.8, mid - dir * s * 0.8 - n * s * 0.8}));
+        }
+        if (!route.points.isEmpty()) {
+            p.drawEllipse(route.points.first(), line * 6, line * 6); // where the cable comes in
+        }
+        p.setBrush(Qt::NoBrush);
+    }
     return img;
 }
 

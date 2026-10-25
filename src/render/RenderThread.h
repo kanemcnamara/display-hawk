@@ -37,6 +37,7 @@ public:
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
     void setModulation(double master, const QVector<double> &layerOpacity, const QVector<EffectParamMod> &effects);
+    void setIdentifySlices(bool on);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -110,6 +111,16 @@ private:
     double m_sharedMasterMod = 1.0;
     QVector<double> m_sharedLayerMod;
     QVector<EffectParamMod> m_sharedEffectMod;
+    bool m_sharedIdentify = false;
+    bool m_identify = false;
+    // Per screen while identifying slices: the overlay drawn on top of its output.
+    struct ScreenOverlay {
+        QRhiTexture *tex = nullptr;
+        QByteArray key;
+    };
+    QVector<ScreenOverlay> m_screenOverlays;
+    void syncScreenOverlays(QRhiResourceUpdateBatch *u);
+    void releaseScreenOverlays();
     double m_masterMod = 1.0;      // render-thread copies
     QVector<double> m_layerMod;
     QVector<EffectParamMod> m_effectMod;

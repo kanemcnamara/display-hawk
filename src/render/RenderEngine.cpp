@@ -197,6 +197,7 @@ bool RenderEngine::start(QString *error)
         }
 #endif
         m_thread = new RenderThread(b.impl, m_fallbackSurface);
+        m_thread->setIdentifySlices(m_identifySlices);
         connect(m_thread, &RenderThread::previewReady, this, &RenderEngine::previewReady);
         connect(m_thread, &RenderThread::statsUpdated, this, &RenderEngine::statsUpdated);
         pushProject();
@@ -298,6 +299,13 @@ void RenderEngine::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)
 {
     if (m_thread)
         m_thread->setNdiOutputs(outputs);
+}
+
+void RenderEngine::setIdentifySlices(bool on)
+{
+    m_identifySlices = on;
+    if (m_thread)
+        m_thread->setIdentifySlices(on);
 }
 
 void RenderEngine::setShareOutputs(const QVector<QPair<int, QString>> &outputs)

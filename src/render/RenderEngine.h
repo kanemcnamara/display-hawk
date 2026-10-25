@@ -73,6 +73,9 @@ public:
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
     // Screens shared with other apps on this machine (Spout / Syphon), screen index -> name.
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
+    // Draws every slice's outline, name, port and the port routes over the outputs (for the LED tech).
+    void setIdentifySlices(bool on);
+    bool identifySlices() const { return m_identifySlices; }
 
     // Live modulation on top of the faders (audio-reactive): master and per-layer opacity
     // multipliers, and effect parameter values. (1, {}, {}) means none.
@@ -106,5 +109,6 @@ private:
     RenderThread *m_thread = nullptr;
     QOffscreenSurface *m_fallbackSurface = nullptr;
     QString m_backendName;
+    bool m_identifySlices = false;
     QSurface::SurfaceType m_surfaceType = QSurface::OpenGLSurface;
 };

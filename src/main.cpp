@@ -923,6 +923,18 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         };
         check(waitFor(cabinetsMatch, 8000), "each output cabinet shows its own cabinet's content");
         save(previews[1], "cabinet-layout-output");
+        // Identify slices: port 2's route starts with a marker in its colour on the real output.
+        {
+            const QSize screen(p.screens[0].width, p.screens[0].height);
+            const QPointF start = QRectF(p.screens[0].slices[40].output).center();
+            const QColor port2 = CabinetMapping::portColor(2);
+            engine.setIdentifySlices(true);
+            const bool shown = waitFor([&] { return near(pixelAt(1, start, screen), port2.red(), port2.green(), port2.blue()); });
+            save(previews[1], "identify-slices");
+            engine.setIdentifySlices(false);
+            const bool hidden = waitFor([&] { return !near(pixelAt(1, start, screen), port2.red(), port2.green(), port2.blue()); });
+            check(shown && hidden, "identify slices draws port routes on the outputs");
+        }
         doc.select(Selection::ofScreen(0));
         waitMs(300);
         window.grab().save(QStringLiteral("%1/cabinet-layout-window.png").arg(outDir));

@@ -4,6 +4,7 @@
 #include "render/Patterns.h"
 #include "ui/OutputWindow.h"
 
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <cmath>
 #include <QOffscreenSurface>
@@ -158,6 +159,50 @@ void RenderThread::setModulation(double master, const QVector<double> &layerOpac
     m_sharedMasterMod = master;
     m_sharedLayerMod = layerOpacity;
     m_sharedEffectMod = effects;
+}
+
+void RenderThread::setIdentifySlices(bool on)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedIdentify = on;
+}
+
+void RenderThread::releaseScreenOverlays()
+{
+    for (ScreenOverlay &o : m_screenOverlays) {
+        if (o.tex) {
+            m_quad.forgetTexture(o.tex);
+            o.tex->deleteLater();
+        }
+    }
+    m_screenOverlays.clear();
+}
+
+void RenderThread::syncScreenOverlays(QRhiResourceUpdateBatch *u)
+{
+    if (!m_identify) {
+        if (!m_screenOverlays.isEmpty())
+            releaseScreenOverlays();
+        return;
+    }
+    const Project &p = m_project;
+    while (m_screenOverlays.size() > p.screens.size()) {
+        ScreenOverlay o = m_screenOverlays.takeLast();
+        if (o.tex) {
+            m_quad.forgetTexture(o.tex);
+            o.tex->deleteLater();
+        }
+    }
+    m_screenOverlays.resize(p.screens.size());
+    const QJsonArray screens = p.toJson()["screens"].toArray();
+    for (int i = 0; i < p.screens.size(); ++i) {
+        const QByteArray key = QJsonDocument(screens[i].toObject()).toJson(QJsonDocument::Compact);
+        ScreenOverlay &o = m_screenOverlays[i];
+        if (key != o.key || !o.tex) {
+            uploadImage(u, o.tex, Patterns::outputOverlay(p, p.screens[i]));
+            o.key = key;
+        }
+    }
 }
 
 void RenderThread::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
@@ -411,6 +456,7 @@ void RenderThread::run()
     m_layers.clear();
     delete m_overlayTex;
     m_overlayTex = nullptr;
+    releaseScreenOverlays();
     delete m_maskTex;
     m_maskTex = nullptr;
     m_yuv.release();
@@ -447,6 +493,7 @@ void RenderThread::syncState()
     m_masterMod = m_sharedMasterMod;
     m_layerMod = m_sharedLayerMod;
     m_effectMod = m_sharedEffectMod;
+    m_identify = m_sharedIdentify;
     const bool ndiChanged = m_ndiDirty;
     if (m_ndiDirty) {
         m_ndiWanted = m_sharedNdi;
@@ -886,6 +933,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     }
 
     QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
+    syncScreenOverlays(u); // uploaded with the composition pass, before any output is drawn
     if (p.maskToPanels && !p.walls.isEmpty()) {
         // Multiply by white-where-there-are-panels: what the real wall can show, nothing else.
         const QByteArray key = overlayKey();
@@ -1022,6 +1070,14 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         qp.gamma = float(sl.gamma);
         qp.blackLevel = float(sl.blackLevel);
         draws.append(qp);
+    }
+    const int index = int(&screen - m_project.screens.constData());
+    if (m_identify && index >= 0 && index < m_screenOverlays.size() && m_screenOverlays[index].tex) {
+        RhiQuad::Params ov;
+        ov.target = target;
+        ov.dst = screenRect;
+        ov.texture = m_screenOverlays[index].tex;
+        draws.append(ov);
     }
     return draws;
 }

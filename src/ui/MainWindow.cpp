@@ -268,6 +268,11 @@ void MainWindow::buildActions()
     connect(m_liveAction, &QAction::toggled, this, &MainWindow::setLive);
     QAction *identify = output->addAction(tr("&Identify Displays"), QKeySequence(tr("Ctrl+I")), this,
                                           &MainWindow::identifyDisplays);
+    QAction *identifySlices = output->addAction(tr("Identify &Slices on Outputs"));
+    identifySlices->setCheckable(true);
+    identifySlices->setShortcut(QKeySequence(tr("Ctrl+Shift+I")));
+    identifySlices->setToolTip(tr("Draw every slice's outline, cabinet, port and the port routes on the real outputs"));
+    connect(identifySlices, &QAction::toggled, m_engine, &RenderEngine::setIdentifySlices);
     output->addSeparator();
     m_liveOnLaunchAction = output->addAction(tr("Go live on launch"));
     m_liveOnLaunchAction->setCheckable(true);
