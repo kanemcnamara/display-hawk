@@ -369,7 +369,7 @@ void RenderThread::run()
         m_initDone.release();
         return;
     }
-    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi)) {
+    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi) || !m_blend.init(m_rhi)) {
         m_initError = tr("Could not load shaders.");
         delete m_rhi;
         m_rhi = nullptr;
@@ -453,7 +453,7 @@ void RenderThread::run()
         if (compositionDone)
             ++frames;
         if (fpsClock.elapsed() >= 1000) {
-            emit statsUpdated(qRound(frames * 1000.0 / fpsClock.elapsed()), m_comp.size);
+            emit statsUpdated(qRound(frames * 1000.0 / fpsClock.elapsed()), m_compSize);
             if (m_perfLog && m_perfFrames > 0)
                 qInfo("perf: %d video frames/s (%d on GPU path), %.2f ms each to prepare", m_perfFrames,
                       m_perfGpuFrames, m_perfNs / 1e6 / m_perfFrames);
@@ -479,9 +479,12 @@ void RenderThread::run()
     syncShareOutputs();
     for (LayerState &ls : m_layers)
         m_fx.forgetTexture(ls.target.tex);
-    m_fx.forgetTexture(m_comp.tex);
     m_fx.release();
-    releaseTarget(m_comp);
+    m_blend.release();
+    releaseMixer(m_compMix, false);
+    for (Mixer &gm : m_groupMix)
+        releaseMixer(gm, false);
+    m_groupMix.clear();
     releaseTarget(m_compFinal);
     m_compOut = nullptr;
     releaseTarget(m_previewTarget[0]);
@@ -615,16 +618,22 @@ void RenderThread::releaseOutput(Output &o)
 #endif
 }
 
-bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format)
+bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format,
+                                bool loadable)
 {
-    if (t.tex && t.size == size && t.format == format)
+    if (t.tex && t.size == size && t.format == format && (!loadable || t.rtLoad))
         return true;
     if (t.tex) {
         m_quad.forgetTexture(t.tex);
         m_fx.forgetTexture(t.tex);
+        m_blend.forgetTexture(t.tex);
         // Still referenced by command buffers in flight; QRhi frees them once those complete.
         t.rt->deleteLater();
         t.rp->deleteLater();
+        if (t.rtLoad) {
+            t.rtLoad->deleteLater();
+            t.rpLoad->deleteLater();
+        }
         t.tex->deleteLater();
         t = Target();
     }
@@ -641,6 +650,13 @@ bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable, QRh
     t.rp = t.rt->newCompatibleRenderPassDescriptor();
     t.rt->setRenderPassDescriptor(t.rp);
     t.rt->create();
+    if (loadable) {
+        t.rtLoad = m_rhi->newTextureRenderTarget({QRhiColorAttachment(t.tex)},
+                                                 QRhiTextureRenderTarget::PreserveColorContents);
+        t.rpLoad = t.rtLoad->newCompatibleRenderPassDescriptor();
+        t.rtLoad->setRenderPassDescriptor(t.rpLoad);
+        t.rtLoad->create();
+    }
     t.size = size;
     t.format = format;
     return true;
@@ -650,6 +666,8 @@ void RenderThread::releaseTarget(Target &t)
 {
     delete t.rt;
     delete t.rp;
+    delete t.rtLoad;
+    delete t.rpLoad;
     delete t.tex;
     t = Target();
 }
@@ -880,10 +898,9 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     const qint64 now = m_clock.elapsed();
     const int maxSize = m_rhi->resourceLimit(QRhi::TextureSizeMax);
     const QSize compSize = p.compSize().boundedTo(QSize(maxSize, maxSize));
-    if (!ensureTarget(m_comp, compSize, false)) {
-        m_compOut = nullptr;
-        return;
-    }
+    m_compSize = compSize;
+    m_blend.newFrame();
+    mixBegin(m_compMix, p.background);
     const double timeSec = now / 1000.0;
     m_fx.setFrame(now, &p);
 
@@ -893,8 +910,42 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
 
     // Each layer renders its clip(s) into its own texture (premultiplied), then is blended into the
     // composition with its opacity and blend mode, bottom layer first.
-    QVector<RhiQuad::Params> compDraws;
+    // Layer groups: consecutive layers of a group mix together first, then into the composition.
+    Mixer *groupMix = nullptr;
+    const LayerGroup *openGroup = nullptr;
+    auto closeGroup = [&] {
+        if (!openGroup)
+            return;
+        Mixer &gm = *groupMix;
+        const bool drew = gm.drew;
+        QRhiTexture *tex = mixFinish(cb, gm, compSize);
+        if (drew && tex && openGroup->opacity > 0.0) {
+            tex = m_fx.apply(cb, QStringLiteral("group:") + openGroup->id, tex, compSize, openGroup->effects, {}, timeSec);
+            RhiQuad::Params gp;
+            gp.target = compSize;
+            gp.dst = QRectF(QPointF(), compSize);
+            gp.texture = tex;
+            gp.texFlipY = m_rhi->isYUpInFramebuffer();
+            gp.opacity = float(openGroup->opacity);
+            gp.blend = blendNeedsShader(openGroup->blend) ? RhiQuad::Blend::Normal : RhiQuad::fromLayer(openGroup->blend);
+            mixLayer(cb, m_compMix, gp, openGroup->blend, compSize);
+        }
+        openGroup = nullptr;
+        groupMix = nullptr;
+    };
     for (const Layer &layer : p.layers) {
+        const LayerGroup *group = layer.group.isEmpty() ? nullptr : p.groupById(layer.group);
+        if (group && group->bypass)
+            continue;
+        if (group != openGroup) {
+            closeGroup();
+            if (group) {
+                openGroup = group;
+                groupMix = &m_groupMix[group->id];
+                groupMix->lastUsed = now;
+                mixBegin(*groupMix, Qt::transparent);
+            }
+        }
         LayerState &st = m_layers[layer.id];
         st.lastUsed = now;
         const Clip *active = layer.activeClip();
@@ -919,7 +970,8 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
 
         // Audio-reactive modulation scales the fader value; the fader itself is untouched.
         const int layerIndex = int(&layer - p.layers.constData());
-        const double opacity = layer.opacity * (layerIndex < m_layerMod.size() ? m_layerMod[layerIndex] : 1.0);
+        const double opacity = layer.opacity * (layerIndex < m_layerMod.size() ? m_layerMod[layerIndex] : 1.0)
+                               * p.crossfadeGain(layer.crossfade);
         if (layer.bypass || (anySolo && !layer.solo) || opacity <= 0.0)
             continue;
         if (st.current.isEmpty() && st.previous.isEmpty())
@@ -960,26 +1012,27 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         lp.texture = layerTex;
         lp.texFlipY = m_rhi->isYUpInFramebuffer();
         lp.opacity = float(opacity);
-        lp.blend = RhiQuad::fromLayer(layer.blend);
+        lp.blend = blendNeedsShader(layer.blend) ? RhiQuad::Blend::Normal : RhiQuad::fromLayer(layer.blend);
         // Clips were fitted into the wall as if it were upright; the layer turns with the wall.
         if (layer.targetWall >= 0 && layer.targetWall < p.walls.size() && p.walls[layer.targetWall].rotated()) {
             const LedWall &w = p.walls[layer.targetWall];
             lp.dstAngle = w.angle;
             lp.pivot = QRectF(w.rect()).center();
         }
-        compDraws.append(lp);
+        mixLayer(cb, groupMix ? *groupMix : m_compMix, lp, layer.blend, compSize);
     }
+    closeGroup();
 
     // Composition effects run on the layers over the background, before the panel mask, the
     // overlay and the master fader, which then go on in a second pass.
     bool compEffects = false;
     for (const EffectInstance &e : p.compEffects)
         compEffects = compEffects || e.enabled;
+    QVector<RhiQuad::Params> compDraws; // drawn on top of the mix: panel mask, overlay, master
     QRhiTexture *finalInput = nullptr;
     if (compEffects) {
-        m_quad.recordPass(cb, m_comp.rt, p.background, compDraws);
-        compDraws.clear();
-        finalInput = m_fx.apply(cb, QStringLiteral("#composition"), m_comp.tex, compSize, p.compEffects,
+        QRhiTexture *mixed = mixFinish(cb, m_compMix, compSize);
+        finalInput = m_fx.apply(cb, QStringLiteral("#composition"), mixed, compSize, p.compEffects,
                                 effectOverrides(-1), timeSec);
         RhiQuad::Params cp;
         cp.target = compSize;
@@ -1042,12 +1095,82 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         m_quad.recordPass(cb, m_compFinal.rt, Qt::black, compDraws, u);
         m_compOut = m_compFinal.tex;
     } else {
-        m_quad.recordPass(cb, m_comp.rt, p.background, compDraws, u);
-        m_compOut = m_comp.tex;
+        // Mask, overlay and master go into the mix's last pass (usually the only one).
+        m_compMix.pending += compDraws;
+        m_compOut = mixFinish(cb, m_compMix, compSize, u);
     }
 
     if (now - m_lastGc > 1000)
         collectGarbage(now);
+}
+
+void RenderThread::mixBegin(Mixer &m, const QColor &clear)
+{
+    m.started = false;
+    m.drew = false;
+    m.clear = clear;
+    m.pending.clear();
+}
+
+void RenderThread::mixFlush(QRhiCommandBuffer *cb, Mixer &m, const QSize &size, QRhiResourceUpdateBatch *u)
+{
+    Target &t = m.t[m.cur];
+    if (!ensureTarget(t, size, false, QRhiTexture::RGBA8, true)) {
+        if (u)
+            u->release();
+        return;
+    }
+    // The first pass clears to the mixer's colour; later ones draw on what is there.
+    m_quad.recordPass(cb, m.started ? t.rtLoad : t.rt, m.clear, m.pending, u);
+    m.started = true;
+    m.pending.clear();
+}
+
+void RenderThread::mixLayer(QRhiCommandBuffer *cb, Mixer &m, const RhiQuad::Params &quad, BlendMode mode,
+                            const QSize &size)
+{
+    m.drew = true;
+    if (!blendNeedsShader(mode)) {
+        m.pending.append(quad);
+        return;
+    }
+    // Shader blend: what is below must be in a texture first, then base + layer -> the other one.
+    mixFlush(cb, m, size);
+    Target &other = m.t[1 - m.cur];
+    if (!ensureTarget(other, size, false, QRhiTexture::RGBA8, true))
+        return;
+    m_blend.blend(cb, other.rt, m.t[m.cur].tex, quad.texture, mode, quad.opacity, m.clear.alpha() == 255);
+    m.cur = 1 - m.cur;
+}
+
+QRhiTexture *RenderThread::mixFinish(QRhiCommandBuffer *cb, Mixer &m, const QSize &size, QRhiResourceUpdateBatch *u)
+{
+    if (!m.started || !m.pending.isEmpty() || u)
+        mixFlush(cb, m, size, u);
+    return m.t[m.cur].tex;
+}
+
+void RenderThread::releaseMixer(Mixer &m, bool deferred)
+{
+    for (Target &t : m.t) {
+        if (!t.tex)
+            continue;
+        m_quad.forgetTexture(t.tex);
+        m_fx.forgetTexture(t.tex);
+        m_blend.forgetTexture(t.tex);
+        if (deferred) {
+            t.rt->deleteLater();
+            t.rp->deleteLater();
+            if (t.rtLoad) {
+                t.rtLoad->deleteLater();
+                t.rpLoad->deleteLater();
+            }
+            t.tex->deleteLater();
+            t = Target();
+        } else {
+            releaseTarget(t);
+        }
+    }
 }
 
 void RenderThread::transformDraws(QVector<RhiQuad::Params> &draws, int from, const QPointF &centre, double scale,
@@ -1121,6 +1244,14 @@ void RenderThread::collectGarbage(qint64 now)
     constexpr qint64 kIdleMs = 5000;
     m_lastGc = now;
     m_fx.collectGarbage(now, kIdleMs);
+    for (auto it = m_groupMix.begin(); it != m_groupMix.end();) {
+        if (now - it->lastUsed > kIdleMs) {
+            releaseMixer(*it, true);
+            it = m_groupMix.erase(it);
+        } else {
+            ++it;
+        }
+    }
     for (auto it = m_clipTargets.begin(); it != m_clipTargets.end();) {
         if (now - it->lastUsed > kIdleMs) {
             if (it->target.tex) {
@@ -1201,7 +1332,7 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         return draws;
     const double sx = screenRect.width() / screen.width;
     const double sy = screenRect.height() / screen.height;
-    const double cw = m_comp.size.width(), ch = m_comp.size.height();
+    const double cw = m_compSize.width(), ch = m_compSize.height();
     for (const Slice &sl : screen.slices) {
         if (!sl.enabled || sl.input.isEmpty() || sl.output.isEmpty())
             continue;
@@ -1294,7 +1425,7 @@ void RenderThread::renderPreviews(QRhiCommandBuffer *cb)
             RhiQuad::Params qp;
             qp.target = px;
             qp.dst = QRectF(QPointF(), px);
-            const double cw = m_comp.size.width(), ch = m_comp.size.height();
+            const double cw = m_compSize.width(), ch = m_compSize.height();
             qp.src = QRectF(req.region.x() / cw, req.region.y() / ch, req.region.width() / cw,
                             req.region.height() / ch);
             qp.texFlipY = m_rhi->isYUpInFramebuffer();

@@ -31,6 +31,8 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSlider>
+#include <QDialog>
+#include <QFrame>
 #include <QStackedWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -200,6 +202,22 @@ QWidget *PropertyPanel::buildCompositionPage()
     of->addRow(m_maskToPanels);
     v->addWidget(overlay);
 
+    auto *groups = new QGroupBox(tr("Layer groups"));
+    auto *gl = new QVBoxLayout(groups);
+    m_groupList = new QVBoxLayout;
+    gl->addLayout(m_groupList);
+    auto *addGroup = new QPushButton(tr("Add group"));
+    addGroup->setToolTip(tr("Then choose the group on each layer's page"));
+    gl->addWidget(addGroup);
+    v->addWidget(groups);
+    connect(addGroup, &QPushButton::clicked, this, [this] {
+        LayerGroup g;
+        g.id = newId();
+        g.name = tr("Group %1").arg(m_doc->project().groups.size() + 1);
+        m_doc->project().groups.append(g);
+        m_doc->notifyChanged(true);
+    });
+
     auto *fx = new QGroupBox(tr("Composition effects"));
     auto *fxl = new QVBoxLayout(fx);
     m_compFx = new EffectChainEditor(m_doc);
@@ -270,6 +288,77 @@ void PropertyPanel::refreshComposition()
     setValue(m_overlayOpacity, qRound(p.overlayOpacity * 100.0));
     m_maskToPanels->setChecked(p.maskToPanels);
     m_compFx->setLayer(-1);
+    if (int(p.groups.size()) != m_builtGroups)
+        rebuildGroups();
+}
+
+void PropertyPanel::rebuildGroups()
+{
+    while (QLayoutItem *item = m_groupList->takeAt(0)) {
+        if (QWidget *w = item->widget()) {
+            w->hide();
+            w->deleteLater();
+        }
+        delete item;
+    }
+    const Project &p = m_doc->project();
+    m_builtGroups = int(p.groups.size());
+    for (int i = 0; i < p.groups.size(); ++i) {
+        const LayerGroup &g = p.groups[i];
+        auto edit = [this, i](const std::function<void(LayerGroup &)> &fn, bool structural = false) {
+            QVector<LayerGroup> &list = m_doc->project().groups;
+            if (i < list.size()) {
+                fn(list[i]);
+                m_doc->notifyChanged(structural);
+            }
+        };
+        auto *name = new QLineEdit(g.name);
+        auto *opacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
+        opacity->setValue(g.opacity * 100.0);
+        auto *blend = new QComboBox;
+        for (int b = 0; b < kBlendModeCount; ++b)
+            blend->addItem(blendModeName(BlendMode(b)), b);
+        blend->setCurrentIndex(int(g.blend));
+        auto *bypass = new QCheckBox(tr("Bypass"));
+        bypass->setChecked(g.bypass);
+        auto *effects = new QPushButton(tr("Effects..."));
+        auto *remove = new QPushButton(tr("Remove"));
+        connect(name, &QLineEdit::textEdited, this, [edit](const QString &t) { edit([&](LayerGroup &x) { x.name = t; }, true); });
+        connect(opacity, &QDoubleSpinBox::valueChanged, this, [edit](double v) { edit([v](LayerGroup &x) { x.opacity = v / 100.0; }); });
+        connect(blend, &QComboBox::activated, this, [edit](int b) { edit([b](LayerGroup &x) { x.blend = BlendMode(b); }); });
+        connect(bypass, &QCheckBox::toggled, this, [edit](bool on) { edit([on](LayerGroup &x) { x.bypass = on; }); });
+        connect(effects, &QPushButton::clicked, this, [this, id = g.id, groupName = g.name] {
+            auto *dlg = new QDialog(this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            dlg->setWindowTitle(tr("%1 effects").arg(groupName));
+            dlg->resize(420, 520);
+            auto *dv = new QVBoxLayout(dlg);
+            auto *editor = new EffectChainEditor(m_doc);
+            editor->setGroup(id);
+            connect(m_doc, &Document::changed, editor, &EffectChainEditor::refresh);
+            dv->addWidget(editor);
+            dv->addStretch();
+            dlg->show();
+        });
+        connect(remove, &QPushButton::clicked, this, [this, i] {
+            Project &pr = m_doc->project();
+            if (i >= pr.groups.size())
+                return;
+            const QString id = pr.groups[i].id;
+            pr.groups.removeAt(i);
+            for (Layer &l : pr.layers)
+                if (l.group == id)
+                    l.group.clear();
+            m_doc->notifyChanged(true);
+        });
+        auto *box = new QFrame;
+        box->setFrameShape(QFrame::StyledPanel);
+        auto *form = new QFormLayout(box);
+        form->addRow(tr("Name"), name);
+        form->addRow(tr("Opacity / blend"), row({opacity, blend}));
+        form->addRow(QString(), row({bypass, effects, remove}));
+        m_groupList->addWidget(box);
+    }
 }
 
 // ---------------------------------------------------------------- Layer
@@ -285,8 +374,11 @@ QWidget *PropertyPanel::buildLayerPage()
     m_layerVolume = makeDouble(0, 100, 0, QStringLiteral(" %"));
     m_layerVolume->setToolTip(tr("Audio level of this layer's clips"));
     m_layerBlend = new QComboBox;
-    for (int i = 0; i <= int(BlendMode::Darken); ++i)
-        m_layerBlend->addItem(blendModeName(BlendMode(i)));
+    for (int i = 0; i < kBlendModeCount; ++i) {
+        m_layerBlend->addItem(blendModeName(BlendMode(i)), i);
+        if (i == int(BlendMode::Darken) || i == int(BlendMode::Luminosity))
+            m_layerBlend->insertSeparator(m_layerBlend->count());
+    }
     m_layerTarget = new QComboBox;
     m_layerTarget->setToolTip(tr("Clips on this layer are fitted into this area"));
     m_layerTransition = makeSpin(0, 60000, QStringLiteral(" ms"));
@@ -298,6 +390,13 @@ QWidget *PropertyPanel::buildLayerPage()
     f->addRow(tr("Opacity"), m_layerOpacity);
     f->addRow(tr("Volume"), m_layerVolume);
     f->addRow(tr("Blend"), m_layerBlend);
+    m_layerSide = new QComboBox;
+    m_layerSide->addItems({tr("Not on the crossfader"), tr("A"), tr("B")});
+    m_layerGroup = new QComboBox;
+    m_layerGroup->setToolTip(tr("Layers of a group mix together first, then into the composition with the "
+                                "group's opacity, blend mode and effects (edit groups on the Composition page)"));
+    f->addRow(tr("Crossfader"), m_layerSide);
+    f->addRow(tr("Group"), m_layerGroup);
     f->addRow(tr("Fit clips into"), m_layerTarget);
     f->addRow(tr("Transition"), m_layerTransition);
     m_transition = new QComboBox;
@@ -327,11 +426,26 @@ QWidget *PropertyPanel::buildLayerPage()
         editLayer([&](Layer &l) { l.name = t; }, true);
     });
     connect(m_layerBlend, &QComboBox::activated, this, [this](int i) {
-        editLayer([&](Layer &l) { l.blend = BlendMode(i); });
+        const int mode = m_layerBlend->itemData(i).toInt();
+        editLayer([&](Layer &l) { l.blend = BlendMode(mode); });
     });
     connect(m_layerTarget, &QComboBox::activated, this, [this](int i) {
         const int wall = m_layerTarget->itemData(i).toInt();
         editLayer([&](Layer &l) { l.targetWall = wall; });
+    });
+    connect(m_layerSide, &QComboBox::activated, this, [this](int i) {
+        editLayer([&](Layer &l) { l.crossfade = CrossfadeSide(i); });
+    });
+    connect(m_layerGroup, &QComboBox::activated, this, [this](int i) {
+        QString id = m_layerGroup->itemData(i).toString();
+        if (id == QLatin1String("#new")) { // a new group with just this layer
+            LayerGroup g;
+            g.id = newId();
+            g.name = tr("Group %1").arg(m_doc->project().groups.size() + 1);
+            m_doc->project().groups.append(g);
+            id = g.id;
+        }
+        editLayer([&](Layer &l) { l.group = id; }, true);
     });
     connect(m_transition, &QComboBox::activated, this, [this](int i) {
         editLayer([&](Layer &l) { l.transition = TransitionStyle(i); });
@@ -382,9 +496,16 @@ void PropertyPanel::refreshLayer()
     setText(m_layerName, l->name);
     setValue(m_layerOpacity, qRound(l->opacity * 100.0));
     setValue(m_layerVolume, qRound(l->volume * 100.0));
-    m_layerBlend->setCurrentIndex(int(l->blend));
+    m_layerBlend->setCurrentIndex(m_layerBlend->findData(int(l->blend)));
     setValue(m_layerTransition, l->transitionMs);
     m_transition->setCurrentIndex(int(l->transition));
+    m_layerSide->setCurrentIndex(int(l->crossfade));
+    m_layerGroup->clear();
+    m_layerGroup->addItem(tr("None"), QString());
+    for (const LayerGroup &g : m_doc->project().groups)
+        m_layerGroup->addItem(g.name, g.id);
+    m_layerGroup->addItem(tr("New group..."), QStringLiteral("#new"));
+    m_layerGroup->setCurrentIndex(qMax(0, m_layerGroup->findData(l->group)));
     m_autopilot->setCurrentIndex(int(l->autopilot));
     setValue(m_autopilotSeconds, l->autopilotSeconds);
     m_autopilotSeconds->setEnabled(l->autopilot != ::Autopilot::Off);

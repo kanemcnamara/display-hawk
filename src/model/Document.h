@@ -103,6 +103,7 @@ public:
     void setAudioMaster(double volume);
     void setAudioMuted(bool muted);
     void setBpm(double bpm); // playback state: no undo step
+    void setCrossfader(double value); // playback state
     // Quantized triggering: returns how long until the next beat (beats = 1) or bar (4); set by
     // the tempo clock. Without one, quantizing is off.
     void setQuantizer(const std::function<int(int beats)> &msUntil) { m_quantizer = msUntil; }

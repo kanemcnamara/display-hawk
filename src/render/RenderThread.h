@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Project.h"
+#include "render/BlendCompositor.h"
 #include "render/EffectRenderer.h"
 #include "render/RenderEngine.h"
 #include "render/RhiQuad.h"
@@ -58,15 +59,35 @@ private:
         QRhiTexture *tex = nullptr;
         QRhiTextureRenderTarget *rt = nullptr;
         QRhiRenderPassDescriptor *rp = nullptr;
+        // Mixers draw onto earlier passes: a second render target that keeps the contents.
+        QRhiTextureRenderTarget *rtLoad = nullptr;
+        QRhiRenderPassDescriptor *rpLoad = nullptr;
         QSize size;
         QRhiTexture::Format format = QRhiTexture::RGBA8;
     };
+    // Accumulates layers: fixed-function blends are batched into one pass; a shader blend mode
+    // reads what is there so far and writes into the other texture of the pair.
+    struct Mixer {
+        Target t[2];
+        int cur = 0;
+        bool started = false;
+        bool drew = false;
+        QColor clear;
+        QVector<RhiQuad::Params> pending;
+        qint64 lastUsed = 0;
+    };
+    void mixBegin(Mixer &m, const QColor &clear);
+    void mixFlush(QRhiCommandBuffer *cb, Mixer &m, const QSize &size, QRhiResourceUpdateBatch *u = nullptr);
+    void mixLayer(QRhiCommandBuffer *cb, Mixer &m, const RhiQuad::Params &quad, BlendMode mode, const QSize &size);
+    QRhiTexture *mixFinish(QRhiCommandBuffer *cb, Mixer &m, const QSize &size, QRhiResourceUpdateBatch *u = nullptr);
+    void releaseMixer(Mixer &m, bool deferred);
 
     bool createRhi();
     void syncState();
     bool ensureSwapChain(Output &o);
     void releaseOutput(Output &o);
-    bool ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format = QRhiTexture::RGBA8);
+    bool ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format = QRhiTexture::RGBA8,
+                      bool loadable = false);
     void releaseTarget(Target &t);
     void uploadImage(QRhiResourceUpdateBatch *u, QRhiTexture *&tex, const QImage &image);
     void renderComposition(QRhiCommandBuffer *cb);
@@ -162,9 +183,12 @@ private:
     Project m_project;
     PreviewRequest m_preview[2];
     QVector<Output> m_outputs;
-    Target m_comp;
+    Mixer m_compMix;                  // layers over the background
+    QHash<QString, Mixer> m_groupMix; // layer groups, by group id
+    QSize m_compSize;
+    BlendCompositor m_blend;
     Target m_compFinal;               // composition effects, then mask / overlay / master on top
-    QRhiTexture *m_compOut = nullptr; // what screens and previews show: m_comp or m_compFinal
+    QRhiTexture *m_compOut = nullptr; // what screens and previews show: the mix or m_compFinal
     Target m_previewTarget[2];
     // Per clip: its pattern image or its newest media frame.
     struct ClipTex {

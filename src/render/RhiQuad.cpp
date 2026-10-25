@@ -121,9 +121,10 @@ QRhiGraphicsPipeline *RhiQuad::pipelineFor(QRhiRenderPassDescriptor *rp, Blend m
     QRhiGraphicsPipeline *ps = m_rhi->newGraphicsPipeline();
     P::TargetBlend blend;
     blend.enable = true;
-    // Layer modes composite premultiplied colour onto the opaque composition and leave its alpha alone.
-    blend.srcAlpha = P::Zero;
-    blend.dstAlpha = P::One;
+    // Layer modes composite premultiplied colour; alpha accumulates as "over", so the opaque
+    // composition stays opaque and a layer group (cleared transparent) gets its layers' coverage.
+    blend.srcAlpha = P::One;
+    blend.dstAlpha = P::OneMinusSrcAlpha;
     switch (mode) {
     case Blend::Straight:
         blend.srcColor = P::SrcAlpha;

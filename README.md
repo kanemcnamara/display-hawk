@@ -141,6 +141,13 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - Each playing media clip has its own decoder; it is released shortly after the clip stops (after any crossfade).
 
 
+### Mixing
+
+- **Blend modes** per layer (and group): Normal, Add, Screen, Multiply, Lighten, Darken (GPU blender) and Subtract, Difference, Exclusion, Overlay, Soft light, Hard light, Colour dodge, Colour burn, Hue, Saturation, Colour, Luminosity (a shader that reads everything below). **Mask** modes turn a layer into a mask for everything below it: *alpha*, *luma* or *inverse luma*.
+- **Layer groups** (composition properties → *Layer groups*, then *Group* on a layer): a group's layers mix together first and then into the composition with the group's opacity, blend mode, bypass and effects.
+- **A/B crossfader** in the deck's top bar: each layer's A/B button (or its *Crossfader* setting) puts it on a side; left plays A, right plays B, both play full in the middle. OSC `/dh/crossfader 0..1`, MIDI learnable.
+- **Decks**: tabs above the clip grid, each a page of columns (*+ Deck* adds eight); double-click a tab to rename it, right-click to remove it. Playing clips keep playing when you switch decks; *All* shows every column.
+
 ### Clip playback
 
 Each clip (select it in the deck) has:

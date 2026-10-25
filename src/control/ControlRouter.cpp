@@ -22,6 +22,7 @@ Kind kindOf(ControlAction a)
     case ControlAction::LayerVolume:
     case ControlAction::AudioMaster:
     case ControlAction::EffectParam:
+    case ControlAction::Crossfader:
         return Kind::Continuous;
     case ControlAction::AudioMute:
     case ControlAction::Blackout:
@@ -138,6 +139,8 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         apply(ControlAction::AudioMaster, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("mute"))
         apply(ControlAction::AudioMute, 0, 0, value, toggleMode);
+    else if (p[1] == QLatin1String("crossfader") && hasArg)
+        apply(ControlAction::Crossfader, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("tap") && value != 0.0)
         apply(ControlAction::TapTempo, 0, 0, 1.0, Mode::Press);
     else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("resync") && value != 0.0)
@@ -277,6 +280,9 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
         break;
     case ControlAction::TapTempo:
         emit tapTempoRequested();
+        break;
+    case ControlAction::Crossfader:
+        m_doc->setCrossfader(value);
         break;
     case ControlAction::TempoResync:
         emit tempoResyncRequested();

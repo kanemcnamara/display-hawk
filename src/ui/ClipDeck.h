@@ -9,6 +9,7 @@ class Document;
 class RenderEngine;
 class TempoClock;
 class QComboBox;
+class QTabBar;
 class QDoubleSpinBox;
 class QPushButton;
 class QSlider;
@@ -43,6 +44,10 @@ private:
     QSlider *m_audioMaster;
     QPushButton *m_audioMute;
     QDoubleSpinBox *m_bpm;
+    QSlider *m_crossfader;
+    QTabBar *m_deckTabs;
+    void rebuildDeckTabs();
+    bool m_rebuildingTabs = false;
     QComboBox *m_tempoSource, *m_quantize;
     QWidget *m_beatLamps;
     int m_beatInBar = -1;
@@ -59,6 +64,8 @@ class ClipGrid : public QWidget
 public:
     ClipGrid(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
     void updateSize();
+    // The columns shown: a deck's range (count -1 = every column).
+    void setColumnRange(int first, int count);
 
 signals:
     void midiLearnRequested(int action, int layer, int column);
@@ -84,6 +91,9 @@ private:
 
     Document *m_doc;
     RenderEngine *m_engine;
+    int m_first = 0;
+    int m_count = -1;
+    int lastColumn() const; // one past the last column shown
     QHash<QByteArray, QPixmap> m_thumbs;
     QPair<int, int> m_pressCell{-1, -1};
     QPoint m_pressPos;

@@ -21,6 +21,8 @@ qt_add_executable(DisplayHawk
     src/render/Effects.h
     src/render/Effects.cpp
     src/render/EffectRenderer.h
+    src/render/BlendCompositor.h
+    src/render/BlendCompositor.cpp
     src/render/EffectRenderer.cpp
     src/render/RhiQuad.h
     src/render/RhiQuad.cpp
@@ -128,6 +130,8 @@ qt_add_shaders(DisplayHawk "shaders"
         shaders/yuv.vert
         shaders/yuv.frag
         shaders/mesh.vert
+        shaders/blend.vert
+        shaders/blend.frag
         shaders/fx.vert
         shaders/fx.frag
 )

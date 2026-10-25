@@ -40,6 +40,21 @@ QString blendModeName(BlendMode m)
     case BlendMode::Multiply: return QStringLiteral("Multiply");
     case BlendMode::Lighten: return QStringLiteral("Lighten");
     case BlendMode::Darken: return QStringLiteral("Darken");
+    case BlendMode::Subtract: return QStringLiteral("Subtract");
+    case BlendMode::Difference: return QStringLiteral("Difference");
+    case BlendMode::Exclusion: return QStringLiteral("Exclusion");
+    case BlendMode::Overlay: return QStringLiteral("Overlay");
+    case BlendMode::SoftLight: return QStringLiteral("Soft light");
+    case BlendMode::HardLight: return QStringLiteral("Hard light");
+    case BlendMode::ColorDodge: return QStringLiteral("Colour dodge");
+    case BlendMode::ColorBurn: return QStringLiteral("Colour burn");
+    case BlendMode::Hue: return QStringLiteral("Hue");
+    case BlendMode::Saturation: return QStringLiteral("Saturation");
+    case BlendMode::Color: return QStringLiteral("Colour");
+    case BlendMode::Luminosity: return QStringLiteral("Luminosity");
+    case BlendMode::AlphaMask: return QStringLiteral("Mask: alpha");
+    case BlendMode::LumaMask: return QStringLiteral("Mask: luma");
+    case BlendMode::InverseLumaMask: return QStringLiteral("Mask: inverse luma");
     }
     return {};
 }
@@ -231,6 +246,23 @@ QString autopilotName(Autopilot a)
     return {};
 }
 
+const LayerGroup *Project::groupById(const QString &id) const
+{
+    for (const LayerGroup &g : groups)
+        if (g.id == id)
+            return &g;
+    return nullptr;
+}
+
+double Project::crossfadeGain(CrossfadeSide side) const
+{
+    if (side == CrossfadeSide::A)
+        return qBound(0.0, (1.0 - crossfader) * 2.0, 1.0);
+    if (side == CrossfadeSide::B)
+        return qBound(0.0, crossfader * 2.0, 1.0);
+    return 1.0;
+}
+
 QString tempoSourceName(TempoSource s)
 {
     switch (s) {
@@ -315,6 +347,7 @@ QString controlActionName(ControlAction a)
     case ControlAction::EffectParam: return QStringLiteral("Effect parameter");
     case ControlAction::TapTempo: return QStringLiteral("Tap tempo");
     case ControlAction::TempoResync: return QStringLiteral("Tempo resync (bar start)");
+    case ControlAction::Crossfader: return QStringLiteral("Crossfader (A/B)");
     }
     return {};
 }
@@ -696,6 +729,8 @@ QJsonObject Project::toJson() const
                                     {"targetWall", l.targetWall},
                                     {"transitionMs", l.transitionMs},
                                     {"transition", int(l.transition)},
+                                    {"crossfade", int(l.crossfade)},
+                                    {"group", l.group},
                                     {"autopilot", int(l.autopilot)},
                                     {"autopilotSeconds", l.autopilotSeconds},
                                     {"activeColumn", l.activeColumn},
@@ -724,6 +759,16 @@ QJsonObject Project::toJson() const
                                   {"effect", l.effect}, {"param", l.param}, {"shape", int(l.shape)},
                                   {"beats", l.beats}, {"amount", l.amount}, {"phase", l.phase}});
     root["lfos"] = lfoArr;
+    root["crossfader"] = crossfader;
+    QJsonArray groupArr;
+    for (const LayerGroup &g : groups)
+        groupArr.append(QJsonObject{{"id", g.id}, {"name", g.name}, {"opacity", g.opacity}, {"blend", int(g.blend)},
+                                    {"bypass", g.bypass}, {"effects", effectsToJson(g.effects)}});
+    root["groups"] = groupArr;
+    QJsonArray deckArr;
+    for (const Deck &d : decks)
+        deckArr.append(QJsonObject{{"name", d.name}, {"first", d.firstColumn}, {"count", d.columnCount}});
+    root["decks"] = deckArr;
     QJsonArray linkArr;
     for (const AudioLink &l : audioReactive.links)
         linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer},
@@ -872,7 +917,9 @@ Project Project::fromJson(const QJsonObject &root)
             l.name = o["name"].toString(l.name);
             l.opacity = o["opacity"].toDouble(1.0);
             l.volume = qBound(0.0, o["volume"].toDouble(1.0), 1.0);
-            l.blend = BlendMode(o["blend"].toInt(0));
+            l.blend = BlendMode(qBound(0, o["blend"].toInt(0), kBlendModeCount - 1));
+            l.crossfade = CrossfadeSide(qBound(0, o["crossfade"].toInt(0), 2));
+            l.group = o["group"].toString();
             l.bypass = o["bypass"].toBool(false);
             l.solo = o["solo"].toBool(false);
             l.targetWall = o["targetWall"].toInt(-1);
@@ -911,6 +958,27 @@ Project Project::fromJson(const QJsonObject &root)
     p.bpm = qBound(20.0, tempo["bpm"].toDouble(120.0), 300.0);
     p.tempoSource = TempoSource(qBound(0, tempo["source"].toInt(0), 2));
     p.quantize = TriggerQuantize(qBound(0, tempo["quantize"].toInt(0), 2));
+    p.crossfader = qBound(0.0, root["crossfader"].toDouble(0.5), 1.0);
+    for (const QJsonValue &v : root["groups"].toArray()) {
+        const QJsonObject o = v.toObject();
+        LayerGroup g;
+        g.id = o["id"].toString();
+        g.name = o["name"].toString(g.name);
+        g.opacity = qBound(0.0, o["opacity"].toDouble(1.0), 1.0);
+        g.blend = BlendMode(qBound(0, o["blend"].toInt(0), kBlendModeCount - 1));
+        g.bypass = o["bypass"].toBool(false);
+        g.effects = effectsFromJson(o["effects"].toArray());
+        if (!g.id.isEmpty())
+            p.groups.append(g);
+    }
+    for (const QJsonValue &v : root["decks"].toArray()) {
+        const QJsonObject o = v.toObject();
+        Deck d;
+        d.name = o["name"].toString(d.name);
+        d.firstColumn = qMax(0, o["first"].toInt(0));
+        d.columnCount = qMax(1, o["count"].toInt(8));
+        p.decks.append(d);
+    }
     for (const QJsonValue &v : root["lfos"].toArray()) {
         const QJsonObject o = v.toObject();
         Lfo l;

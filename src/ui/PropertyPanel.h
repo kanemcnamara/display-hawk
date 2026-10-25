@@ -21,6 +21,7 @@ class QPushButton;
 class QSpinBox;
 class QSlider;
 class QStackedWidget;
+class QVBoxLayout;
 
 // Inspector for whatever is selected: composition/content, LED wall, screen or slice.
 class PropertyPanel : public QWidget
@@ -95,7 +96,10 @@ private:
     QLabel *m_positionText;
     QDoubleSpinBox *m_clipX, *m_clipY, *m_clipScale, *m_clipRotation, *m_clipOpacity;
     EffectChainEditor *m_clipFx;
-    QComboBox *m_transition, *m_autopilot;
+    QComboBox *m_transition, *m_autopilot, *m_layerSide, *m_layerGroup;
+    QVBoxLayout *m_groupList;
+    void rebuildGroups();
+    int m_builtGroups = -1;
     QDoubleSpinBox *m_autopilotSeconds;
     void refreshPosition();
     QDoubleSpinBox *m_clipVolume;

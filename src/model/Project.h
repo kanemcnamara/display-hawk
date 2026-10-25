@@ -13,7 +13,18 @@ enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3, Sha
 enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid, MovingBars };
 constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
-enum class BlendMode { Normal = 0, Add, Screen, Multiply, Lighten, Darken };
+// Normal..Darken use the GPU's blender; the rest are mixed by a shader that reads what is below.
+// The mask modes make the layer a mask for everything below it.
+enum class BlendMode {
+    Normal = 0, Add, Screen, Multiply, Lighten, Darken,
+    Subtract, Difference, Exclusion, Overlay, SoftLight, HardLight, ColorDodge, ColorBurn,
+    Hue, Saturation, Color, Luminosity,
+    AlphaMask, LumaMask, InverseLumaMask
+};
+constexpr int kBlendModeCount = int(BlendMode::InverseLumaMask) + 1;
+inline bool blendNeedsShader(BlendMode m) { return int(m) > int(BlendMode::Darken); }
+// Which side of the A/B crossfader a layer is on.
+enum class CrossfadeSide { None = 0, A, B };
 // What a media clip does at its out point.
 enum class PlayMode { Loop = 0, Bounce, OnceHold, OnceClear };
 constexpr int kPlayModeCount = int(PlayMode::OnceClear) + 1;
@@ -246,6 +257,8 @@ struct Layer {
     int targetWall = -1;   // clips are fitted into this wall; -1 = whole composition
     int transitionMs = 0;  // crossfade when the playing clip changes
     TransitionStyle transition = TransitionStyle::Crossfade;
+    CrossfadeSide crossfade = CrossfadeSide::None;
+    QString group; // id of the LayerGroup it belongs to; empty = none
     Autopilot autopilot = Autopilot::Off;
     double autopilotSeconds = 10.0; // clips without an end (stills, patterns, live inputs)
     int activeColumn = -1; // playback state: which clip is playing, -1 = none
@@ -253,6 +266,25 @@ struct Layer {
     QVector<EffectInstance> effects; // applied to the layer before it is blended
 
     const Clip *activeClip() const;
+};
+
+// Layers mixed together first, then into the composition as one, with the group's own opacity,
+// blend mode and effects. A group's layers are the ones naming it (adjacent ones mix together).
+struct LayerGroup {
+    QString id;
+    QString name = QStringLiteral("Group");
+    double opacity = 1.0;
+    BlendMode blend = BlendMode::Normal;
+    bool bypass = false;
+    QVector<EffectInstance> effects;
+};
+
+// A page of the clip deck: a run of columns shown together. Playing clips keep playing when the
+// deck shown changes.
+struct Deck {
+    QString name = QStringLiteral("Deck");
+    int firstColumn = 0;
+    int columnCount = 8;
 };
 
 // Something a controller can do. Layer and column are 0-based indices (layer 0 = bottom).
@@ -272,8 +304,9 @@ enum class ControlAction {
     EffectParam,    // continuous (layer, column = effect index, param); layer -1 = composition
     TapTempo,       // trigger
     TempoResync,    // trigger: now is the first beat of a bar
+    Crossfader,     // continuous: 0 = A, 1 = B
 };
-constexpr int kControlActionCount = int(ControlAction::TempoResync) + 1;
+constexpr int kControlActionCount = int(ControlAction::Crossfader) + 1;
 QString controlActionName(ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
@@ -376,6 +409,12 @@ struct Project {
     AudioReactiveSettings audioReactive;
     QVector<Lfo> lfos;
     double bpm = 120.0; // playback state, like the master: tapping does not make undo steps
+    double crossfader = 0.5; // playback state: 0 = A only, 0.5 = both, 1 = B only
+    QVector<LayerGroup> groups;
+    QVector<Deck> decks; // empty = one deck with every column
+    const LayerGroup *groupById(const QString &id) const;
+    // Multiplier for a layer's opacity from the crossfader (both sides full in the middle).
+    double crossfadeGain(CrossfadeSide side) const;
     TempoSource tempoSource = TempoSource::Internal;
     TriggerQuantize quantize = TriggerQuantize::Off;
     bool blackout = false; // playback state

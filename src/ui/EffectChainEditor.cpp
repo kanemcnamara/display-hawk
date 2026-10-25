@@ -82,6 +82,16 @@ void EffectChainEditor::setLayer(int layer)
     refresh();
 }
 
+void EffectChainEditor::setGroup(const QString &groupId)
+{
+    m_group = groupId;
+    m_layer = 0;
+    m_column = -1;
+    m_builtFor.clear();
+    m_builtLayer = -2;
+    refresh();
+}
+
 void EffectChainEditor::setClip(int layer, int column)
 {
     m_layer = layer;
@@ -92,6 +102,12 @@ void EffectChainEditor::setClip(int layer, int column)
 QVector<EffectInstance> *EffectChainEditor::chain()
 {
     Project &p = m_doc->project();
+    if (!m_group.isEmpty()) {
+        for (LayerGroup &g : p.groups)
+            if (g.id == m_group)
+                return &g.effects;
+        return nullptr;
+    }
     if (m_layer < 0)
         return &p.compEffects;
     if (m_layer >= p.layers.size())
@@ -321,7 +337,7 @@ void EffectChainEditor::rebuild()
                 h->addWidget(spin);
                 field = w;
             }
-            if (m_column >= 0) { // clip effects: no remote control address yet
+            if (m_column >= 0 || !m_group.isEmpty()) { // clip and group effects: no remote control address yet
                 form->addRow(pd.name, field);
                 continue;
             }

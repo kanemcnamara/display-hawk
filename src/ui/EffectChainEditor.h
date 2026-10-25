@@ -19,6 +19,7 @@ public:
 
     void setLayer(int layer); // -1 = composition
     void setClip(int layer, int column);
+    void setGroup(const QString &groupId);
     void refresh();
 
 signals:
@@ -34,6 +35,7 @@ private:
     Document *m_doc;
     int m_layer = -1;
     int m_column = -1; // >= 0: the chain of that clip
+    QString m_group;   // non-empty: the chain of that layer group
     QVBoxLayout *m_list;
     QStringList m_builtFor; // effect types the widgets were built for
     int m_builtLayer = -2;

@@ -1,4 +1,7 @@
 #include "ui/ClipDeck.h"
+#include <QLineEdit>
+#include <QTabBar>
+#include <QInputDialog>
 #include <QDoubleSpinBox>
 #include <QComboBox>
 #include "control/TempoClock.h"
@@ -78,7 +81,16 @@ public:
         buttons->addWidget(m_bypass);
         buttons->addWidget(m_solo);
         buttons->addWidget(clear);
+        m_side = new QToolButton;
+        m_side->setFixedSize(24, 22);
+        m_side->setToolTip(tr("Crossfader side: none, A or B (click to change)"));
+        buttons->addWidget(m_side);
         buttons->addStretch();
+        QObject::connect(m_side, &QToolButton::clicked, this, [this] {
+            Layer &l = m_doc->project().layers[m_layer];
+            l.crossfade = CrossfadeSide((int(l.crossfade) + 1) % 3);
+            m_doc->notifyChanged();
+        });
         v->addWidget(m_name);
         v->addWidget(m_opacity);
         v->addLayout(buttons);
@@ -106,6 +118,13 @@ public:
         m_opacity->setValue(qRound(l.opacity * 100.0));
         m_bypass->setChecked(l.bypass);
         m_solo->setChecked(l.solo);
+        static const char *const sides[] = {"\u2013", "A", "B"};
+        m_side->setText(QString::fromUtf8(sides[int(l.crossfade)]));
+        m_side->setStyleSheet(l.crossfade == CrossfadeSide::None ? QString()
+                              : QStringLiteral("QToolButton { background: %1; color: black; font-weight: bold; }")
+                                    .arg(l.crossfade == CrossfadeSide::A ? QStringLiteral("#ff8a50") : QStringLiteral("#50b8ff")));
+        const LayerGroup *g = l.group.isEmpty() ? nullptr : p.groupById(l.group);
+        m_name->setToolTip(g ? tr("Group: %1").arg(g->name) : QString());
         m_refreshing = false;
         const Selection s = m_doc->selection();
         const bool selected = (s.kind == Selection::Layer || s.kind == Selection::Clip) && s.layer == m_layer;
@@ -121,6 +140,7 @@ private:
     QSlider *m_opacity;
     QToolButton *m_bypass;
     QToolButton *m_solo;
+    QToolButton *m_side;
     bool m_refreshing = false;
 };
 
@@ -240,6 +260,23 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
     top->addWidget(m_audioMaster);
     top->addWidget(m_audioMute);
     top->addSpacing(16);
+    m_crossfader = new QSlider(Qt::Horizontal);
+    m_crossfader->setRange(0, 1000);
+    m_crossfader->setFixedWidth(140);
+    m_crossfader->setToolTip(tr("A/B crossfader: left plays the A layers, right the B layers, both in the middle "
+                                "(OSC /dh/crossfader, or map a MIDI control)"));
+    auto *labelA = new QLabel(QStringLiteral("A"));
+    auto *labelB = new QLabel(QStringLiteral("B"));
+    labelA->setStyleSheet(QStringLiteral("color: #ff8a50; font-weight: bold;"));
+    labelB->setStyleSheet(QStringLiteral("color: #50b8ff; font-weight: bold;"));
+    top->addWidget(labelA);
+    top->addWidget(m_crossfader);
+    top->addWidget(labelB);
+    top->addSpacing(16);
+    connect(m_crossfader, &QSlider::valueChanged, this, [this](int v) {
+        if (!m_refreshing)
+            m_doc->setCrossfader(v / 1000.0);
+    });
     top->addWidget(new QLabel(tr("Master")));
     top->addWidget(m_master);
     top->addWidget(m_blackout);
@@ -266,10 +303,69 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
 
+    // Decks: pages of columns. Double-click a tab to rename it; right-click to remove it.
+    m_deckTabs = new QTabBar;
+    m_deckTabs->setExpanding(false);
+    m_deckTabs->setContextMenuPolicy(Qt::CustomContextMenu);
+    auto *addDeck = new QToolButton;
+    addDeck->setText(tr("+ Deck"));
+    addDeck->setToolTip(tr("A new page of 8 empty columns"));
+    auto *tabs = new QHBoxLayout;
+    tabs->setContentsMargins(6, 0, 6, 0);
+    tabs->addWidget(m_deckTabs);
+    tabs->addWidget(addDeck);
+    tabs->addStretch();
+    connect(m_deckTabs, &QTabBar::currentChanged, this, [this](int i) {
+        if (m_rebuildingTabs)
+            return;
+        const QVector<Deck> &decks = m_doc->project().decks;
+        if (i >= 0 && i < decks.size())
+            m_grid->setColumnRange(decks[i].firstColumn, decks[i].columnCount);
+        else
+            m_grid->setColumnRange(0, -1);
+    });
+    connect(addDeck, &QToolButton::clicked, this, [this] {
+        Project &p = m_doc->project();
+        if (p.decks.isEmpty()) // the columns so far become the first deck
+            p.decks.append({tr("Deck 1"), 0, p.columns});
+        const int first = p.columns;
+        p.decks.append({tr("Deck %1").arg(p.decks.size() + 1), first, 8});
+        for (int i = 0; i < 8; ++i)
+            m_doc->addColumn();
+        m_doc->notifyChanged(true);
+        m_deckTabs->setCurrentIndex(int(p.decks.size()) - 1);
+    });
+    connect(m_deckTabs, &QTabBar::tabBarDoubleClicked, this, [this](int i) {
+        QVector<Deck> &decks = m_doc->project().decks;
+        if (i < 0 || i >= decks.size())
+            return;
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, tr("Rename deck"), tr("Name"), QLineEdit::Normal, decks[i].name, &ok);
+        if (ok && !name.isEmpty()) {
+            decks[i].name = name;
+            m_doc->notifyChanged(true);
+        }
+    });
+    connect(m_deckTabs, &QTabBar::customContextMenuRequested, this, [this](const QPoint &pos) {
+        const int i = m_deckTabs->tabAt(pos);
+        QVector<Deck> &decks = m_doc->project().decks;
+        if (i < 0 || i >= decks.size())
+            return;
+        QMenu menu;
+        menu.addAction(tr("Remove deck (its columns stay, under All)"), this, [this, i] {
+            m_doc->project().decks.removeAt(i);
+            m_doc->notifyChanged(true);
+        });
+        menu.exec(m_deckTabs->mapToGlobal(pos));
+    });
+    connect(m_doc, &Document::structureChanged, this, &ClipDeck::rebuildDeckTabs);
+    rebuildDeckTabs();
+
     auto *v = new QVBoxLayout(this);
     v->setContentsMargins(0, 0, 0, 0);
     v->setSpacing(0);
     v->addLayout(top);
+    v->addLayout(tabs);
     v->addWidget(scroll, 1);
 
     connect(addLayer, &QPushButton::clicked, m_doc, &Document::addLayer);
@@ -321,6 +417,7 @@ void ClipDeck::refresh()
     m_blackout->setChecked(p.blackout);
     m_audioMaster->setValue(qRound(p.audioMaster * 100.0));
     m_audioMute->setChecked(p.audioMuted);
+    m_crossfader->setValue(qRound(p.crossfader * 1000.0));
     if (!m_bpm->hasFocus() && qAbs(m_bpm->value() - p.bpm) > 0.049)
         m_bpm->setValue(p.bpm);
     m_bpm->setEnabled(p.tempoSource == TempoSource::Internal);
@@ -330,6 +427,25 @@ void ClipDeck::refresh()
     for (QWidget *w : std::as_const(m_rows))
         static_cast<LayerRow *>(w)->refresh();
     m_grid->update();
+}
+
+void ClipDeck::rebuildDeckTabs()
+{
+    const QVector<Deck> &decks = m_doc->project().decks;
+    m_rebuildingTabs = true;
+    const int current = m_deckTabs->currentIndex();
+    while (m_deckTabs->count() > 0)
+        m_deckTabs->removeTab(0);
+    for (const Deck &d : decks)
+        m_deckTabs->addTab(d.name);
+    m_deckTabs->addTab(tr("All"));
+    m_rebuildingTabs = false;
+    m_deckTabs->setCurrentIndex(qBound(0, current, m_deckTabs->count() - 1));
+    const int i = m_deckTabs->currentIndex();
+    if (i >= 0 && i < decks.size())
+        m_grid->setColumnRange(decks[i].firstColumn, decks[i].columnCount);
+    else
+        m_grid->setColumnRange(0, -1);
 }
 
 // ---------------------------------------------------------------- ClipGrid
@@ -355,25 +471,38 @@ ClipGrid::ClipGrid(Document *doc, RenderEngine *engine, QWidget *parent)
     timer->start();
 }
 
+void ClipGrid::setColumnRange(int first, int count)
+{
+    m_first = qMax(0, first);
+    m_count = count;
+    updateSize();
+}
+
+int ClipGrid::lastColumn() const
+{
+    const int columns = m_doc->project().columns;
+    return m_count < 0 ? columns : qMin(columns, m_first + m_count);
+}
+
 void ClipGrid::updateSize()
 {
     const Project &p = m_doc->project();
-    setFixedSize(p.columns * ClipDeck::kCellW + 1, ClipDeck::kHeaderH + int(p.layers.size()) * ClipDeck::kRowH + 1);
+    setFixedSize(qMax(0, lastColumn() - m_first) * ClipDeck::kCellW + 1, ClipDeck::kHeaderH + int(p.layers.size()) * ClipDeck::kRowH + 1);
     update();
 }
 
 QRect ClipGrid::cellRect(int layer, int column) const
 {
     const int row = int(m_doc->project().layers.size()) - 1 - layer;
-    return QRect(column * ClipDeck::kCellW, ClipDeck::kHeaderH + row * ClipDeck::kRowH, ClipDeck::kCellW,
+    return QRect((column - m_first) * ClipDeck::kCellW, ClipDeck::kHeaderH + row * ClipDeck::kRowH, ClipDeck::kCellW,
                  ClipDeck::kRowH);
 }
 
 QPair<int, int> ClipGrid::cellAt(const QPoint &pos) const
 {
     const Project &p = m_doc->project();
-    const int column = pos.x() / ClipDeck::kCellW;
-    if (pos.x() < 0 || column >= p.columns)
+    const int column = m_first + pos.x() / ClipDeck::kCellW;
+    if (pos.x() < 0 || column >= lastColumn())
         return {-1, -1};
     if (pos.y() < ClipDeck::kHeaderH)
         return {-2, column};
@@ -480,11 +609,11 @@ void ClipGrid::paintEvent(QPaintEvent *)
     QFont small = font();
     small.setPixelSize(11);
     painter.setFont(small);
-    for (int c = 0; c < p.columns; ++c) {
+    for (int c = m_first; c < lastColumn(); ++c) {
         bool all = !p.layers.isEmpty();
         for (const Layer &l : p.layers)
             all = all && (l.activeColumn == c || (l.clips.value(c).isEmpty() && l.activeColumn == -1));
-        const QRect hr(c * ClipDeck::kCellW, 0, ClipDeck::kCellW - 1, ClipDeck::kHeaderH - 2);
+        const QRect hr((c - m_first) * ClipDeck::kCellW, 0, ClipDeck::kCellW - 1, ClipDeck::kHeaderH - 2);
         painter.fillRect(hr, all ? QColor(40, 90, 50) : QColor(44, 44, 50));
         painter.setPen(QColor(200, 200, 200));
         painter.drawText(hr, Qt::AlignCenter, QString::number(c + 1));
@@ -493,7 +622,7 @@ void ClipGrid::paintEvent(QPaintEvent *)
     for (int li = 0; li < p.layers.size(); ++li) {
         const Layer &layer = p.layers[li];
         const bool dimmed = layer.bypass;
-        for (int c = 0; c < p.columns; ++c) {
+        for (int c = m_first; c < lastColumn(); ++c) {
             const QRect cell = cellRect(li, c).adjusted(2, 2, -2, -2);
             const Clip clip = layer.clips.value(c);
             const bool active = layer.activeColumn == c && !clip.isEmpty();

@@ -79,6 +79,7 @@ void Document::copyPlayback(const Project &from, Project &to)
     to.audioMaster = from.audioMaster;
     to.audioMuted = from.audioMuted;
     to.bpm = from.bpm;
+    to.crossfader = from.crossfader;
     for (Layer &l : to.layers) {
         for (const Layer &f : from.layers) {
             if (f.id != l.id)
@@ -363,6 +364,12 @@ void Document::setBpm(double bpm)
     if (qAbs(bpm - m_project.bpm) < 1e-6)
         return;
     m_project.bpm = bpm;
+    notifyPlaybackChanged();
+}
+
+void Document::setCrossfader(double value)
+{
+    m_project.crossfader = qBound(0.0, value, 1.0);
     notifyPlaybackChanged();
 }
 

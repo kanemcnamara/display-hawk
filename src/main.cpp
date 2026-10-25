@@ -1456,6 +1456,105 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(0);
     }
 
+    // Mixing: shader blend modes and masks, layer groups, the A/B crossfader. Layer 1 plays red,
+    // layer 2 the colour bars (white, yellow, cyan, green, magenta, red, blue, black).
+    {
+        Project &p = doc.project();
+        const int col = p.columns;
+        doc.addColumn();
+        Clip red = Clip::fromPattern(TestPattern::Solid);
+        red.solidColor = Qt::red;
+        doc.setClip(0, col, red);
+        doc.setClip(1, col, Clip::fromPattern(TestPattern::ColorBars));
+        for (Layer &l : p.layers) {
+            l.transitionMs = 0;
+            l.effects.clear();
+            l.group.clear();
+            l.crossfade = CrossfadeSide::None;
+            l.targetWall = -1;
+        }
+        p.compEffects.clear();
+        p.layers[0].blend = BlendMode::Normal;
+        doc.setLayerPlayback(0, 1.0, false, false);
+        doc.setLayerPlayback(1, 1.0, false, false);
+        doc.triggerColumn(col);
+        auto mode = [&](BlendMode m) {
+            p.layers[1].blend = m;
+            doc.notifyChanged();
+        };
+        mode(BlendMode::Difference);
+        check(waitFor([&] { return near(barColor(0), 0, 255, 255) && near(barColor(3), 255, 255, 0); }),
+              "difference blend (red vs white -> cyan, vs green -> yellow)");
+        save(previews[0], "blend-difference");
+        mode(BlendMode::Subtract);
+        check(waitFor([&] { return near(barColor(0), 0, 0, 0) && near(barColor(6), 255, 0, 0); }),
+              "subtract blend (red - white -> black, red - blue -> red)");
+        mode(BlendMode::LumaMask);
+        check(waitFor([&] { return near(barColor(0), 255, 0, 0) && near(barColor(7), 0, 0, 0)
+                                   && qAbs(barColor(3).red() - 150) < 40; }),
+              "luma mask shows the layers below through bright areas only");
+        save(previews[0], "blend-luma-mask");
+        mode(BlendMode::Normal);
+        check(waitFor([&] { return near(barColor(0), 255, 255, 255) && near(barColor(6), 0, 0, 255); }),
+              "back to normal blending");
+
+        // A group holding layer 2: its opacity and bypass act on the layer as one.
+        LayerGroup g;
+        g.id = newId();
+        g.name = QStringLiteral("Bars");
+        g.opacity = 0.0;
+        p.groups = {g};
+        p.layers[1].group = g.id;
+        doc.notifyChanged(true);
+        check(waitFor([&] { return near(barColor(0), 255, 0, 0) && near(barColor(6), 255, 0, 0); }),
+              "group at zero opacity hides its layers");
+        p.groups[0].opacity = 1.0;
+        doc.notifyChanged();
+        check(waitFor([&] { return near(barColor(0), 255, 255, 255) && near(barColor(6), 0, 0, 255); }),
+              "group at full opacity shows its layers");
+        p.groups[0].blend = BlendMode::Difference; // shader blend for the whole group
+        doc.notifyChanged();
+        const bool groupBlend = waitFor([&] { return near(barColor(0), 0, 255, 255); });
+        save(previews[0], "group-difference");
+        check(groupBlend, "group blend mode applies to the group");
+        p.groups[0].bypass = true;
+        doc.notifyChanged();
+        check(waitFor([&] { return near(barColor(0), 255, 0, 0); }), "bypassed group is hidden");
+        p.groups.clear();
+        p.layers[1].group.clear();
+        doc.notifyChanged(true);
+
+        // Crossfader: layer 2 on B, layer 1 on A.
+        p.layers[0].crossfade = CrossfadeSide::A;
+        p.layers[1].crossfade = CrossfadeSide::B;
+        doc.notifyChanged();
+        doc.setCrossfader(0.0);
+        const bool onlyA = waitFor([&] { return near(barColor(0), 255, 0, 0) && near(barColor(6), 255, 0, 0); });
+        doc.setCrossfader(1.0);
+        const bool onlyB = waitFor([&] { return near(barColor(0), 255, 255, 255) && near(barColor(7), 0, 0, 0); });
+        doc.setCrossfader(0.5);
+        const bool both = waitFor([&] { return near(barColor(7), 0, 0, 0) && near(barColor(0), 255, 255, 255); });
+        check(onlyA && onlyB && both, "A/B crossfader");
+
+        // Groups, decks and crossfader sides are saved.
+        p.groups = {g};
+        p.layers[1].group = g.id;
+        p.decks = {Deck{QStringLiteral("Intro"), 0, 4}, Deck{QStringLiteral("Drop"), 4, 4}};
+        const Project back = Project::fromJson(p.toJson());
+        check(back.groups.size() == 1 && back.groups[0].name == QStringLiteral("Bars") && back.layers[1].group == g.id
+                  && back.decks.size() == 2 && back.decks[1].name == QStringLiteral("Drop") && back.decks[1].firstColumn == 4
+                  && back.layers[1].crossfade == CrossfadeSide::B && back.layers[0].crossfade == CrossfadeSide::A,
+              "groups, decks and crossfader sides save and load");
+        p.groups.clear();
+        p.decks.clear();
+        for (Layer &l : p.layers) {
+            l.group.clear();
+            l.crossfade = CrossfadeSide::None;
+        }
+        doc.notifyChanged(true);
+        doc.clearLayer(1);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
