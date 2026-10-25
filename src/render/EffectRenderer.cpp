@@ -114,7 +114,7 @@ bool EffectRenderer::init(QRhi *rhi)
     const float zeros[4 * kTableRows] = {};
     m_pendingUpload->uploadTexture(m_placeholderTable,
                                    QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(zeros, sizeof(zeros))));
-    m_layoutSrb = newSrb(m_placeholderId, m_placeholderId, m_placeholderTable);
+    m_layoutSrb = newSrb(m_placeholderId, m_placeholderId, m_placeholderTable, m_placeholderId);
     return m_layoutSrb != nullptr;
 }
 
@@ -161,11 +161,18 @@ void EffectRenderer::clearSrbs()
 
 void EffectRenderer::forgetTexture(QRhiTexture *tex)
 {
-    if (QRhiShaderResourceBindings *srb = m_srbs.take(tex))
-        srb->deleteLater();
+    for (auto it = m_srbs.begin(); it != m_srbs.end();) {
+        if (it.key().first == tex || it.key().second == tex) {
+            it.value()->deleteLater();
+            it = m_srbs.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
-QRhiShaderResourceBindings *EffectRenderer::newSrb(QRhiTexture *tex, QRhiTexture *ids, QRhiTexture *table)
+QRhiShaderResourceBindings *EffectRenderer::newSrb(QRhiTexture *tex, QRhiTexture *ids, QRhiTexture *table,
+                                                   QRhiTexture *history)
 {
     QRhiShaderResourceBindings *srb = m_rhi->newShaderResourceBindings();
     const auto stages = QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage;
@@ -175,6 +182,7 @@ QRhiShaderResourceBindings *EffectRenderer::newSrb(QRhiTexture *tex, QRhiTexture
         QRhiShaderResourceBinding::sampledTexture(1, frag, tex, m_linear),
         QRhiShaderResourceBinding::sampledTexture(2, frag, ids, m_nearest),
         QRhiShaderResourceBinding::sampledTexture(3, frag, table, m_nearest),
+        QRhiShaderResourceBinding::sampledTexture(4, frag, history, m_nearest),
     });
     if (!srb->create()) {
         delete srb;
@@ -183,15 +191,38 @@ QRhiShaderResourceBindings *EffectRenderer::newSrb(QRhiTexture *tex, QRhiTexture
     return srb;
 }
 
-QRhiShaderResourceBindings *EffectRenderer::srbFor(QRhiTexture *tex)
+QRhiShaderResourceBindings *EffectRenderer::srbFor(QRhiTexture *tex, QRhiTexture *history)
 {
-    if (QRhiShaderResourceBindings *srb = m_srbs.value(tex))
+    const auto key = qMakePair(tex, history);
+    if (QRhiShaderResourceBindings *srb = m_srbs.value(key))
         return srb;
     QRhiShaderResourceBindings *srb = newSrb(tex, m_panelId ? m_panelId : m_placeholderId,
-                                             m_panelTable ? m_panelTable : m_placeholderTable);
+                                             m_panelTable ? m_panelTable : m_placeholderTable,
+                                             history ? history : m_placeholderId);
     if (srb)
-        m_srbs.insert(tex, srb);
+        m_srbs.insert(key, srb);
     return srb;
+}
+
+QRhiTexture *EffectRenderer::historyFor(Chain &c, int effect, const QSize &size, QRhiResourceUpdateBatch *u)
+{
+    QRhiTexture *&h = c.history[effect];
+    if (h && h->pixelSize() == size)
+        return h;
+    if (h) {
+        forgetTexture(h);
+        h->deleteLater();
+    }
+    h = m_rhi->newTexture(QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource);
+    if (!h->create()) {
+        delete h;
+        h = nullptr;
+        return nullptr;
+    }
+    QImage clear(size, QImage::Format_RGBA8888); // trails start from nothing
+    clear.fill(Qt::transparent);
+    u->uploadTexture(h, clear);
+    return h;
 }
 
 void EffectRenderer::syncPanels(const Project &project, const QSize &compSize)
@@ -296,7 +327,9 @@ bool EffectRenderer::ensureChain(Chain &c, const QSize &size)
         return true;
     releaseChain(c, true);
     for (int i = 0; i < 2; ++i) {
-        c.tex[i] = m_rhi->newTexture(QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget);
+        // Copied from by trails (history), so also a transfer source.
+        c.tex[i] = m_rhi->newTexture(QRhiTexture::RGBA8, size, 1,
+                                     QRhiTexture::RenderTarget | QRhiTexture::UsedAsTransferSource);
         if (!c.tex[i]->create()) {
             releaseChain(c, false);
             return false;
@@ -325,6 +358,13 @@ void EffectRenderer::releaseChain(Chain &c, bool deferred)
             delete c.rt[i];
             delete c.tex[i];
         }
+    }
+    for (QRhiTexture *h : std::as_const(c.history)) {
+        forgetTexture(h);
+        if (deferred)
+            h->deleteLater();
+        else
+            delete h;
     }
     if (deferred && c.rp)
         c.rp->deleteLater();
@@ -391,9 +431,13 @@ QRhiTexture *EffectRenderer::apply(QRhiCommandBuffer *cb, const QString &key, QR
             m_warnedFull = true;
             break;
         }
-        QRhiShaderResourceBindings *srb = srbFor(current);
-        if (!srb)
+        QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
+        QRhiTexture *history = pass.def->usesHistory ? historyFor(c, pass.index, size, u) : nullptr;
+        QRhiShaderResourceBindings *srb = srbFor(current, history);
+        if (!srb) {
+            u->release();
             break;
+        }
 
         const EffectInstance &e = chain[pass.index];
         float params[8] = {};
@@ -412,7 +456,6 @@ QRhiTexture *EffectRenderer::apply(QRhiCommandBuffer *cb, const QString &key, QR
         std::memcpy(data + 80, modeVec, sizeof(modeVec));
         std::memcpy(data + 96, params, sizeof(params));
 
-        QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
         if (m_pendingUpload) {
             u->merge(m_pendingUpload);
             m_pendingUpload->release();
@@ -427,6 +470,11 @@ QRhiTexture *EffectRenderer::apply(QRhiCommandBuffer *cb, const QString &key, QR
         cb->draw(4);
         cb->endPass();
         m_offset += m_stride;
+        if (history) { // this output is next frame's history
+            QRhiResourceUpdateBatch *copy = m_rhi->nextResourceUpdateBatch();
+            copy->copyTexture(history, c.tex[ping]);
+            cb->resourceUpdate(copy);
+        }
 
         current = c.tex[ping];
         ping ^= 1;

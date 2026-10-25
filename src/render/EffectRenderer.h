@@ -42,12 +42,14 @@ private:
         QRhiRenderPassDescriptor *rp = nullptr;
         QSize size;
         qint64 lastUsed = 0;
+        QHash<int, QRhiTexture *> history; // effect index -> its previous output (trails)
     };
     bool ensureChain(Chain &c, const QSize &size);
+    QRhiTexture *historyFor(Chain &c, int effect, const QSize &size, QRhiResourceUpdateBatch *u);
     void releaseChain(Chain &c, bool deferred);
     QRhiGraphicsPipeline *pipelineFor(QRhiRenderPassDescriptor *rp);
-    QRhiShaderResourceBindings *srbFor(QRhiTexture *tex);
-    QRhiShaderResourceBindings *newSrb(QRhiTexture *tex, QRhiTexture *ids, QRhiTexture *table);
+    QRhiShaderResourceBindings *srbFor(QRhiTexture *tex, QRhiTexture *history = nullptr);
+    QRhiShaderResourceBindings *newSrb(QRhiTexture *tex, QRhiTexture *ids, QRhiTexture *table, QRhiTexture *history);
     void clearSrbs();
     // Rebuilds the LED panel textures when the walls or the composition size changed; the uploads go
     // into m_pendingUpload, which the same apply() submits.
@@ -65,7 +67,7 @@ private:
     int m_panelCount = 0;
     QByteArray m_panelKey;
     QRhiShaderResourceBindings *m_layoutSrb = nullptr; // placeholders only; kept for the pipeline's lifetime
-    QHash<QRhiTexture *, QRhiShaderResourceBindings *> m_srbs;
+    QHash<QPair<QRhiTexture *, QRhiTexture *>, QRhiShaderResourceBindings *> m_srbs; // (input, history)
     QRhiGraphicsPipeline *m_pipeline = nullptr;
     QVector<quint32> m_pipelineFormat;
     QHash<QString, Chain> m_chains;

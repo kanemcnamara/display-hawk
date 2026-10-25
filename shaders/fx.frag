@@ -21,6 +21,8 @@ layout(binding = 1) uniform sampler2D tex;
 // wall's clockwise rotation.
 layout(binding = 2) uniform sampler2D panelId;
 layout(binding = 3) uniform sampler2D panelTable;
+// Trails: this effect's own output from the previous frame (same size, rendered).
+layout(binding = 4) uniform sampler2D history;
 
 const float PI = 3.14159265;
 
@@ -240,6 +242,93 @@ void main()
         float soft = max(p0.y, 0.0001);
         float a = p0.z > 0.5 ? 1.0 - smoothstep(p0.x - soft, p0.x, l) : smoothstep(p0.x, p0.x + soft, l);
         o = c * a;
+    } else if (mode == 18) { // Wave: sideways (or up-down) sine displacement, moving
+        bool vertical = p0.w > 0.5;
+        float along = vertical ? px.x : px.y;
+        float shift = p0.x * sin(2.0 * PI * (along / max(p0.y, 1.0) - time * p0.z));
+        o = src(uv + (vertical ? vec2(0.0, shift / sz.y) : vec2(shift / sz.x, 0.0)));
+    } else if (mode == 19) { // Twirl: rotation that fades out towards the radius
+        vec2 centre = p0.zw * sz;
+        vec2 d = px - centre;
+        float radius = max(p0.y, 0.001) * min(sz.x, sz.y);
+        float k = clamp(1.0 - length(d) / radius, 0.0, 1.0);
+        float a = radians(p0.x) * k * k;
+        d = vec2(cos(a) * d.x - sin(a) * d.y, sin(a) * d.x + cos(a) * d.y);
+        o = src((centre + d) / sz);
+    } else if (mode == 20) { // Vignette
+        vec2 q = (uv - 0.5) * vec2(sz.x / sz.y, 1.0);
+        float v = smoothstep(p0.y, p0.y - max(p0.z, 0.001), length(q));
+        o = vec4(c.rgb * mix(1.0, v, p0.x), c.a);
+    } else if (mode == 21) { // Glow: bright parts spread out and added back
+        vec3 glow = vec3(0.0);
+        float radius = p0.y;
+        for (int i = 0; i < 24; ++i) {
+            float r = sqrt((float(i) + 0.5) / 24.0) * radius;
+            float a = float(i) * 2.39996;
+            vec4 s = src(uv + vec2(cos(a), sin(a)) * r / sz);
+            vec3 rgb = unpremul(s);
+            glow += rgb * s.a * max(luma(rgb) - p0.x, 0.0) / max(1.0 - p0.x, 0.001);
+        }
+        glow /= 24.0;
+        o = vec4(min(c.rgb + glow * p0.z, 1.0), max(c.a, min(1.0, luma(glow) * p0.z)));
+    } else if (mode == 22) { // Threshold: black and white
+        float l = luma(unpremul(c));
+        float soft = max(p0.y, 0.0001);
+        float v = smoothstep(p0.x - soft, p0.x + soft, l);
+        o = vec4(vec3(v) * c.a, c.a);
+    } else if (mode == 23) { // Duotone: shadows to one colour, highlights to another
+        vec3 rgb = unpremul(c);
+        vec3 tone = mix(p0.xyz, vec3(p0.w, p1.x, p1.y), luma(rgb));
+        o = vec4(mix(rgb, tone, p1.z) * c.a, c.a);
+    } else if (mode == 24) { // Grain
+        vec2 cell = floor(px / max(p0.y, 1.0));
+        float seed = p0.z > 0.5 ? floor(time * 30.0) : 0.0;
+        float n = fract(sin(dot(cell + seed * 1.37, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+        o = vec4(clamp(unpremul(c) + n * p0.x, 0.0, 1.0) * c.a, c.a);
+    } else if (mode == 25) { // Scanlines
+        float lines = max(p0.x, 1.0);
+        float v = fract(uv.y * lines + time * p0.w);
+        float dark = step(1.0 - p0.y, v) * p0.z;
+        o = vec4(c.rgb * (1.0 - dark), c.a);
+    } else if (mode == 26) { // Sharpen (unsharp mask)
+        vec2 t = 1.0 / sz;
+        vec4 blur = (src(uv + vec2(t.x, 0.0)) + src(uv - vec2(t.x, 0.0)) + src(uv + vec2(0.0, t.y)) + src(uv - vec2(0.0, t.y))) * 0.25;
+        o = vec4(clamp(c.rgb + (c.rgb - blur.rgb) * p0.x, 0.0, c.a), c.a);
+    } else if (mode == 27) { // Zoom blur towards a centre
+        vec2 centre = p0.yz;
+        vec4 sum = vec4(0.0);
+        for (int i = 0; i < 16; ++i) {
+            float k = 1.0 - p0.x * float(i) / 15.0 * 0.5;
+            sum += src(centre + (uv - centre) * k);
+        }
+        o = sum / 16.0;
+    } else if (mode == 28) { // Trails: the previous output fades behind the new picture
+        vec2 h = uv;
+        if (ubuf.size.w > 0.5)
+            h.y = 1.0 - h.y;
+        vec4 prev = texture(history, h) * p0.x;
+        o = p0.y > 0.5 ? max(c, prev) : c + prev * (1.0 - c.a);
+    } else if (mode == 29) { // Hue cycle
+        vec3 rgb = hueRotate(unpremul(c), time * p0.x * 360.0);
+        o = vec4(clamp(rgb, 0.0, 1.0) * c.a, c.a);
+    } else if (mode == 30) { // Hexagon mosaic
+        float s = max(p0.x, 2.0);
+        vec2 r = vec2(1.0, 1.7320508);
+        vec2 h = r * 0.5;
+        vec2 a = mod(px / s, r) - h;
+        vec2 b = mod(px / s - h, r) - h;
+        vec2 g = dot(a, a) < dot(b, b) ? a : b;
+        o = src((px - g * s) / sz);
+    } else if (mode == 31) { // Bulge / pinch
+        vec2 centre = p0.zw * sz;
+        vec2 d = px - centre;
+        float radius = max(p0.y, 0.001) * min(sz.x, sz.y);
+        float r = length(d) / radius;
+        if (r < 1.0 && r > 0.0001) // inside the radius, distances are remapped: > 0 magnifies, < 0 pinches
+            d = d / r * pow(r, max(0.05, 1.0 + p0.x));
+        o = src((centre + d) / sz);
+    } else if (mode == 32) { // Scroll with wrap-around
+        o = src(fract(uv - vec2(p0.x, -p0.y) * time));
     }
     fragColor = o;
 }

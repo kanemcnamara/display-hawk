@@ -25,6 +25,7 @@ struct EffectDef {
     int passes = 1;
     bool usesPanels = false; // reads the LED panel map (outline, chase...)
     QVector<EffectParamDef> params;
+    bool usesHistory = false; // reads its own output from the previous frame (trails)
 };
 
 const QVector<EffectDef> &effectDefs();
@@ -38,6 +39,8 @@ double effectParam(const EffectInstance &e, int index);
 namespace FxMode {
 enum {
     Color = 0, Tint, Invert, Posterize, Transform, Mirror, Kaleidoscope, Pixelate, Blur, RgbSplit, Edges, Strobe,
-    PanelOutline, PanelChase, PanelTwinkle, PanelColours, ColorKey, LumaKey
+    PanelOutline, PanelChase, PanelTwinkle, PanelColours, ColorKey, LumaKey,
+    Wave, Twirl, Vignette, Glow, Threshold, Duotone, Grain, Scanlines, Sharpen, ZoomBlur, Trails, HueCycle,
+    HexMosaic, Bulge, Scroll
 };
 }

@@ -45,10 +45,10 @@ Every layer has an effect chain (select the layer: **Effects** in its properties
 
 | Group | Effects |
 | --- | --- |
-| Colour | Colour (brightness, contrast, saturation, hue), Tint, Invert, Posterize |
-| Shape | Transform (position, scale, rotation, tile), Mirror, Kaleidoscope, Pixelate |
-| Texture | Blur (two-pass Gaussian), RGB Split, Edges |
-| Time | Strobe |
+| Colour | Colour (brightness, contrast, saturation, hue), Tint, Invert, Posterize, Vignette, Threshold, Duotone, Hue Cycle |
+| Shape | Transform (position, scale, rotation, tile), Mirror, Kaleidoscope, Pixelate, Wave, Twirl, Bulge / Pinch, Hexagon Mosaic, Scroll |
+| Texture | Blur (two-pass Gaussian), RGB Split, Edges, Glow, Grain, Scanlines, Sharpen, Zoom Blur |
+| Time | Strobe, Trails (each frame keeps a fading copy of the last: lighten for opaque content, behind for transparent) |
 | Key | **Colour Key**: makes a colour transparent, e.g. the white background of a logo (key colour, tolerance, softness, spill removal for clean anti-aliased edges); **Luma Key**: removes dark or bright areas |
 | LED panels | **Panel Outline** (edges of every fitted cabinet), **Panel Chase** (a band of lit cabinets travelling left to right, top to bottom, by panel number or in random order; reveals the content or adds white), **Panel Twinkle** (random cabinets flash and fade), **Panel Colours** (a hue per cabinet along an order, optionally drifting) |
 

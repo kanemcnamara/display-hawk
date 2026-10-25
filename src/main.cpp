@@ -1612,6 +1612,75 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(0);
     }
 
+    // The rest of the effect catalogue on the colour bars: each renders; a few are checked closely.
+    {
+        Project &p = doc.project();
+        const int col = p.columns;
+        doc.addColumn();
+        doc.clearLayer(1);
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        p.layers[0].transitionMs = 0;
+        p.layers[0].blend = BlendMode::Normal;
+        p.compEffects.clear();
+        doc.triggerClip(0, col);
+        const QStringList newer = {QStringLiteral("wave"), QStringLiteral("twirl"), QStringLiteral("bulge"),
+                                   QStringLiteral("hexMosaic"), QStringLiteral("scroll"), QStringLiteral("vignette"),
+                                   QStringLiteral("threshold"), QStringLiteral("duotone"), QStringLiteral("hueCycle"),
+                                   QStringLiteral("glow"), QStringLiteral("grain"), QStringLiteral("scanlines"),
+                                   QStringLiteral("sharpen"), QStringLiteral("zoomBlur")}; // trails: on moving content below
+        p.layers[0].effects.clear();
+        doc.notifyChanged(true);
+        waitFor([&] { return near(barColor(0), 255, 255, 255); });
+        const QImage plain = previews[0];
+        QImage last = plain;
+        for (const QString &id : newer) {
+            p.layers[0].effects = {makeEffect(id)};
+            doc.notifyChanged(true);
+            // A new picture: neither the plain bars nor the previous effect's.
+            const bool changed = waitFor([&] {
+                return litPercent(previews[0]) > 0 && previews[0] != plain && previews[0] != last;
+            }, 3000);
+            waitMs(150); // one more preview, so the picture saved is settled
+            last = previews[0];
+            save(previews[0], qPrintable(QStringLiteral("fx-%1").arg(id)));
+            check(changed, qPrintable(QStringLiteral("effect %1 renders").arg(effectDef(id)->name)));
+        }
+        // Threshold at 0.5: white and yellow stay white, blue (dark) goes black.
+        p.layers[0].effects = {makeEffect(QStringLiteral("threshold"))};
+        doc.notifyChanged(true);
+        check(waitFor([&] { return near(barColor(0), 255, 255, 255) && near(barColor(1), 255, 255, 255) && near(barColor(6), 0, 0, 0); }),
+              "threshold makes light parts white and dark parts black");
+        // Trails on the moving bars leave more lit pixels than the bars alone.
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::MovingBars));
+        p.layers[0].effects.clear();
+        doc.notifyChanged(true);
+        doc.triggerClip(0, col);
+        waitMs(500);
+        const int bare = litPercent(previews[0]);
+        EffectInstance trails = makeEffect(QStringLiteral("trails"));
+        trails.params[0] = 0.97;
+        p.layers[0].effects = {trails};
+        doc.notifyChanged(true);
+        const bool smeared = waitFor([&] { return litPercent(previews[0]) > bare + 5; }, 3000);
+        save(previews[0], "fx-trails-moving");
+        check(smeared, qPrintable(QStringLiteral("trails leave a fading copy behind (%1%% lit -> %2%%)").arg(bare).arg(litPercent(previews[0]))));
+        // Vignette on white: the corners go dark, the middle stays white.
+        Clip white = Clip::fromPattern(TestPattern::Solid);
+        white.solidColor = Qt::white;
+        doc.setClip(0, col, white);
+        p.layers[0].effects = {makeEffect(QStringLiteral("vignette"))};
+        doc.notifyChanged(true);
+        doc.triggerClip(0, col);
+        check(waitFor([&] {
+                  const QImage &img = previews[0];
+                  return !img.isNull() && qGray(img.pixel(1, 1)) < 100 && qGray(img.pixel(img.width() / 2, img.height() / 2)) > 240;
+              }),
+              "vignette darkens the corners");
+        p.layers[0].effects.clear();
+        doc.notifyChanged(true);
+        doc.clearLayer(0);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
