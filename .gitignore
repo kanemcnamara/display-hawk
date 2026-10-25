@@ -1,3 +1,5 @@
 build/
 *.user
 aqtinstall.log
+out/
+installer-out/

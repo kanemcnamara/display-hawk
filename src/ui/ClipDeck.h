@@ -13,6 +13,9 @@ class QTabBar;
 class QDoubleSpinBox;
 class QPushButton;
 class QSlider;
+class Thumbnailer;
+class QCheckBox;
+class QScrollArea;
 class QVBoxLayout;
 struct Clip;
 struct Project;
@@ -32,12 +35,17 @@ signals:
 
 public:
     static constexpr int kHeaderH = 24;
-    static constexpr int kRowH = 86;
-    static constexpr int kCellW = 128;
+    static constexpr int kMinCellW = 100; // clip cells: width set by the size slider or "fit"
+    static constexpr int kMaxCellW = 360;
+    static int rowHeightFor(int cellWidth) { return qMax(86, cellWidth * 9 / 16 + 22); } // 16:9 + the name
+
+protected:
+    void resizeEvent(QResizeEvent *e) override;
 
 private:
     void rebuildRows();
     void refresh();
+    void applyCellSize(); // from the slider, or what fits the space when "Fit" is on
 
     Document *m_doc;
     QSlider *m_master;
@@ -53,6 +61,9 @@ private:
     QWidget *m_beatLamps;
     int m_beatInBar = -1;
     QVBoxLayout *m_rowLayout;
+    QSlider *m_cellSize;
+    QCheckBox *m_fit;
+    QScrollArea *m_scroll;
     QVector<QWidget *> m_rows;
     ClipGrid *m_grid;
     bool m_refreshing = false;
@@ -67,6 +78,10 @@ public:
     void updateSize();
     // The columns shown: a deck's range (count -1 = every column).
     void setColumnRange(int first, int count);
+    int columnsShown() const;
+    void setCellWidth(int width);
+    int cellWidth() const { return m_cellW; }
+    int rowHeight() const { return m_rowH; }
 
 signals:
     void midiLearnRequested(int action, int layer, int column);
@@ -97,6 +112,10 @@ private:
     int m_count = -1;
     int lastColumn() const; // one past the last column shown
     QHash<QByteArray, QPixmap> m_thumbs;
+    int m_cellW = 128;
+    int m_rowH = 86;
+    Thumbnailer *m_frames;                // first frames of movies, for their thumbnails
+    QHash<QString, QImage> m_movieFrames;      // by media path
     QPair<int, int> m_pressCell{-1, -1};
     QPoint m_pressPos;
     bool m_moving = false;

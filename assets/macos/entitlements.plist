@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Hardened runtime exceptions for the signed, notarised app. -->
+<plist version="1.0">
+<dict>
+    <!-- Cameras and capture cards as live clips. -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    <!-- Audio-reactive control and LTC timecode from an audio input. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+    <!-- NDI is loaded at runtime from the NDI runtime the user installed (signed by its vendor). -->
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+</plist>

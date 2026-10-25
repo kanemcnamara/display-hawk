@@ -1,5 +1,7 @@
 #include "model/Document.h"
 
+#include <algorithm>
+
 #include "model/CabinetMapping.h"
 #include "render/Effects.h"
 
@@ -128,10 +130,67 @@ void Document::notifyMediaChanged()
 
 void Document::select(const Selection &sel)
 {
-    if (sel == m_selection)
+    if (sel == m_selection && m_extra.isEmpty())
         return;
     m_selection = sel;
+    m_extra.clear();
     validateSelection();
+    emit selectionChanged();
+}
+
+namespace {
+
+bool groupable(const Selection &s)
+{
+    return s.kind == Selection::Wall || s.kind == Selection::Slice;
+}
+
+} // namespace
+
+QVector<Selection> Document::selectionSet() const
+{
+    QVector<Selection> set{m_selection};
+    set += m_extra;
+    return set;
+}
+
+bool Document::isSelected(const Selection &s) const
+{
+    return s == m_selection || m_extra.contains(s);
+}
+
+void Document::setSelectionSet(const QVector<Selection> &set)
+{
+    if (set.isEmpty()) {
+        select(Selection::composition());
+        return;
+    }
+    m_selection = set.first();
+    m_extra.clear();
+    for (int i = 1; i < set.size(); ++i)
+        if (groupable(set[i]) && groupable(m_selection) && !isSelected(set[i]))
+            m_extra.append(set[i]);
+    validateSelection();
+    emit selectionChanged();
+}
+
+void Document::toggleSelected(const Selection &s)
+{
+    if (!groupable(s))
+        return;
+    if (!groupable(m_selection)) {
+        select(s);
+        return;
+    }
+    if (s == m_selection) {
+        if (m_extra.isEmpty())
+            return; // the last selected item stays selected
+        m_selection = m_extra.takeFirst();
+    } else if (m_extra.contains(s)) {
+        m_extra.removeAll(s);
+    } else {
+        m_extra.append(s);
+    }
     emit selectionChanged();
 }
 
@@ -182,6 +241,16 @@ void Document::validateSelection()
         m_maskScreen = m_mask = -1;
     if (m_drawTarget != -1 && !maskList(m_drawTarget))
         m_drawTarget = -1;
+    // Extras: only walls and slices that still exist, alongside a wall or slice.
+    for (int i = int(m_extra.size()) - 1; i >= 0; --i) {
+        const Selection &e = m_extra[i];
+        const bool exists = e.kind == Selection::Wall
+                                ? e.wall >= 0 && e.wall < m_project.walls.size()
+                                : e.kind == Selection::Slice && e.screen >= 0 && e.screen < m_project.screens.size()
+                                      && e.slice >= 0 && e.slice < m_project.screens[e.screen].slices.size();
+        if (!exists || e == m_selection || !groupable(m_selection))
+            m_extra.removeAt(i);
+    }
     Selection &s = m_selection;
     bool ok = true;
     switch (s.kind) {
@@ -207,6 +276,8 @@ void Document::validateSelection()
     }
     if (!ok)
         s = Selection::composition();
+    if (!groupable(m_selection))
+        m_extra.clear();
 }
 
 Layer *Document::selectedLayer()
@@ -731,6 +802,27 @@ void Document::duplicateSelection()
 
 void Document::deleteSelection()
 {
+    if (!m_extra.isEmpty()) {
+        // Several: slices last-first (so the indices still hold), then walls the same way.
+        QVector<Selection> set = selectionSet();
+        std::sort(set.begin(), set.end(), [](const Selection &a, const Selection &b) {
+            if (a.kind != b.kind)
+                return a.kind == Selection::Slice; // slices before walls
+            return a.kind == Selection::Slice ? std::make_pair(a.screen, a.slice) > std::make_pair(b.screen, b.slice)
+                                              : a.wall > b.wall;
+        });
+        const int screen = m_selection.screen;
+        select(Selection::composition());
+        for (const Selection &s : std::as_const(set)) {
+            if (s.kind == Selection::Slice)
+                removeSlice(s.screen, s.slice);
+            else if (s.kind == Selection::Wall)
+                removeWall(s.wall);
+        }
+        if (screen >= 0 && screen < m_project.screens.size())
+            select(Selection::ofScreen(screen));
+        return;
+    }
     const Selection s = m_selection;
     switch (s.kind) {
     case Selection::Wall: removeWall(s.wall); break;

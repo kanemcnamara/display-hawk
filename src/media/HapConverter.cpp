@@ -49,6 +49,8 @@ bool HapConverter::start(const QString &source, const QString &target, const Opt
 {
     if (m_running)
         return false;
+    QMutexLocker lock(&m_mutex); // a previous conversion's late callbacks wait, then see the new generation
+    const int generation = ++m_generation;
     m_options = options;
     m_target = target;
     m_fps = 30.0;
@@ -63,6 +65,7 @@ bool HapConverter::start(const QString &source, const QString &target, const Opt
     m_writer = std::make_unique<MovWriter>();
     m_error.clear();
     m_running = true;
+    lock.unlock();
 
     m_player = new QMediaPlayer(this);
     m_sink = new QVideoSink(this);
@@ -75,9 +78,11 @@ bool HapConverter::start(const QString &source, const QString &target, const Opt
         m_audio = new QAudioBufferOutput(format, this);
         m_player->setAudioBufferOutput(m_audio);
         // Direct: buffers are written as they are decoded, on the decoder's thread.
-        connect(m_audio, &QAudioBufferOutput::audioBufferReceived, this, &HapConverter::onAudio, Qt::DirectConnection);
+        connect(m_audio, &QAudioBufferOutput::audioBufferReceived, this,
+                [this, generation](const QAudioBuffer &b) { onAudio(b, generation); }, Qt::DirectConnection);
     }
-    connect(m_sink, &QVideoSink::videoFrameChanged, this, &HapConverter::onFrame, Qt::DirectConnection);
+    connect(m_sink, &QVideoSink::videoFrameChanged, this,
+            [this, generation](const QVideoFrame &f) { onFrame(f, generation); }, Qt::DirectConnection);
     connect(m_player, &QMediaPlayer::mediaStatusChanged, this, [this](QMediaPlayer::MediaStatus status) {
         if (status == QMediaPlayer::LoadedMedia && !m_player->isPlaying())
             onLoaded();
@@ -106,9 +111,9 @@ void HapConverter::onLoaded()
     m_player->play();
 }
 
-void HapConverter::onFrame(const QVideoFrame &frame)
+void HapConverter::onFrame(const QVideoFrame &frame, int generation)
 {
-    if (m_cancel || !frame.isValid())
+    if (m_cancel || !frame.isValid() || generation != m_generation)
         return;
     QImage image = frame.toImage().convertToFormat(QImage::Format_RGBA8888);
     if (image.isNull())
@@ -124,7 +129,7 @@ void HapConverter::onFrame(const QVideoFrame &frame)
     const QByteArray sample = Hap::makeFrame(texture, m_options.format, chunks, &m_pool);
 
     QMutexLocker lock(&m_mutex);
-    if (m_done || m_cancel)
+    if (m_done || m_cancel || generation != m_generation)
         return;
     if (!m_opened) {
         MovWriter::Video v;
@@ -160,9 +165,9 @@ void HapConverter::onFrame(const QVideoFrame &frame)
     QMetaObject::invokeMethod(this, [this, fraction] { emit progress(fraction); }, Qt::QueuedConnection);
 }
 
-void HapConverter::onAudio(const QAudioBuffer &buffer)
+void HapConverter::onAudio(const QAudioBuffer &buffer, int generation)
 {
-    if (m_cancel || !buffer.isValid())
+    if (m_cancel || !buffer.isValid() || generation != m_generation)
         return;
     const QAudioFormat format = buffer.format();
     const int channels = format.channelCount();
@@ -183,7 +188,7 @@ void HapConverter::onAudio(const QAudioBuffer &buffer)
         return;
     }
     QMutexLocker lock(&m_mutex);
-    if (m_done)
+    if (m_done || generation != m_generation)
         return;
     if (m_writer->audioSamplesWritten() == 0)
         m_writer->setAudioFormat(format.sampleRate(), channels);

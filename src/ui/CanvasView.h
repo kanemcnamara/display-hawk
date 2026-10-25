@@ -18,11 +18,17 @@ public:
     void setScreenIndex(int index);
     int screenIndex() const { return m_screen; }
     void resetView();
+
+    // Lining up the selected walls / slices on this map (their input or output rects).
+    enum class Arrange { Left, HCenter, Right, Top, VCenter, Bottom, DistributeH, DistributeV, SameWidth, SameHeight };
+    void arrange(Arrange op);
+    int selectedHere() const; // how many selected items this map shows
     // Where a canvas point (composition or screen pixels) is in the widget, for tests.
     QPointF widgetPos(const QPointF &canvas) const { return toWidget(canvas); }
 
 signals:
     void statusMessage(const QString &text);
+    void activated(); // clicked: the map the Arrange commands act on
 
 protected:
     void paintEvent(QPaintEvent *e) override;
@@ -73,7 +79,7 @@ private:
     double m_zoom = 1.0;
     QPointF m_pan;
 
-    enum DragKind { NoDrag, Pan, Move, Resize, Corner, MaskPoint, MaskMove };
+    enum DragKind { NoDrag, Pan, Move, Resize, Corner, MaskPoint, MaskMove, Band };
     static constexpr int kCornerHandle = 100; // hitHandle() result for corner-pin corner k: 100 + k
     QPolygonF selectedWarp() const; // corner pin or mesh points of the selected slice on this output map
     int maskTarget() const;          // whose masks this map shows: the composition or its screen
@@ -90,6 +96,8 @@ private:
     QRect m_startRect;
     QPolygonF m_startWarp;
     QPointF m_pressPos;
+    QPointF m_bandEnd;                           // selection box (Shift+drag on empty canvas)
+    QVector<QPair<Selection, QRect>> m_groupStart; // the other selected items when a drag began
     QPointF m_lastPos;
 
     // Latest image from the render thread and the canvas region it shows.

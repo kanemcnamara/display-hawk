@@ -10,6 +10,8 @@ qt_standard_project_setup()
 
 qt_add_executable(DisplayHawk
     src/main.cpp
+    src/CrashReport.h
+    src/CrashReport.cpp
     src/model/Project.h
     src/model/Project.cpp
     src/model/Document.h
@@ -141,6 +143,7 @@ qt_add_executable(DisplayHawk
 # App icon: embedded in the .exe on Windows, bundled as an .icns on macOS, and used for every window at runtime.
 if(WIN32)
     target_sources(DisplayHawk PRIVATE src/app.rc)
+
 elseif(APPLE)
     set(DISPLAYHAWK_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/displayhawk.icns")
     target_sources(DisplayHawk PRIVATE "${DISPLAYHAWK_ICNS}")
@@ -198,6 +201,9 @@ qt_add_shaders(DisplayHawk "shaders"
 )
 
 target_include_directories(DisplayHawk PRIVATE src)
+# version.h (the app's version, also in the Windows file properties via app.rc).
+configure_file(src/version.h.in "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h" @ONLY)
+target_include_directories(DisplayHawk PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 target_link_libraries(DisplayHawk PRIVATE
     Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia Qt6::Network
@@ -232,7 +238,7 @@ endif()
 
 # MIDI input uses the OS API directly.
 if(WIN32)
-    target_link_libraries(DisplayHawk PRIVATE winmm)
+    target_link_libraries(DisplayHawk PRIVATE winmm dbghelp) # dbghelp: crash reports
 elseif(APPLE)
     target_link_libraries(DisplayHawk PRIVATE "-framework CoreMIDI" "-framework CoreFoundation")
 endif()

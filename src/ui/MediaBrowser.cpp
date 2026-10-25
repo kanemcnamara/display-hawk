@@ -28,9 +28,9 @@ const QStringList kImageSuffixes = {QStringLiteral("png"), QStringLiteral("jpg")
                                     QStringLiteral("bmp"), QStringLiteral("gif"), QStringLiteral("tif"),
                                     QStringLiteral("tiff")};
 
-QImage fitted(const QImage &img)
+QImage fitted(const QImage &img, const QSize &size)
 {
-    QImage out(Thumbnailer::size(), QImage::Format_ARGB32_Premultiplied);
+    QImage out(size, QImage::Format_ARGB32_Premultiplied);
     out.fill(QColor(20, 20, 22));
     if (!img.isNull()) {
         const QImage s = img.scaled(out.size(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
@@ -57,7 +57,7 @@ public:
             if (i.isValid())
                 emit dataChanged(i, i, {Qt::DecorationRole});
         });
-        m_placeholder = QPixmap(Thumbnailer::size());
+        m_placeholder = QPixmap(thumbs->size());
         m_placeholder.fill(QColor(32, 32, 36));
     }
 
@@ -79,8 +79,9 @@ private:
     QPixmap m_placeholder;
 };
 
-Thumbnailer::Thumbnailer(QObject *parent)
+Thumbnailer::Thumbnailer(QObject *parent, const QSize &size)
     : QObject(parent)
+    , m_size(size)
 {
 }
 
@@ -91,13 +92,13 @@ void Thumbnailer::request(const QString &path)
     m_requested.insert(path, true);
     const QString suffix = QFileInfo(path).suffix().toLower();
     if (kImageSuffixes.contains(suffix)) {
-        QThreadPool::globalInstance()->start([this, path] {
+        QThreadPool::globalInstance()->start([this, path, size = m_size] {
             QImageReader reader(path);
             reader.setAutoTransform(true);
             const QSize full = reader.size();
             if (full.isValid())
-                reader.setScaledSize(full.scaled(size() * 2, Qt::KeepAspectRatio));
-            const QImage img = fitted(reader.read());
+                reader.setScaledSize(full.scaled(size * 2, Qt::KeepAspectRatio));
+            const QImage img = fitted(reader.read(), size);
             QMetaObject::invokeMethod(this, [this, path, img] { emit ready(path, img); }, Qt::QueuedConnection);
         });
         return;
@@ -144,7 +145,7 @@ void Thumbnailer::finishVideo(const QImage &image)
     m_videoPath.clear();
     m_timeout->stop();
     m_player->stop();
-    QImage thumb = fitted(image);
+    QImage thumb = fitted(image, m_size);
     if (image.isNull()) { // no picture: a film-strip mark with the file type
         QPainter p(&thumb);
         p.setPen(QColor(150, 150, 160));
@@ -194,8 +195,8 @@ MediaBrowser::MediaBrowser(Document *doc, QWidget *parent)
     m_list = new QListView;
     m_list->setModel(m_thumbs);
     m_list->setViewMode(QListView::IconMode);
-    m_list->setIconSize(Thumbnailer::size());
-    m_list->setGridSize(Thumbnailer::size() + QSize(16, 34));
+    m_list->setIconSize(Thumbnailer::defaultSize());
+    m_list->setGridSize(Thumbnailer::defaultSize() + QSize(16, 34));
     m_list->setResizeMode(QListView::Adjust);
     m_list->setMovement(QListView::Static);
     m_list->setWordWrap(true);

@@ -50,7 +50,7 @@ Every layer has an effect chain (select the layer: **Effects** in its properties
 | Texture | Blur (two-pass Gaussian), RGB Split, Edges, Glow, Grain, Scanlines, Sharpen, Zoom Blur |
 | Time | Strobe, Trails (each frame keeps a fading copy of the last: lighten for opaque content, behind for transparent) |
 | Key | **Colour Key**: makes a colour transparent, e.g. the white background of a logo (key colour, tolerance, softness, spill removal for clean anti-aliased edges); **Luma Key**: removes dark or bright areas |
-| LED panels | **Panel Outline** (edges of every fitted cabinet), **Panel Chase** (a band of lit cabinets travelling left to right, top to bottom, by panel number or in random order; reveals the content or adds white), **Panel Twinkle** (random cabinets flash and fade), **Panel Colours** (a hue per cabinet along an order, optionally drifting) |
+| LED panels | **Panel Outline** (edges of every fitted cabinet; *Mode*: over the content, the lines alone on transparent, or the content showing only along the lines, so moving content through the outlines takes one effect), **Panel Chase** (a band of lit cabinets travelling left to right, top to bottom, by panel number or in random order; reveals the content or adds white), **Panel Twinkle** (random cabinets flash and fade), **Panel Colours** (a hue per cabinet along an order, optionally drifting) |
 
 The LED panel effects follow the real cabinet layout of every wall, including cabinets marked as not fitted (they are skipped), so chases and outlines work on stepped and irregular walls. Left-to-right and top-to-bottom orders use the cabinets' positions, so gaps keep their physical spacing.
 
@@ -154,6 +154,8 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 
 ## Clip deck
 
+**Clip size** (top right of the deck): a slider, or **Fit** (on by default) to size the clips so every column of the deck page fits across the window; layers that do not fit scroll. Movies show their first frame.
+
 | Thing | What it is |
 | --- | --- |
 | **Clip** | A test pattern or media file (video or image) in one slot, with its own fit mode (Fit / Fill / Stretch / Native) and loop setting. |
@@ -205,6 +207,7 @@ In the Output Setup window:
 
 - **Input map** (top): composition with walls (dashed) and slice inputs (orange). **Output map** (bottom): the selected screen with slice outputs. Red outlines = outside the canvas.
 - Drag to move/resize; edges snap to the canvas, other items and panel seams. Shift disables snapping, Alt+click selects items underneath, arrow keys nudge 1 px (Shift: 10 px).
+- **Several at once**: Shift+click adds or removes a wall or slice, Shift+drag on empty canvas selects everything the box touches, Ctrl/Cmd+A selects everything on that map. Dragging any of them moves them all, arrow keys nudge them all, Delete removes them all. **Arrange** (toolbar) aligns edges or centres, distributes with equal gaps, or gives them the first one's width or height, on the map used last.
 - Zoom: mouse wheel, Ctrl/Cmd+scroll or trackpad pinch. Pan: trackpad scroll, middle-drag or drag empty space. Double-click or F resets the view.
 - **Undo/redo** (Ctrl/Cmd+Z, Ctrl+Y / Cmd+Shift+Z): a whole drag or a burst of typing is one step.
 - **F9** toggles outputs live; **Esc** on an output turns them off. **Ctrl/Cmd+I** identifies every physical display.
@@ -247,7 +250,22 @@ python3 -m aqt install-qt mac desktop 6.8.3 clang_64 -m qtmultimedia qtshadertoo
 ./build.sh                      # -> build/Release/DisplayHawk.app
 ```
 
-CI (`.github/workflows/build.yml`) builds Windows (MSVC) and macOS on every push and uploads the deployed app.
+CI (`.github/workflows/build.yml`) builds Windows (MSVC) and macOS and runs the self-test (currently switched off; run it by hand with `gh workflow enable build && gh workflow run build`).
+
+## Installing and releasing
+
+`.github/workflows/release.yml` makes the installers: **`DisplayHawk-<version>-windows-x64-setup.exe`** (Inno Setup: Program Files or just for the user, Start menu, optional desktop icon, `.dhawk` files open in Display Hawk, the Visual C++ runtime when missing), a portable **zip**, and **`DisplayHawk-<version>-macos.dmg`** (drag to Applications). It runs only by hand (`gh workflow run release`, files under the run's artifacts) or for a version tag (`git tag v0.2.0 && git push --tags`), which also drafts a GitHub release with the files. The version comes from `project()` in `CMakeLists.txt` and shows in the app and the Windows file properties.
+
+Signing is switched on by repository secrets (*Settings → Secrets and variables → Actions*):
+
+| Secret | What |
+| --- | --- |
+| `MACOS_CERTIFICATE`, `MACOS_CERTIFICATE_PASSWORD` | Developer ID Application certificate (.p12, base64) and its password |
+| `MACOS_SIGN_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | for notarisation (an app-specific password from appleid.apple.com) |
+| `WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD` | code-signing certificate (.pfx, base64) |
+
+Without them the Mac app is ad-hoc signed: the first time, right-click it → *Open* (or `xattr -dr com.apple.quarantine "/Applications/Display Hawk.app"`). The Windows installer is unsigned, so SmartScreen asks for *More info → Run anyway*. The signed app uses the hardened runtime with camera, microphone and library-loading (NDI) entitlements (`assets/macos/entitlements.plist`).
 
 ## Self-test
 

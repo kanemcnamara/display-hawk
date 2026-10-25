@@ -15,6 +15,13 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <cstdio>
+#include "CrashReport.h"
+#include <QTabBar>
+#include "version.h"
+#include <QScrollArea>
+#include <QCheckBox>
+#include "ui/ClipDeck.h"
 #include "ui/HapConvertDialog.h"
 #include <cmath>
 #include <QElapsedTimer>
@@ -803,6 +810,20 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
               }),
               "panel outline draws cabinet edges only on the wall");
         save(previews[0], "fx-panel-outline");
+        // Mode: lines only (white lines, nothing else), then content in lines (red lines, nothing else).
+        outline.params.resize(6);
+        outline.params[5] = 1;
+        setFx(-1, {outline});
+        const bool linesOnly = waitFor([&] {
+            return near(at(cab.left() + 5, cab.center().y()), 255, 255, 255) && near(centre(3, 2), 0, 0, 0);
+        });
+        outline.params[5] = 2;
+        setFx(-1, {outline});
+        const bool contentInLines = waitFor([&] {
+            return near(at(cab.left() + 5, cab.center().y()), 255, 0, 0) && near(centre(3, 2), 0, 0, 0);
+        });
+        save(previews[0], "fx-panel-outline-content");
+        check(linesOnly && contentInLines, "panel outline modes: lines only, content in lines");
 
         // A still chase (speed 0) lights the panels whose order is within the band behind 0:
         // left to right, column c has order c / 10, so columns 0 and 7..9 are lit, 1..6 dark.
@@ -1911,7 +1932,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         if (!video.isEmpty())
             thumbs.request(video);
         const bool imageThumb = waitFor([&] {
-            return got.contains(png) && near(QColor(got[png].pixel(Thumbnailer::size().width() / 2, Thumbnailer::size().height() / 2)), 0, 255, 0);
+            return got.contains(png) && near(QColor(got[png].pixel(Thumbnailer::defaultSize().width() / 2, Thumbnailer::defaultSize().height() / 2)), 0, 255, 0);
         }, 5000);
         const bool videoThumb = video.isEmpty() || waitFor([&] { return got.contains(video) && !got[video].isNull(); }, 8000);
         check(imageThumb && videoThumb, "media browser thumbnails (image and video)");
@@ -2473,6 +2494,95 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(0);
     }
 
+    // Several slices at once on the output map: Shift+click, align, distribute, drag together,
+    // Ctrl+A, delete. Real mouse events, so the canvas handling is exercised too.
+    {
+        Project &p = doc.project();
+        const QVector<Slice> saved = p.screens[0].slices;
+        auto slice = [](const QRect &out) {
+            Slice sl;
+            sl.input = QRect(0, 0, 100, 100);
+            sl.output = out;
+            return sl;
+        };
+        p.screens[0].slices = {slice(QRect(100, 100, 200, 100)), slice(QRect(500, 300, 300, 100)), slice(QRect(1200, 600, 200, 150))};
+        doc.notifyChanged(true);
+        CanvasView *out = window.outputSetup()->outputView();
+        out->setScreenIndex(0);
+        waitMs(200);
+        auto mouse = [&](QEvent::Type type, const QPointF &canvas, Qt::KeyboardModifiers mods, Qt::MouseButtons held) {
+            const QPointF at = out->widgetPos(canvas);
+            QMouseEvent ev(type, at, out->mapToGlobal(at), Qt::LeftButton, held, mods);
+            QApplication::sendEvent(out, &ev);
+        };
+        auto click = [&](const QPointF &canvas, Qt::KeyboardModifiers mods) {
+            mouse(QEvent::MouseButtonPress, canvas, mods, Qt::LeftButton);
+            mouse(QEvent::MouseButtonRelease, canvas, mods, Qt::NoButton);
+        };
+        click({200, 150}, Qt::NoModifier);
+        click({650, 350}, Qt::ShiftModifier);
+        click({1300, 675}, Qt::ShiftModifier);
+        const bool three = doc.selectionSet().size() == 3 && out->selectedHere() == 3;
+        out->arrange(CanvasView::Arrange::Top);
+        // Looked up each time: editing the project can give it a fresh copy of the slice list.
+        auto at = [&](int i) { return p.screens[0].slices[i].output; };
+        const bool aligned = at(0).top() == 100 && at(1).top() == 100 && at(2).top() == 100;
+        out->arrange(CanvasView::Arrange::DistributeH); // span 100..1400, widths 700: gaps of 300
+        const bool distributed = at(0).left() == 100 && at(1).left() == 600 && at(2).left() == 1200;
+        // Drag one: the others follow (Shift held at the press would toggle, so it is plain).
+        mouse(QEvent::MouseButtonPress, {700, 150}, Qt::NoModifier, Qt::LeftButton);
+        mouse(QEvent::MouseMove, {720, 160}, Qt::ShiftModifier, Qt::LeftButton); // Shift: no snapping
+        mouse(QEvent::MouseMove, {750, 200}, Qt::ShiftModifier, Qt::LeftButton);
+        mouse(QEvent::MouseButtonRelease, {750, 200}, Qt::ShiftModifier, Qt::NoButton);
+        const bool together = at(0).topLeft() == QPoint(150, 150) && at(1).topLeft() == QPoint(650, 150)
+                              && at(2).topLeft() == QPoint(1250, 150);
+        doc.select(Selection::ofScreen(0));
+        out->setFocus();
+        QKeyEvent selectAll(QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier);
+        QApplication::sendEvent(out, &selectAll);
+        const bool all = doc.selectionSet().size() == 3;
+        window.outputSetup()->grab().save(QStringLiteral("%1/multi-select-window.png").arg(outDir));
+        doc.deleteSelection();
+        const bool deleted = p.screens[0].slices.isEmpty();
+        check(three && aligned && distributed && together && all && deleted,
+              qPrintable(QStringLiteral("multi-select on the output map: shift+click %1, align %2, distribute %3, drag together %4, "
+                                        "select all %5, delete %6")
+                             .arg(three).arg(aligned).arg(distributed).arg(together).arg(all).arg(deleted)));
+        p.screens[0].slices = saved;
+        doc.notifyChanged(true);
+    }
+
+    // Clip deck sizing: with "Fit", the clips grow and shrink with the window and every column shows.
+    if (auto *deck = window.findChild<ClipDeck *>()) {
+        auto *grid = deck->findChild<ClipGrid *>();
+        auto *fit = deck->findChild<QCheckBox *>();
+        auto *scroll = deck->findChild<QScrollArea *>();
+        auto *tabs = deck->findChild<QTabBar *>();
+        const QVector<Deck> savedDecks = doc.project().decks;
+        doc.project().decks = {Deck{QStringLiteral("Show"), 0, 8}}; // a page of 8 columns, as a show would use
+        doc.notifyChanged(true);
+        if (tabs)
+            tabs->setCurrentIndex(0);
+        if (grid && fit && scroll) {
+            fit->setChecked(false);
+            fit->setChecked(true);
+            waitMs(300);
+            const int wide = grid->cellWidth();
+            const bool fitsWide = grid->width() + 190 <= scroll->viewport()->width() + 2;
+            const QSize before = window.size();
+            window.resize(before.width() - 500, before.height());
+            waitFor([&] { return grid->cellWidth() < wide; }, 3000);
+            const int narrow = grid->cellWidth();
+            const bool fitsNarrow = narrow == ClipDeck::kMinCellW || grid->width() + 190 <= scroll->viewport()->width() + 2;
+            window.resize(before);
+            waitMs(300);
+            check(narrow < wide && fitsWide && fitsNarrow,
+                  qPrintable(QStringLiteral("clip deck fits its clips to the window (%1 px, then %2 px)").arg(wide).arg(narrow)));
+        }
+        doc.project().decks = savedDecks;
+        doc.notifyChanged(true);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
@@ -2499,13 +2609,16 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
 
 int main(int argc, char *argv[])
 {
+    std::setvbuf(stderr, nullptr, _IONBF, 0); // nothing lost if it crashes while redirected to a file
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Display Hawk"));
+    QApplication::setApplicationVersion(QStringLiteral(DH_VERSION_STRING));
     QApplication::setOrganizationName(QStringLiteral("Display Hawk"));
     QApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/icon/displayhawk.png")));
     applyDarkTheme(app);
     Isf::scan({Isf::defaultFolder()}); // bundled and user ISF shaders, before any project uses them
     qInstallMessageHandler(logToFile);
+    CrashReport::install(QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + QStringLiteral("/crashes"));
 
     Document doc;
     RenderEngine engine(&doc);

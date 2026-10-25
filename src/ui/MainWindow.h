@@ -64,6 +64,7 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *e) override;
+    bool eventFilter(QObject *watched, QEvent *event) override; // setups opened from Finder (macOS)
 
 private:
     void buildActions();

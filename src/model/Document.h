@@ -48,6 +48,13 @@ public:
     void notifyMediaChanged();
 
     Selection selection() const { return m_selection; }
+    // Several walls and slices selected together (moved, nudged, aligned and deleted as one):
+    // selection() first, then the others. Selecting anything the usual way clears the others.
+    QVector<Selection> selectionSet() const;
+    bool isSelected(const Selection &s) const;
+    void setSelectionSet(const QVector<Selection> &set); // the first becomes selection()
+    void toggleSelected(const Selection &s);             // adds or removes a wall or slice
+
     // Masks are edited on a target: a screen (index) or the composition (kCompositionMasks).
     QVector<ProjectionMask> *maskList(int target);
     // The mask whose points the map edits (target -1 = none).
@@ -163,6 +170,7 @@ private:
     int m_maskScreen = -1;
     int m_mask = -1;
     int m_drawTarget = -1;
+    QVector<Selection> m_extra; // selected along with m_selection (walls and slices only)
     QString m_filePath;
     bool m_modified = false;
     QJsonObject m_savedJson;

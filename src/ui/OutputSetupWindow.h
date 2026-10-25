@@ -53,5 +53,6 @@ private:
     QToolBar *m_toolbar;
     QLabel *m_cursorLabel;
     bool m_syncingTree = false;
+    CanvasView *m_lastView = nullptr; // the map clicked last: Arrange acts on it
     bool m_restored = false;
 };

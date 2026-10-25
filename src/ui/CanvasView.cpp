@@ -458,6 +458,86 @@ void CanvasView::dragTo(const QPointF &widgetPos, bool snapping)
     }
     if (r != rectFor(m_dragSel))
         setRectFor(m_dragSel, r);
+    if (m_drag == Move) {
+        const QPoint delta = r.topLeft() - m_startRect.topLeft();
+        for (const auto &g : std::as_const(m_groupStart))
+            if (rectFor(g.first) != g.second.translated(delta))
+                setRectFor(g.first, g.second.translated(delta));
+    }
+}
+
+int CanvasView::selectedHere() const
+{
+    int n = 0;
+    for (const Selection &s : m_doc->selectionSet())
+        n += ownsSelection(s) && !rectFor(s).isNull();
+    return n;
+}
+
+void CanvasView::arrange(Arrange op)
+{
+    QVector<QPair<Selection, QRect>> its;
+    for (const Selection &s : m_doc->selectionSet())
+        if (ownsSelection(s) && !rectFor(s).isNull())
+            its.append({s, rectFor(s)});
+    if (its.size() < 2)
+        return;
+    QRect bounds;
+    for (const auto &i : std::as_const(its))
+        bounds |= i.second;
+    // Walls take their size from their panels, and warped slices from their corners: not resized.
+    QHash<QString, bool> resizable;
+    auto key = [](const Selection &s) { return QStringLiteral("%1/%2/%3/%4").arg(int(s.kind)).arg(s.wall).arg(s.screen).arg(s.slice); };
+    for (const Item &it : items())
+        resizable.insert(key(it.sel), it.resizable && it.sel.kind == Selection::Slice);
+    const QRect lead = its.first().second; // the primary selection sets the size
+
+    QVector<QPair<Selection, QRect>> out = its;
+    if (op == Arrange::DistributeH || op == Arrange::DistributeV) {
+        // Equal gaps between neighbours, the outer two staying put.
+        const bool h = op == Arrange::DistributeH;
+        std::sort(out.begin(), out.end(), [h](const auto &a, const auto &b) {
+            return h ? a.second.center().x() < b.second.center().x() : a.second.center().y() < b.second.center().y();
+        });
+        double total = 0;
+        for (const auto &o : std::as_const(out))
+            total += h ? o.second.width() : o.second.height();
+        const double span = h ? bounds.width() : bounds.height();
+        const double gap = (span - total) / (out.size() - 1);
+        double at = h ? bounds.left() : bounds.top();
+        for (auto &o : out) {
+            if (h)
+                o.second.moveLeft(qRound(at));
+            else
+                o.second.moveTop(qRound(at));
+            at += (h ? o.second.width() : o.second.height()) + gap;
+        }
+    } else {
+        for (auto &o : out) {
+            QRect &r = o.second;
+            switch (op) {
+            case Arrange::Left: r.moveLeft(bounds.left()); break;
+            case Arrange::Right: r.moveLeft(bounds.left() + bounds.width() - r.width()); break;
+            case Arrange::HCenter: r.moveLeft(bounds.left() + (bounds.width() - r.width()) / 2); break;
+            case Arrange::Top: r.moveTop(bounds.top()); break;
+            case Arrange::Bottom: r.moveTop(bounds.top() + bounds.height() - r.height()); break;
+            case Arrange::VCenter: r.moveTop(bounds.top() + (bounds.height() - r.height()) / 2); break;
+            case Arrange::SameWidth:
+                if (resizable.value(key(o.first)))
+                    r.setWidth(lead.width());
+                break;
+            case Arrange::SameHeight:
+                if (resizable.value(key(o.first)))
+                    r.setHeight(lead.height());
+                break;
+            default: break;
+            }
+        }
+    }
+    for (const auto &o : std::as_const(out))
+        if (o.second != rectFor(o.first))
+            setRectFor(o.first, o.second);
+    m_doc->commitUndo();
 }
 
 void CanvasView::paintEvent(QPaintEvent *)
@@ -493,8 +573,8 @@ void CanvasView::paintEvent(QPaintEvent *)
 
     for (const Item &it : list) {
         const QRectF wr = toWidget(it.rect);
-        const bool isSel = it.sel == sel;
-        if (isSel)
+        const bool isSel = m_doc->isSelected(it.sel);
+        if (it.sel == sel)
             selected = &it;
         const bool outOfBounds = !QRect(QPoint(), cs).contains(it.rect);
         QColor c = outOfBounds && it.sel.kind == Selection::Slice ? QColor(255, 70, 70) : it.color;
@@ -704,6 +784,7 @@ void CanvasView::paintEvent(QPaintEvent *)
 void CanvasView::mousePressEvent(QMouseEvent *e)
 {
     setFocus();
+    emit activated();
     m_pressPos = m_lastPos = e->position();
     if (e->button() == Qt::MiddleButton || (e->button() == Qt::LeftButton && e->modifiers() & Qt::ControlModifier)) {
         m_drag = Pan;
@@ -781,11 +862,30 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
         const int cur = under.indexOf(hit);
         hit = under[(cur + 1) % under.size()];
     }
+    const bool shift = e->modifiers() & Qt::ShiftModifier;
+    if (hit >= 0 && shift) { // Shift+click: add to or take out of the selection
+        m_doc->toggleSelected(list[hit].sel);
+        return;
+    }
     if (hit >= 0) {
-        m_doc->select(list[hit].sel);
+        if (!m_doc->isSelected(list[hit].sel)) {
+            m_doc->select(list[hit].sel);
+        } else if (m_doc->selection() != list[hit].sel) {
+            QVector<Selection> set = m_doc->selectionSet(); // the one grabbed leads, the rest stay
+            set.removeAll(list[hit].sel);
+            set.prepend(list[hit].sel);
+            m_doc->setSelectionSet(set);
+        }
         m_drag = Move;
         m_dragSel = list[hit].sel;
         m_startRect = list[hit].rect;
+        m_groupStart.clear();
+        for (const Selection &s : m_doc->selectionSet())
+            if (s != m_dragSel && ownsSelection(s))
+                m_groupStart.append({s, rectFor(s)});
+    } else if (shift) { // Shift+drag on empty canvas: a selection box
+        m_drag = Band;
+        m_bandEnd = e->position();
     } else {
         if (m_mode == InputMap)
             m_doc->select(Selection::composition());
@@ -801,7 +901,10 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
     const QPointF pos = e->position();
     if (drawingMask())
         update(); // the rubber band follows the cursor
-    if (m_drag == Pan) {
+    if (m_drag == Band) {
+        m_bandEnd = pos;
+        update();
+    } else if (m_drag == Pan) {
         m_pan += pos - m_lastPos;
         update();
     } else if (m_drag == MaskPoint || m_drag == MaskMove) {
@@ -832,6 +935,22 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
 
 void CanvasView::mouseReleaseEvent(QMouseEvent *)
 {
+    if (m_drag == Band) {
+        const QRectF box = QRectF(toCanvas(m_pressPos), toCanvas(m_bandEnd)).normalized();
+        QVector<Selection> set = m_doc->selectionSet();
+        if (!ownsSelection(set.first()))
+            set.clear();
+        for (const Item &it : items()) {
+            const QRectF r = it.poly.isEmpty() ? QRectF(it.rect) : it.poly.boundingRect();
+            if (box.intersects(r) && !set.contains(it.sel))
+                set.append(it.sel);
+        }
+        if (!set.isEmpty())
+            m_doc->setSelectionSet(set);
+        m_drag = NoDrag;
+        update();
+        return;
+    }
     if (m_drag == Move || m_drag == Resize || m_drag == Corner || m_drag == MaskPoint || m_drag == MaskMove)
         m_doc->commitUndo(); // one undo step per drag
     m_drag = NoDrag;
@@ -931,7 +1050,16 @@ void CanvasView::keyPressEvent(QKeyEvent *e)
         default: break;
         }
     }
+    if (e->matches(QKeySequence::SelectAll)) {
+        QVector<Selection> all;
+        for (const Item &it : items())
+            all.append(it.sel);
+        if (!all.isEmpty())
+            m_doc->setSelectionSet(all);
+        return;
+    }
     const Selection sel = m_doc->selection();
+    Q_UNUSED(sel);
     const int step = (e->modifiers() & Qt::ShiftModifier) ? 10 : 1;
     QPoint delta;
     switch (e->key()) {
@@ -942,6 +1070,7 @@ void CanvasView::keyPressEvent(QKeyEvent *e)
     case Qt::Key_F: resetView(); return;
     default: QWidget::keyPressEvent(e); return;
     }
-    if (ownsSelection(sel))
-        setRectFor(sel, rectFor(sel).translated(delta));
+    for (const Selection &s : m_doc->selectionSet())
+        if (ownsSelection(s))
+            setRectFor(s, rectFor(s).translated(delta));
 }

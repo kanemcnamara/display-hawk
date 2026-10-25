@@ -20,6 +20,28 @@
     <string>${MACOSX_BUNDLE_SHORT_VERSION_STRING}</string>
     <key>CFBundleVersion</key>
     <string>${MACOSX_BUNDLE_BUNDLE_VERSION}</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>12.0</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Display Hawk</string>
+    <!-- Display Hawk setups open from Finder. -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Display Hawk setup</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>dhawk</string>
+            </array>
+            <key>CFBundleTypeIconFile</key>
+            <string>${MACOSX_BUNDLE_ICON_FILE}</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+        </dict>
+    </array>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
@@ -29,6 +51,9 @@
     <!-- Live video inputs (cameras, capture cards). -->
     <key>NSCameraUsageDescription</key>
     <string>Display Hawk shows cameras and capture cards as live clips.</string>
+    <!-- Audio inputs: audio-reactive control and LTC timecode. -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Display Hawk listens to an audio input for audio-reactive effects and LTC timecode.</string>
     <!-- OSC, Art-Net, sACN and NDI all talk to devices on the local network. -->
     <key>NSLocalNetworkUsageDescription</key>
     <string>Display Hawk receives OSC, Art-Net and sACN control, and sends and receives NDI video on your network.</string>

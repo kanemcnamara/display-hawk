@@ -21,7 +21,9 @@
 #include <QCameraDevice>
 #include <QMediaDevices>
 
+#include <QCheckBox>
 #include <QContextMenuEvent>
+#include <QSettings>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QHBoxLayout>
@@ -33,6 +35,7 @@
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollArea>
+#include <QScrollBar>
 #include <QSlider>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -58,11 +61,11 @@ QToolButton *toggleButton(const QString &text, const QString &tip, const QString
 class LayerRow : public QWidget
 {
 public:
-    LayerRow(Document *doc, int layer)
+    LayerRow(Document *doc, int layer, int height)
         : m_doc(doc)
         , m_layer(layer)
     {
-        setFixedHeight(ClipDeck::kRowH);
+        setFixedHeight(height);
         setAutoFillBackground(true);
         auto *v = new QVBoxLayout(this);
         v->setContentsMargins(6, 4, 6, 4);
@@ -304,6 +307,7 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
     h->addStretch();
 
     auto *scroll = new QScrollArea;
+    m_scroll = scroll;
     scroll->setWidget(content);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
@@ -320,6 +324,32 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
     tabs->addWidget(m_deckTabs);
     tabs->addWidget(addDeck);
     tabs->addStretch();
+    // Clip size: a slider, or "Fit" to fill the space with every column and layer.
+    QSettings settings;
+    m_cellSize = new QSlider(Qt::Horizontal);
+    m_cellSize->setRange(kMinCellW, kMaxCellW);
+    m_cellSize->setFixedWidth(120);
+    m_cellSize->setValue(settings.value(QStringLiteral("deck/cellWidth"), 160).toInt());
+    m_cellSize->setToolTip(tr("Clip size"));
+    m_fit = new QCheckBox(tr("Fit"));
+    m_fit->setToolTip(tr("Size the clips to show every column of this deck across the window"));
+    m_fit->setChecked(settings.value(QStringLiteral("deck/fit"), true).toBool());
+    tabs->addWidget(new QLabel(tr("Clip size")));
+    tabs->addWidget(m_cellSize);
+    tabs->addWidget(m_fit);
+    connect(m_cellSize, &QSlider::valueChanged, this, [this](int v) {
+        QSettings().setValue(QStringLiteral("deck/cellWidth"), v);
+        if (m_fit->isChecked()) {
+            const QSignalBlocker b(m_fit);
+            m_fit->setChecked(false); // moving the slider takes over from "Fit"
+            QSettings().setValue(QStringLiteral("deck/fit"), false);
+        }
+        applyCellSize();
+    });
+    connect(m_fit, &QCheckBox::toggled, this, [this](bool on) {
+        QSettings().setValue(QStringLiteral("deck/fit"), on);
+        applyCellSize();
+    });
     connect(m_deckTabs, &QTabBar::currentChanged, this, [this](int i) {
         if (m_rebuildingTabs)
             return;
@@ -328,6 +358,7 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
             m_grid->setColumnRange(decks[i].firstColumn, decks[i].columnCount);
         else
             m_grid->setColumnRange(0, -1);
+        applyCellSize();
     });
     connect(addDeck, &QToolButton::clicked, this, [this] {
         Project &p = m_doc->project();
@@ -405,13 +436,40 @@ void ClipDeck::rebuildRows()
         m_rows.clear();
         // Top layer first, like the composition stacks them.
         for (int r = 0; r < count; ++r) {
-            auto *row = new LayerRow(m_doc, count - 1 - r);
+            auto *row = new LayerRow(m_doc, count - 1 - r, m_grid->rowHeight());
             m_rowLayout->insertWidget(r, row);
             m_rows.append(row);
         }
     }
     m_grid->updateSize();
+    applyCellSize();
     refresh();
+}
+
+void ClipDeck::resizeEvent(QResizeEvent *e)
+{
+    QWidget::resizeEvent(e);
+    if (m_fit && m_fit->isChecked())
+        applyCellSize();
+}
+
+void ClipDeck::applyCellSize()
+{
+    int width = m_cellSize->value();
+    if (m_fit->isChecked()) {
+        // Every column across; layers that do not fit scroll. The vertical scroll bar's width is
+        // allowed for, so showing it does not shrink the clips again.
+        const int scrollBar = m_scroll->verticalScrollBar()->sizeHint().width();
+        const int avail = m_scroll->viewport()->width() + (m_scroll->verticalScrollBar()->isVisible() ? scrollBar : 0)
+                          - scrollBar - 190 - 4;
+        width = avail / qMax(1, m_grid->columnsShown());
+    }
+    width = qBound(kMinCellW, width, kMaxCellW);
+    if (width == m_grid->cellWidth())
+        return;
+    m_grid->setCellWidth(width);
+    for (QWidget *row : std::as_const(m_rows))
+        row->setFixedHeight(m_grid->rowHeight());
 }
 
 void ClipDeck::refresh()
@@ -451,6 +509,7 @@ void ClipDeck::rebuildDeckTabs()
         m_grid->setColumnRange(decks[i].firstColumn, decks[i].columnCount);
     else
         m_grid->setColumnRange(0, -1);
+    applyCellSize();
 }
 
 // ---------------------------------------------------------------- ClipGrid
@@ -462,6 +521,12 @@ ClipGrid::ClipGrid(Document *doc, RenderEngine *engine, QWidget *parent)
 {
     setAcceptDrops(true);
     setMouseTracking(true);
+    m_frames = new Thumbnailer(this, QSize(480, 270)); // big enough for the largest cells
+    connect(m_frames, &Thumbnailer::ready, this, [this](const QString &path, const QImage &img) {
+        m_movieFrames.insert(path, img);
+        m_thumbs.clear();
+        update();
+    });
     updateSize();
     // Playing movies show their position under the thumbnail.
     auto *timer = new QTimer(this);
@@ -483,6 +548,22 @@ void ClipGrid::setColumnRange(int first, int count)
     updateSize();
 }
 
+int ClipGrid::columnsShown() const
+{
+    return qMax(0, lastColumn() - m_first);
+}
+
+void ClipGrid::setCellWidth(int width)
+{
+    width = qBound(ClipDeck::kMinCellW, width, ClipDeck::kMaxCellW);
+    if (width == m_cellW)
+        return;
+    m_cellW = width;
+    m_rowH = ClipDeck::rowHeightFor(width);
+    m_thumbs.clear(); // drawn at the cell size
+    updateSize();
+}
+
 int ClipGrid::lastColumn() const
 {
     const int columns = m_doc->project().columns;
@@ -492,26 +573,25 @@ int ClipGrid::lastColumn() const
 void ClipGrid::updateSize()
 {
     const Project &p = m_doc->project();
-    setFixedSize(qMax(0, lastColumn() - m_first) * ClipDeck::kCellW + 1, ClipDeck::kHeaderH + int(p.layers.size()) * ClipDeck::kRowH + 1);
+    setFixedSize(qMax(0, lastColumn() - m_first) * m_cellW + 1, ClipDeck::kHeaderH + int(p.layers.size()) * m_rowH + 1);
     update();
 }
 
 QRect ClipGrid::cellRect(int layer, int column) const
 {
     const int row = int(m_doc->project().layers.size()) - 1 - layer;
-    return QRect((column - m_first) * ClipDeck::kCellW, ClipDeck::kHeaderH + row * ClipDeck::kRowH, ClipDeck::kCellW,
-                 ClipDeck::kRowH);
+    return QRect((column - m_first) * m_cellW, ClipDeck::kHeaderH + row * m_rowH, m_cellW, m_rowH);
 }
 
 QPair<int, int> ClipGrid::cellAt(const QPoint &pos) const
 {
     const Project &p = m_doc->project();
-    const int column = m_first + pos.x() / ClipDeck::kCellW;
+    const int column = m_first + pos.x() / m_cellW;
     if (pos.x() < 0 || column >= lastColumn())
         return {-1, -1};
     if (pos.y() < ClipDeck::kHeaderH)
         return {-2, column};
-    const int row = (pos.y() - ClipDeck::kHeaderH) / ClipDeck::kRowH;
+    const int row = (pos.y() - ClipDeck::kHeaderH) / m_rowH;
     if (row < 0 || row >= p.layers.size())
         return {-1, -1};
     return {int(p.layers.size()) - 1 - row, column};
@@ -519,7 +599,7 @@ QPair<int, int> ClipGrid::cellAt(const QPoint &pos) const
 
 QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
 {
-    const QSize size(ClipDeck::kCellW - 8, ClipDeck::kRowH - 22);
+    const QSize size(m_cellW - 8, m_rowH - 22);
     QJsonObject keyObj{{"src", int(clip.source)},
                        {"pattern", int(clip.pattern)},
                        {"path", clip.mediaPath},
@@ -538,6 +618,7 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         return *it;
 
     QImage img;
+    bool pending = false;
     if (clip.isLive()) {
         // Live inputs: a badge rather than a frame (the picture changes all the time).
         QPixmap pm(size);
@@ -596,6 +677,13 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         // Generated at the real size (capped) so labels like the grid's resolution are truthful.
         const QSize genSize = project.compSize().boundedTo(QSize(3840, 2160));
         img = Patterns::generate(project, clip, genSize);
+    } else if (MediaBrowser::isMovie(clip.mediaPath)) {
+        if (auto it = m_movieFrames.constFind(clip.mediaPath); it != m_movieFrames.cend()) {
+            img = *it;
+        } else if (QFileInfo::exists(clip.mediaPath)) {
+            m_frames->request(clip.mediaPath); // the placeholder below is not cached meanwhile
+            pending = true;
+        }
     } else {
         QImageReader reader(clip.mediaPath);
         reader.setAutoTransform(true);
@@ -619,7 +707,7 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         QFont f = p.font();
         f.setPixelSize(22);
         p.setFont(f);
-        p.drawText(pm.rect().adjusted(0, -8, 0, -8), Qt::AlignCenter, QStringLiteral("â–¶"));
+        p.drawText(pm.rect().adjusted(0, -8, 0, -8), Qt::AlignCenter, QStringLiteral("▶"));
         f.setPixelSize(10);
         p.setFont(f);
         const QString ext = QFileInfo(clip.mediaPath).suffix().toUpper();
@@ -627,6 +715,8 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
                    QFileInfo::exists(clip.mediaPath) ? ext : tr("missing file"));
     }
     p.end();
+    if (pending)
+        return pm;
     if (m_thumbs.size() > 300)
         m_thumbs.clear();
     m_thumbs.insert(key, pm);
@@ -648,7 +738,7 @@ void ClipGrid::paintEvent(QPaintEvent *)
         bool all = !p.layers.isEmpty();
         for (const Layer &l : p.layers)
             all = all && (l.activeColumn == c || (l.clips.value(c).isEmpty() && l.activeColumn == -1));
-        const QRect hr((c - m_first) * ClipDeck::kCellW, 0, ClipDeck::kCellW - 1, ClipDeck::kHeaderH - 2);
+        const QRect hr((c - m_first) * m_cellW, 0, m_cellW - 1, ClipDeck::kHeaderH - 2);
         painter.fillRect(hr, all ? QColor(40, 90, 50) : QColor(44, 44, 50));
         painter.setPen(QColor(200, 200, 200));
         painter.drawText(hr, Qt::AlignCenter, QString::number(c + 1));

@@ -1,2 +1,30 @@
-// Windows executable icon (Explorer, taskbar, Alt+Tab).
+// Windows executable icon (Explorer, taskbar, Alt+Tab) and version details (file properties).
+#include <winver.h>
+#include "version.h"
+
 IDI_ICON1 ICON "../assets/icon/displayhawk.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION DH_VERSION_MAJOR, DH_VERSION_MINOR, DH_VERSION_PATCH, 0
+PRODUCTVERSION DH_VERSION_MAJOR, DH_VERSION_MINOR, DH_VERSION_PATCH, 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName", "Display Hawk"
+            VALUE "FileDescription", "Display Hawk media server"
+            VALUE "FileVersion", DH_VERSION_STRING
+            VALUE "InternalName", "DisplayHawk"
+            VALUE "OriginalFilename", "DisplayHawk.exe"
+            VALUE "ProductName", "Display Hawk"
+            VALUE "ProductVersion", DH_VERSION_STRING
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x409, 1200
+    END
+END

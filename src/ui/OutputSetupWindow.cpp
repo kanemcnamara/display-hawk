@@ -10,6 +10,8 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
+#include <QToolButton>
 #include <QSet>
 #include <QSettings>
 #include <QSplitter>
@@ -114,6 +116,8 @@ OutputSetupWindow::OutputSetupWindow(Document *doc, RenderEngine *engine, QWidge
     m_cursorLabel = new QLabel;
     statusBar()->addWidget(m_cursorLabel, 1);
     connect(m_inputView, &CanvasView::statusMessage, m_cursorLabel, &QLabel::setText);
+    connect(m_inputView, &CanvasView::activated, this, [this] { m_lastView = m_inputView; });
+    connect(m_outputView, &CanvasView::activated, this, [this] { m_lastView = m_outputView; });
     connect(m_outputView, &CanvasView::statusMessage, m_cursorLabel, &QLabel::setText);
 
     connect(m_doc, &Document::structureChanged, this, [this] {
@@ -148,6 +152,37 @@ void OutputSetupWindow::addSharedActions(const QList<QAction *> &actions, const 
             m_toolbar->addSeparator();
     }
     m_toolbar->addSeparator();
+    // Arrange: line up the selected walls / slices (Shift+click or Shift+drag to select several).
+    auto *arrange = new QToolButton;
+    arrange->setText(tr("Arrange"));
+    arrange->setPopupMode(QToolButton::InstantPopup);
+    arrange->setToolTip(tr("Align, distribute or size the selected items on the map you used last "
+                           "(Shift+click, Shift+drag or Ctrl+A to select several)"));
+    auto *menu = new QMenu(arrange);
+    using A = CanvasView::Arrange;
+    const QList<QPair<QString, A>> ops{{tr("Align left edges"), A::Left},       {tr("Align centres (horizontally)"), A::HCenter},
+                                       {tr("Align right edges"), A::Right},     {QString(), A::Left},
+                                       {tr("Align top edges"), A::Top},         {tr("Align middles (vertically)"), A::VCenter},
+                                       {tr("Align bottom edges"), A::Bottom},   {QString(), A::Left},
+                                       {tr("Distribute horizontally"), A::DistributeH},
+                                       {tr("Distribute vertically"), A::DistributeV}, {QString(), A::Left},
+                                       {tr("Same width as the first selected"), A::SameWidth},
+                                       {tr("Same height as the first selected"), A::SameHeight}};
+    for (const auto &op : ops) {
+        if (op.first.isEmpty()) {
+            menu->addSeparator();
+            continue;
+        }
+        const A a = op.second;
+        menu->addAction(op.first, this, [this, a] { (m_lastView ? m_lastView : m_inputView)->arrange(a); });
+    }
+    connect(menu, &QMenu::aboutToShow, this, [this, menu] {
+        const bool enough = (m_lastView ? m_lastView : m_inputView)->selectedHere() >= 2;
+        for (QAction *a : menu->actions())
+            a->setEnabled(enough);
+    });
+    arrange->setMenu(menu);
+    m_toolbar->addWidget(arrange);
     m_toolbar->addAction(tr("Reset views"), this, [this] {
         m_inputView->resetView();
         m_outputView->resetView();
@@ -168,8 +203,9 @@ void OutputSetupWindow::showEvent(QShowEvent *e)
         restoreState(s.value(QStringLiteral("ui/setupState")).toByteArray());
     }
     QMainWindow::showEvent(e);
-    statusBar()->showMessage(tr("Tip: Shift disables snapping, Alt+click selects items underneath, "
-                                "arrow keys nudge, wheel zooms, drag empty space to pan."), 15000);
+    statusBar()->showMessage(tr("Tip: Shift+click or Shift+drag selects several (Ctrl+A all), Shift disables snapping "
+                                "while dragging, Alt+click selects items underneath, arrow keys nudge, wheel zooms, "
+                                "drag empty space to pan."), 15000);
     emit visibilityChanged(true);
 }
 

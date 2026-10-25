@@ -190,8 +190,9 @@ void main()
         bool on = p0.x <= 0.0 || fract(time * p0.x) < p0.y;
         if (!on)
             o = p0.z > 0.5 ? vec4(1.0) : vec4(0.0);
-    } else if (mode == 12) { // Panel outline
+    } else if (mode == 12) { // Panel outline: over the content, the lines alone, or the content in them
         int id = panelAt(px);
+        float line = 0.0;
         if (id >= 0) {
             // Distance to the nearest edge, in the panel's own (unrotated) frame.
             vec4 box = panelInfo(id, 1);
@@ -200,9 +201,14 @@ void main()
             vec2 local = vec2(cs.x * q.x + cs.y * q.y, -cs.y * q.x + cs.x * q.y);
             vec2 edge = box.zw * 0.5 - abs(local);
             float d = min(edge.x, edge.y);
-            float line = clamp(p0.x - d + 0.5, 0.0, 1.0) * p1.x;
-            o = mix(c, vec4(p0.yzw, 1.0), line);
+            line = clamp(p0.x - d + 0.5, 0.0, 1.0) * p1.x;
         }
+        if (p1.y > 1.5)
+            o = c * line;                  // content in lines: everything else goes transparent
+        else if (p1.y > 0.5)
+            o = vec4(p0.yzw, 1.0) * line;  // lines only (premultiplied), transparent elsewhere
+        else
+            o = mix(c, vec4(p0.yzw, 1.0), line);
     } else if (mode == 13) { // Panel chase: a band of lit panels travels through them in order
         int id = panelAt(px);
         float lit = 0.0;

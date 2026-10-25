@@ -27,6 +27,7 @@
 #include <QInputDialog>
 #include "media/OutputRecorder.h"
 #include <QDateTime>
+#include <QFileOpenEvent>
 #include <QLabel>
 #include <QMessageBox>
 #include <QStandardPaths>
@@ -202,6 +203,19 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     m_autosaveTimer->setInterval(kAutosaveMs);
     connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autosave);
     m_autosaveTimer->start();
+    qApp->installEventFilter(this);
+}
+
+bool MainWindow::eventFilter(QObject *watched, QEvent *event)
+{
+    // macOS hands files opened from Finder (or dropped on the Dock icon) to the app as an event.
+    if (event->type() == QEvent::FileOpen) {
+        const QString file = static_cast<QFileOpenEvent *>(event)->file();
+        if (!file.isEmpty() && confirmDiscard())
+            openPath(file);
+        return true;
+    }
+    return QMainWindow::eventFilter(watched, event);
 }
 
 MainWindow::~MainWindow()

@@ -1,0 +1,169 @@
+name: release
+
+# Installers: a Windows setup (and portable zip) and a macOS disk image. Runs only by hand
+# (gh workflow run release) or for a version tag (git tag v0.2.0 && git push --tags), which also
+# drafts a GitHub release with the files. Never on ordinary pushes.
+#
+# Signing is optional and switched on by repository secrets:
+#   macOS:   MACOS_CERTIFICATE (Developer ID Application .p12, base64), MACOS_CERTIFICATE_PASSWORD,
+#            MACOS_SIGN_IDENTITY ("Developer ID Application: Name (TEAMID)"),
+#            and for notarisation APPLE_ID, APPLE_TEAM_ID, APPLE_APP_PASSWORD (an app-specific password)
+#   Windows: WINDOWS_CERTIFICATE (code-signing .pfx, base64), WINDOWS_CERTIFICATE_PASSWORD
+# Without them the app is ad-hoc signed on macOS and unsigned on Windows (see the README).
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: win64_msvc2022_64
+          - os: macos-14
+            arch: clang_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: ${{ matrix.arch }}
+          modules: qtmultimedia qtshadertools
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Install Ninja
+        run: pip install ninja
+
+      - name: Version
+        id: version
+        shell: bash
+        run: echo "version=$(sed -n 's/^project(DisplayHawk VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+
+      # ---------------------------------------------------------------- Windows
+
+      - name: Deploy (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist, out | Out-Null
+          Copy-Item build/DisplayHawk.exe dist/
+          windeployqt --no-translations --compiler-runtime dist/DisplayHawk.exe
+
+      - name: Sign the app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { Write-Host "No Windows certificate: unsigned"; exit 0 }
+          [IO.File]::WriteAllBytes("$PWD/cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          signtool sign /f cert.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 dist/DisplayHawk.exe
+          Remove-Item cert.pfx
+
+      - name: Installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress }
+          & $iscc /DAppVersion=${{ steps.version.outputs.version }} /DSourceDir="$PWD\dist" /DOutputDir="$PWD\out" installer\windows\DisplayHawk.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          Compress-Archive -Path dist\* -DestinationPath "out\DisplayHawk-${{ steps.version.outputs.version }}-windows-x64-portable.zip"
+
+      - name: Sign the installer (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { exit 0 }
+          [IO.File]::WriteAllBytes("$PWD/cert.pfx", [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          signtool sign /f cert.pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 (Get-ChildItem out\*-setup.exe).FullName
+          Remove-Item cert.pfx
+
+      # ---------------------------------------------------------------- macOS
+
+      - name: Deploy, sign and package (macOS)
+        if: runner.os == 'macOS'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist out
+          cp -R build/DisplayHawk.app dist/
+          macdeployqt dist/DisplayHawk.app
+          app=dist/DisplayHawk.app
+          if [ -n "${MACOS_CERTIFICATE:-}" ]; then
+            # A throwaway keychain with the Developer ID certificate.
+            echo "$MACOS_CERTIFICATE" | base64 --decode > cert.p12
+            pass=$(uuidgen)
+            security create-keychain -p "$pass" build.keychain
+            security default-keychain -s build.keychain
+            security unlock-keychain -p "$pass" build.keychain
+            security import cert.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+            security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$pass" build.keychain
+            rm cert.p12
+            identity="$MACOS_SIGN_IDENTITY"
+            # Everything inside first, then the app itself with its entitlements (hardened runtime).
+            codesign --force --deep --options runtime --timestamp --sign "$identity" "$app"
+            codesign --force --options runtime --timestamp --entitlements assets/macos/entitlements.plist --sign "$identity" "$app"
+          else
+            echo "No Developer ID certificate: ad-hoc signed (Apple silicon needs a signature to run at all)"
+            codesign --force --deep --sign - "$app"
+          fi
+          codesign --verify --deep --strict "$app"
+          # The disk image: the app and a link to Applications to drag it onto.
+          mkdir dmg && cp -R "$app" dmg/ && ln -s /Applications dmg/Applications
+          dmg_path="out/DisplayHawk-${{ steps.version.outputs.version }}-macos.dmg"
+          hdiutil create -volname "Display Hawk" -srcfolder dmg -ov -format UDZO "$dmg_path"
+          if [ -n "${MACOS_CERTIFICATE:-}" ]; then
+            codesign --force --timestamp --sign "$identity" "$dmg_path"
+            if [ -n "${APPLE_ID:-}" ]; then
+              xcrun notarytool submit "$dmg_path" --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" \
+                --password "$APPLE_APP_PASSWORD" --wait
+              xcrun stapler staple "$dmg_path"
+            fi
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DisplayHawk-${{ steps.version.outputs.version }}-${{ runner.os }}
+          path: out/
+          if-no-files-found: error
+
+  release:
+    needs: package
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Draft the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" files/* --repo "${GITHUB_REPOSITORY}" --draft --generate-notes --title "Display Hawk ${GITHUB_REF_NAME#v}"

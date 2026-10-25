@@ -20,9 +20,10 @@ class Thumbnailer : public QObject
 {
     Q_OBJECT
 public:
-    explicit Thumbnailer(QObject *parent = nullptr);
+    explicit Thumbnailer(QObject *parent = nullptr, const QSize &size = defaultSize());
     void request(const QString &path);
-    static QSize size() { return QSize(128, 72); }
+    static QSize defaultSize() { return QSize(128, 72); }
+    QSize size() const { return m_size; }
 
 signals:
     void ready(const QString &path, const QImage &image);
@@ -37,6 +38,7 @@ private:
     QVideoSink *m_sink = nullptr;
     QTimer *m_timeout = nullptr;
     QHash<QString, bool> m_requested;
+    QSize m_size;
 };
 
 // Media browser: folders on the left, the media in the chosen folder as thumbnails on the right.

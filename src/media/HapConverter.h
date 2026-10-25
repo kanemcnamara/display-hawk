@@ -45,8 +45,8 @@ signals:
 
 private:
     void onLoaded();
-    void onFrame(const QVideoFrame &frame); // decoder thread
-    void onAudio(const QAudioBuffer &buffer); // audio thread
+    void onFrame(const QVideoFrame &frame, int generation);   // decoder thread
+    void onAudio(const QAudioBuffer &buffer, int generation); // audio thread
     void complete(bool ok, const QString &message);
 
     QMediaPlayer *m_player = nullptr;
@@ -67,5 +67,8 @@ private:
     bool m_done = false;
     bool m_running = false;
     std::atomic<bool> m_cancel{false};
+    // Which conversion is current: a late callback from a previous one (its player lingers until
+    // deleted) is ignored rather than writing into the next file.
+    std::atomic<int> m_generation{0};
     QString m_error;
 };
