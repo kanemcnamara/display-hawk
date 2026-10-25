@@ -118,7 +118,10 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
             img.save(path);
         return path;
     };
-    waitMs(3500);
+    // The first previews need the window shown and a few frames rendered; software GPUs on CI
+    // machines can take several seconds.
+    waitMs(1000);
+    waitFor([&] { return litPercent(previews[0]) > 5 && litPercent(previews[1]) > 5; }, 20000);
 
     const char *names[] = {"preview-input", "preview-output"};
     for (int v = 0; v < 2; ++v) {
