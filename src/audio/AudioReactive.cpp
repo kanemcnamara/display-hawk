@@ -1,6 +1,7 @@
 #include "audio/AudioReactive.h"
 
 #include "model/Document.h"
+#include "render/Effects.h"
 #include "render/RenderEngine.h"
 
 #include <QMediaDevices>
@@ -55,7 +56,7 @@ void AudioReactive::sync()
         emit statusChanged();
     }
     if (!wanted && m_modulating) {
-        m_engine->setModulation(1.0, {}); // back to exactly the faders
+        m_engine->setModulation(1.0, {}, {}); // back to exactly the faders
         m_modulating = false;
     }
 }
@@ -80,6 +81,7 @@ void AudioReactive::apply(const AudioLevels &levels)
     // Modulation: each link scales its target between (1 - amount) and 1; several links multiply.
     double master = 1.0;
     QVector<double> layers(p.layers.size(), 1.0);
+    QVector<EffectParamMod> effects;
     bool beatColumn = false;
     QVector<int> beatClipLayers;
     for (const AudioLink &link : p.audioReactive.links) {
@@ -92,13 +94,37 @@ void AudioReactive::apply(const AudioLevels &levels)
             }
             continue;
         }
+        if (link.target == AudioTarget::EffectParam) {
+            // From the set value towards the parameter's maximum; several links add up.
+            const QVector<EffectInstance> *chain = link.layer < 0 ? &p.compEffects
+                                                   : (link.layer < p.layers.size() ? &p.layers[link.layer].effects : nullptr);
+            if (!chain || link.effect < 0 || link.effect >= chain->size())
+                continue;
+            const EffectInstance &e = (*chain)[link.effect];
+            const EffectDef *def = effectDef(e.type);
+            if (!def || link.param < 0 || link.param >= def->params.size())
+                continue;
+            const double base = effectParam(e, link.param);
+            const double push = link.amount * value(link.signal) * (def->params[link.param].max - base);
+            const int layer = link.layer < 0 ? -1 : link.layer;
+            bool merged = false;
+            for (EffectParamMod &m : effects) {
+                if (m.layer == layer && m.effect == link.effect && m.param == link.param) {
+                    m.value = qMin(m.value + push, def->params[link.param].max);
+                    merged = true;
+                }
+            }
+            if (!merged)
+                effects.append({layer, link.effect, link.param, base + push});
+            continue;
+        }
         const double factor = 1.0 - link.amount + link.amount * value(link.signal);
         if (link.target == AudioTarget::Master)
             master *= factor;
         else if (link.layer >= 0 && link.layer < layers.size())
             layers[link.layer] *= factor;
     }
-    m_engine->setModulation(master, layers);
+    m_engine->setModulation(master, layers, effects);
     m_modulating = true;
 
     // Beat triggers: step to the next column / clip that has something in it.

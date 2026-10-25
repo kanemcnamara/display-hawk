@@ -151,11 +151,13 @@ void RenderThread::renderNdiOutputs(QRhiCommandBuffer *cb)
     }
 }
 
-void RenderThread::setModulation(double master, const QVector<double> &layerOpacity)
+void RenderThread::setModulation(double master, const QVector<double> &layerOpacity,
+                                 const QVector<EffectParamMod> &effects)
 {
     QMutexLocker lock(&m_mutex);
     m_sharedMasterMod = master;
     m_sharedLayerMod = layerOpacity;
+    m_sharedEffectMod = effects;
 }
 
 void RenderThread::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
@@ -284,7 +286,7 @@ void RenderThread::run()
         m_initDone.release();
         return;
     }
-    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi)) {
+    if (!m_quad.init(m_rhi) || !m_yuv.init(m_rhi) || !m_fx.init(m_rhi)) {
         m_initError = tr("Could not load shaders.");
         delete m_rhi;
         m_rhi = nullptr;
@@ -323,6 +325,7 @@ void RenderThread::run()
             QRhiCommandBuffer *cb = nullptr;
             if (m_rhi->beginOffscreenFrame(&cb) == QRhi::FrameOpSuccess) {
                 m_quad.newFrame();
+                m_fx.newFrame();
                 renderComposition(cb);
                 renderPreviews(cb);
                 renderNdiOutputs(cb);
@@ -345,6 +348,7 @@ void RenderThread::run()
                 }
                 QRhiCommandBuffer *cb = o->swapChain->currentFrameCommandBuffer();
                 m_quad.newFrame();
+                m_fx.newFrame();
                 if (!compositionDone) {
                     renderComposition(cb);
                     renderPreviews(cb);
@@ -390,7 +394,13 @@ void RenderThread::run()
     syncNdiOutputs();
     m_shareWanted.clear();
     syncShareOutputs();
+    for (LayerState &ls : m_layers)
+        m_fx.forgetTexture(ls.target.tex);
+    m_fx.forgetTexture(m_comp.tex);
+    m_fx.release();
     releaseTarget(m_comp);
+    releaseTarget(m_compFinal);
+    m_compOut = nullptr;
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
     for (ClipTex &ct : m_clipTex)
@@ -436,6 +446,7 @@ void RenderThread::syncState()
     m_preview[1] = m_sharedPreview[1];
     m_masterMod = m_sharedMasterMod;
     m_layerMod = m_sharedLayerMod;
+    m_effectMod = m_sharedEffectMod;
     const bool ndiChanged = m_ndiDirty;
     if (m_ndiDirty) {
         m_ndiWanted = m_sharedNdi;
@@ -519,6 +530,7 @@ bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable, QRh
         return true;
     if (t.tex) {
         m_quad.forgetTexture(t.tex);
+        m_fx.forgetTexture(t.tex);
         // Still referenced by command buffers in flight; QRhi frees them once those complete.
         t.rt->deleteLater();
         t.rp->deleteLater();
@@ -777,8 +789,12 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     const qint64 now = m_clock.elapsed();
     const int maxSize = m_rhi->resourceLimit(QRhi::TextureSizeMax);
     const QSize compSize = p.compSize().boundedTo(QSize(maxSize, maxSize));
-    if (!ensureTarget(m_comp, compSize, false))
+    if (!ensureTarget(m_comp, compSize, false)) {
+        m_compOut = nullptr;
         return;
+    }
+    const double timeSec = now / 1000.0;
+    m_fx.setFrame(now, &p);
 
     bool anySolo = false;
     for (const Layer &l : p.layers)
@@ -828,15 +844,39 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         if (!st.current.isEmpty())
             appendClipDraw(cb, draws, u, st.current, target, compSize, mix);
         m_quad.recordPass(cb, st.target.rt, Qt::transparent, draws, u);
+        QRhiTexture *layerTex = m_fx.apply(cb, layer.id, st.target.tex, compSize, layer.effects,
+                                           effectOverrides(layerIndex), timeSec);
 
         RhiQuad::Params lp;
         lp.target = compSize;
         lp.dst = QRectF(QPointF(), compSize);
-        lp.texture = st.target.tex;
+        lp.texture = layerTex;
         lp.texFlipY = m_rhi->isYUpInFramebuffer();
         lp.opacity = float(opacity);
         lp.blend = RhiQuad::fromLayer(layer.blend);
         compDraws.append(lp);
+    }
+
+    // Composition effects run on the layers over the background, before the panel mask, the
+    // overlay and the master fader, which then go on in a second pass.
+    bool compEffects = false;
+    for (const EffectInstance &e : p.compEffects)
+        compEffects = compEffects || e.enabled;
+    QRhiTexture *finalInput = nullptr;
+    if (compEffects) {
+        m_quad.recordPass(cb, m_comp.rt, p.background, compDraws);
+        compDraws.clear();
+        finalInput = m_fx.apply(cb, QStringLiteral("#composition"), m_comp.tex, compSize, p.compEffects,
+                                effectOverrides(-1), timeSec);
+        RhiQuad::Params cp;
+        cp.target = compSize;
+        cp.dst = QRectF(QPointF(), compSize);
+        cp.texture = finalInput;
+        cp.texFlipY = m_rhi->isYUpInFramebuffer();
+        cp.blend = RhiQuad::Blend::Normal;
+        compDraws.append(cp);
+    } else if (m_compFinal.tex) {
+        releaseTarget(m_compFinal); // not needed while there are no composition effects
     }
 
     QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
@@ -883,7 +923,13 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         compDraws.append(dim);
     }
 
-    m_quad.recordPass(cb, m_comp.rt, p.background, compDraws, u);
+    if (compEffects && ensureTarget(m_compFinal, compSize, false)) {
+        m_quad.recordPass(cb, m_compFinal.rt, Qt::black, compDraws, u);
+        m_compOut = m_compFinal.tex;
+    } else {
+        m_quad.recordPass(cb, m_comp.rt, p.background, compDraws, u);
+        m_compOut = m_comp.tex;
+    }
 
     if (now - m_lastGc > 1000)
         collectGarbage(now);
@@ -894,6 +940,7 @@ void RenderThread::collectGarbage(qint64 now)
     // Free textures of clips and layers that have not been drawn for a while.
     constexpr qint64 kIdleMs = 5000;
     m_lastGc = now;
+    m_fx.collectGarbage(now, kIdleMs);
     for (auto it = m_clipTex.begin(); it != m_clipTex.end();) {
         if (now - it->lastUsed > kIdleMs && !it->newMedia) {
             releaseClipTex(*it, true);
@@ -906,6 +953,7 @@ void RenderThread::collectGarbage(qint64 now)
         if (now - it->lastUsed > kIdleMs) {
             if (it->target.tex) {
                 m_quad.forgetTexture(it->target.tex);
+                m_fx.forgetTexture(it->target.tex);
                 it->target.rt->deleteLater();
                 it->target.rp->deleteLater();
                 it->target.tex->deleteLater();
@@ -917,11 +965,20 @@ void RenderThread::collectGarbage(qint64 now)
     }
 }
 
+QVector<EffectRenderer::Override> RenderThread::effectOverrides(int layer) const
+{
+    QVector<EffectRenderer::Override> out;
+    for (const EffectParamMod &m : m_effectMod)
+        if (m.layer == layer)
+            out.append({m.effect, m.param, m.value});
+    return out;
+}
+
 QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const QSizeF &target,
                                                    const QRectF &screenRect) const
 {
     QVector<RhiQuad::Params> draws;
-    if (!m_comp.tex || screen.width <= 0 || screen.height <= 0)
+    if (!m_compOut || screen.width <= 0 || screen.height <= 0)
         return draws;
     const double sx = screenRect.width() / screen.width;
     const double sy = screenRect.height() / screen.height;
@@ -938,7 +995,7 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         qp.flipH = sl.flipH;
         qp.flipV = sl.flipV;
         qp.texFlipY = m_rhi->isYUpInFramebuffer();
-        qp.texture = m_comp.tex;
+        qp.texture = m_compOut;
         qp.brightness = float(sl.brightness);
         qp.colorCorrect = sl.hasColorCorrection();
         qp.gain[0] = float(sl.gainR);
@@ -975,7 +1032,7 @@ void RenderThread::renderPreviews(QRhiCommandBuffer *cb)
 
         QVector<RhiQuad::Params> draws;
         if (!req.outputMode) {
-            if (!m_comp.tex)
+            if (!m_compOut)
                 continue;
             RhiQuad::Params qp;
             qp.target = px;
@@ -984,7 +1041,7 @@ void RenderThread::renderPreviews(QRhiCommandBuffer *cb)
             qp.src = QRectF(req.region.x() / cw, req.region.y() / ch, req.region.width() / cw,
                             req.region.height() / ch);
             qp.texFlipY = m_rhi->isYUpInFramebuffer();
-            qp.texture = m_comp.tex;
+            qp.texture = m_compOut;
             draws.append(qp);
         } else if (req.screen >= 0 && req.screen < m_project.screens.size()) {
             const Screen &s = m_project.screens[req.screen];

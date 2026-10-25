@@ -132,6 +132,10 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     propDock->setMinimumWidth(360);
     addDockWidget(Qt::RightDockWidgetArea, propDock);
     connect(m_props, &PropertyPanel::identifyRequested, this, &MainWindow::identifyDisplays);
+    connect(m_props, &PropertyPanel::midiLearnRequested, this, [this](int action, int layer, int column, int param) {
+        showControls();
+        m_controlDialog->learnNew(action, layer, column, param);
+    });
 
     m_router = new ControlRouter(doc, this);
     m_audioReactive = new AudioReactive(doc, engine, this);

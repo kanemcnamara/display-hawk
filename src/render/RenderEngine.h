@@ -31,6 +31,14 @@ struct PreviewRequest {
     bool operator!=(const PreviewRequest &o) const { return !(*this == o); }
 };
 
+// A live value for one effect parameter (audio-reactive modulation). layer -1 = composition.
+struct EffectParamMod {
+    int layer = -1;
+    int effect = 0;
+    int param = 0;
+    double value = 0.0;
+};
+
 // GUI-thread facade over the render thread. The render thread owns the QRhi (Metal on macOS,
 // Direct3D 11 on Windows by default), renders the composition, presents every output with vsync
 // and sends preview images back for the editor.
@@ -67,8 +75,9 @@ public:
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
 
     // Live modulation on top of the faders (audio-reactive): master and per-layer opacity
-    // multipliers. (1, {}) means none.
-    void setModulation(double master, const QVector<double> &layerOpacity);
+    // multipliers, and effect parameter values. (1, {}, {}) means none.
+    void setModulation(double master, const QVector<double> &layerOpacity,
+                       const QVector<EffectParamMod> &effects = {});
 
 signals:
     void mediaStateChanged();

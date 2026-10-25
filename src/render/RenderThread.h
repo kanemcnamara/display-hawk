@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/Project.h"
+#include "render/EffectRenderer.h"
 #include "render/RenderEngine.h"
 #include "render/RhiQuad.h"
 #include "media/TextureShare.h"
@@ -35,7 +36,7 @@ public:
     void setPreview(int view, const PreviewRequest &request);
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
-    void setModulation(double master, const QVector<double> &layerOpacity);
+    void setModulation(double master, const QVector<double> &layerOpacity, const QVector<EffectParamMod> &effects);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -73,6 +74,7 @@ private:
     void collectGarbage(qint64 now);
     void renderPreviews(QRhiCommandBuffer *cb);
     void renderOutput(QRhiCommandBuffer *cb, Output &o);
+    QVector<EffectRenderer::Override> effectOverrides(int layer) const;
     QVector<RhiQuad::Params> screenDraws(const Screen &screen, const QSizeF &target, const QRectF &screenRect) const;
     void deliverReadbacks();
     void syncNdiOutputs();
@@ -107,8 +109,10 @@ private:
     bool m_shareDirty = false;
     double m_sharedMasterMod = 1.0;
     QVector<double> m_sharedLayerMod;
+    QVector<EffectParamMod> m_sharedEffectMod;
     double m_masterMod = 1.0;      // render-thread copies
     QVector<double> m_layerMod;
+    QVector<EffectParamMod> m_effectMod;
 
     QSemaphore m_initDone;
     bool m_initOk = false;
@@ -117,6 +121,7 @@ private:
     // Render-thread only.
     QRhi *m_rhi = nullptr;
     RhiQuad m_quad;
+    EffectRenderer m_fx;
     YuvConverter m_yuv;
     // DISPLAYHAWK_PERF=1 logs how long video frames take to prepare on the render thread.
     bool m_perfLog = false;
@@ -127,6 +132,8 @@ private:
     PreviewRequest m_preview[2];
     QVector<Output> m_outputs;
     Target m_comp;
+    Target m_compFinal;               // composition effects, then mask / overlay / master on top
+    QRhiTexture *m_compOut = nullptr; // what screens and previews show: m_comp or m_compFinal
     Target m_previewTarget[2];
     // Per clip: its pattern image or its newest media frame.
     struct ClipTex {

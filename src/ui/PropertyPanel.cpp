@@ -4,6 +4,7 @@
 #include "media/Ndi.h"
 #include "media/TextureShare.h"
 #include "render/RenderEngine.h"
+#include "ui/EffectChainEditor.h"
 #include "ui/PanelGridEditor.h"
 #include "model/Document.h"
 
@@ -194,6 +195,14 @@ QWidget *PropertyPanel::buildCompositionPage()
     of->addRow(m_maskToPanels);
     v->addWidget(overlay);
 
+    auto *fx = new QGroupBox(tr("Composition effects"));
+    auto *fxl = new QVBoxLayout(fx);
+    m_compFx = new EffectChainEditor(m_doc);
+    m_compFx->setToolTip(tr("Applied to everything, before the panel mask and the master fader"));
+    connect(m_compFx, &EffectChainEditor::midiLearnRequested, this, &PropertyPanel::midiLearnRequested);
+    fxl->addWidget(m_compFx);
+    v->addWidget(fx);
+
     auto *hint = new QLabel(tr("Content is played from the clip deck: select a layer or clip slot to edit it."));
     hint->setWordWrap(true);
     hint->setEnabled(false);
@@ -255,6 +264,7 @@ void PropertyPanel::refreshComposition()
     m_overlay->setChecked(p.panelOverlay);
     setValue(m_overlayOpacity, qRound(p.overlayOpacity * 100.0));
     m_maskToPanels->setChecked(p.maskToPanels);
+    m_compFx->setLayer(-1);
 }
 
 // ---------------------------------------------------------------- Layer
@@ -287,6 +297,13 @@ QWidget *PropertyPanel::buildLayerPage()
     f->addRow(tr("Crossfade"), m_layerTransition);
     f->addRow(QString(), row({m_layerBypass, m_layerSolo}));
     v->addWidget(box);
+
+    auto *fx = new QGroupBox(tr("Effects"));
+    auto *fxl = new QVBoxLayout(fx);
+    m_layerFx = new EffectChainEditor(m_doc);
+    connect(m_layerFx, &EffectChainEditor::midiLearnRequested, this, &PropertyPanel::midiLearnRequested);
+    fxl->addWidget(m_layerFx);
+    v->addWidget(fx);
     v->addStretch();
 
     connect(m_layerName, &QLineEdit::textEdited, this, [this](const QString &t) {
@@ -348,6 +365,7 @@ void PropertyPanel::refreshLayer()
     for (int i = 0; i < p.walls.size(); ++i)
         m_layerTarget->addItem(p.walls[i].name, i);
     m_layerTarget->setCurrentIndex(qMax(0, m_layerTarget->findData(l->targetWall)));
+    m_layerFx->setLayer(m_doc->selection().layer);
 }
 
 // ---------------------------------------------------------------- Clip

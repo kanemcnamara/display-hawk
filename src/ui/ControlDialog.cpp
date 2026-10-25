@@ -84,11 +84,15 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     m_newColumn = new QSpinBox;
     m_newColumn->setPrefix(tr("Column "));
     m_newColumn->setMinimum(1);
+    m_newParam = new QSpinBox;
+    m_newParam->setPrefix(tr("Parameter "));
+    m_newParam->setRange(1, 8);
     auto *add = new QPushButton(tr("Add and learn"));
     auto *addRow = new QHBoxLayout;
     addRow->addWidget(m_newAction, 1);
     addRow->addWidget(m_newLayer);
     addRow->addWidget(m_newColumn);
+    addRow->addWidget(m_newParam);
     addRow->addWidget(add);
     mapl->addWidget(m_mappings, 1);
     mapl->addLayout(addRow);
@@ -226,13 +230,20 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
         m_router->setMidiDevices(on);
     });
     connect(add, &QPushButton::clicked, this, [this] {
-        addMapping(m_newAction->currentData().toInt(), m_newLayer->value() - 1, m_newColumn->value() - 1);
+        addMapping(m_newAction->currentData().toInt(), m_newLayer->value() - 1, m_newColumn->value() - 1,
+                   m_newParam->value() - 1);
         m_router->startLearn(int(m_doc->project().controls.size()) - 1);
     });
     auto syncAddFields = [this] {
         const ControlAction a = ControlAction(m_newAction->currentData().toInt());
+        // Effect parameters: layer 0 is the composition, the column field picks the effect.
+        const bool effect = a == ControlAction::EffectParam;
+        m_newLayer->setMinimum(effect ? 0 : 1);
+        m_newLayer->setSpecialValueText(effect ? tr("Composition") : QString());
         m_newLayer->setEnabled(controlActionUsesLayer(a));
-        m_newColumn->setEnabled(controlActionUsesColumn(a));
+        m_newColumn->setPrefix(effect ? tr("Effect ") : tr("Column "));
+        m_newColumn->setEnabled(controlActionUsesColumn(a) || effect);
+        m_newParam->setVisible(effect);
     };
     connect(m_newAction, &QComboBox::currentIndexChanged, this, syncAddFields);
     syncAddFields();
@@ -328,19 +339,20 @@ void ControlDialog::refreshDevices()
     m_refreshing = false;
 }
 
-void ControlDialog::addMapping(int action, int layer, int column)
+void ControlDialog::addMapping(int action, int layer, int column, int param)
 {
     ControlMapping m;
     m.action = ControlAction(action);
-    m.layer = qMax(0, layer);
+    m.layer = m.action == ControlAction::EffectParam ? qMax(-1, layer) : qMax(0, layer);
     m.column = qMax(0, column);
+    m.param = qMax(0, param);
     m_doc->project().controls.append(m);
     m_doc->notifyChanged(true);
 }
 
-void ControlDialog::learnNew(int action, int layer, int column)
+void ControlDialog::learnNew(int action, int layer, int column, int param)
 {
-    addMapping(action, layer, column);
+    addMapping(action, layer, column, param);
     m_router->startLearn(int(m_doc->project().controls.size()) - 1);
     show();
     raise();

@@ -107,6 +107,14 @@ struct Clip {
     QString mediaKey() const;
 };
 
+// One effect in a chain (see render/Effects.h for the catalogue): type id, on/off and its parameter
+// values in the order the effect defines them.
+struct EffectInstance {
+    QString type;
+    bool enabled = true;
+    QVector<double> params;
+};
+
 // A row of the clip deck. Layers are composited bottom (index 0) to top.
 struct Layer {
     QString id;
@@ -120,6 +128,7 @@ struct Layer {
     int transitionMs = 0;  // crossfade when the playing clip changes
     int activeColumn = -1; // playback state: which clip is playing, -1 = none
     QVector<Clip> clips;   // one slot per column
+    QVector<EffectInstance> effects; // applied to the layer before it is blended
 
     const Clip *activeClip() const;
 };
@@ -138,8 +147,9 @@ enum class ControlAction {
     LayerVolume,    // continuous (layer)
     AudioMaster,    // continuous
     AudioMute,      // toggle
+    EffectParam,    // continuous (layer, column = effect index, param); layer -1 = composition
 };
-constexpr int kControlActionCount = int(ControlAction::AudioMute) + 1;
+constexpr int kControlActionCount = int(ControlAction::EffectParam) + 1;
 QString controlActionName(ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
@@ -149,6 +159,7 @@ struct ControlMapping {
     ControlAction action = ControlAction::TriggerColumn;
     int layer = 0;
     int column = 0;
+    int param = 0;         // EffectParam
     bool midiSet = false;
     bool midiIsCC = false; // false = note
     int midiChannel = 0;   // 0..15
@@ -179,18 +190,24 @@ enum class AudioTarget {
     Master,           // modulates the master
     NextColumn,       // on each beat: trigger the next column that has clips
     NextClip,         // on each beat: the layer plays its next clip
+    EffectParam,      // pushes an effect parameter from its set value towards its maximum
 };
 constexpr int kAudioSignalCount = int(AudioSignal::Beat) + 1;
-constexpr int kAudioTargetCount = int(AudioTarget::NextClip) + 1;
+constexpr int kAudioTargetCount = int(AudioTarget::EffectParam) + 1;
 QString audioSignalName(AudioSignal s);
 QString audioTargetName(AudioTarget t);
 inline bool audioTargetIsBeat(AudioTarget t) { return t == AudioTarget::NextColumn || t == AudioTarget::NextClip; }
-inline bool audioTargetUsesLayer(AudioTarget t) { return t == AudioTarget::LayerOpacity || t == AudioTarget::NextClip; }
+inline bool audioTargetUsesLayer(AudioTarget t)
+{
+    return t == AudioTarget::LayerOpacity || t == AudioTarget::NextClip || t == AudioTarget::EffectParam;
+}
 
 struct AudioLink {
     AudioSignal signal = AudioSignal::Bass;
     AudioTarget target = AudioTarget::LayerOpacity;
-    int layer = 0;       // 0-based
+    int layer = 0;       // 0-based; -1 = composition (effect parameters)
+    int effect = 0;      // EffectParam: index in the chain
+    int param = 0;       // EffectParam: parameter index
     double amount = 1.0; // 0..1: how deep the modulation goes (ignored for beat targets)
 };
 
@@ -214,6 +231,7 @@ struct Project {
     QVector<Layer> layers;
     double master = 1.0; // playback state
     QVector<ControlMapping> controls; // MIDI mappings for this show
+    QVector<EffectInstance> compEffects; // applied to the whole composition, before the master
     DmxPatch dmx;
     AudioReactiveSettings audioReactive;
     bool blackout = false; // playback state

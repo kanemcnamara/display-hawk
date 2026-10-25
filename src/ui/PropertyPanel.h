@@ -7,6 +7,7 @@
 #include <functional>
 
 class Document;
+class EffectChainEditor;
 class PanelGridEditor;
 class RenderEngine;
 class QCheckBox;
@@ -27,6 +28,7 @@ public:
 
 signals:
     void identifyRequested();
+    void midiLearnRequested(int action, int layer, int column, int param);
 
 public slots:
     void refresh();
@@ -64,6 +66,7 @@ private:
     QCheckBox *m_overlay;
     QDoubleSpinBox *m_overlayOpacity;
     QCheckBox *m_maskToPanels;
+    EffectChainEditor *m_compFx;
 
     // Layer
     QLineEdit *m_layerName;
@@ -71,6 +74,7 @@ private:
     QComboBox *m_layerBlend, *m_layerTarget;
     QSpinBox *m_layerTransition;
     QCheckBox *m_layerBypass, *m_layerSolo;
+    EffectChainEditor *m_layerFx;
 
     // Clip
     QStackedWidget *m_clipStack;

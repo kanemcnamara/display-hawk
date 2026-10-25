@@ -8,6 +8,7 @@
 #include "media/Ndi.h"
 #include "media/TextureShare.h"
 #include "model/Document.h"
+#include "render/Effects.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
 #include "ui/ReportExporter.h"
@@ -657,8 +658,8 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(1);
         doc.triggerClip(0, 2); // colour bars
         doc.project().audioReactive.enabled = true;
-        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 1.0},
-                                             AudioLink{AudioSignal::Beat, AudioTarget::NextColumn, 0, 1.0}};
+        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 0, 0, 1.0},
+                                             AudioLink{AudioSignal::Beat, AudioTarget::NextColumn, 0, 0, 0, 1.0}};
         doc.notifyChanged();
         reactive->apply(AudioLevels{0.0, 0.0, 0.0, 0.0, false});
         const bool dark = waitFor([&] { return litPercent(previews[0]) < 3; }, 3000);
@@ -674,8 +675,8 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.notifyChanged();
         check(waitFor([&] { return litPercent(previews[0]) > 20; }, 3000), "turning audio reactive off restores the faders");
         // The dialog with two links and the meters fed by a bass-heavy tone, for checking its layout.
-        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 0.8},
-                                             AudioLink{AudioSignal::Beat, AudioTarget::NextClip, 1, 1.0}};
+        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 0, 0, 0.8},
+                                             AudioLink{AudioSignal::Beat, AudioTarget::NextClip, 1, 0, 0, 1.0}};
         doc.notifyChanged(true);
         window.showAudioReactive();
         tone(80, 0.5, 0.6);
@@ -688,6 +689,159 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
         doc.project().audioReactive.links.clear();
         doc.notifyChanged(true);
+    }
+
+    // Effects. Layer 1 plays a red solid, layer 2 the colour bars, in a new column.
+    {
+        Project &p = doc.project();
+        const int col = p.columns;
+        doc.addColumn();
+        Clip red = Clip::fromPattern(TestPattern::Solid);
+        red.solidColor = Qt::red;
+        doc.setClip(0, col, red);
+        doc.setClip(1, col, Clip::fromPattern(TestPattern::ColorBars));
+        p.layers[0].transitionMs = p.layers[1].transitionMs = 0;
+        p.layers[0].blend = p.layers[1].blend = BlendMode::Normal;
+        p.compEffects.clear();
+        doc.setLayerPlayback(0, 1.0, false, false);
+        doc.setLayerPlayback(1, 1.0, false, false);
+        doc.triggerColumn(col);
+        auto setFx = [&](int layer, const QVector<EffectInstance> &chain) {
+            (layer < 0 ? p.compEffects : p.layers[layer].effects) = chain;
+            doc.notifyChanged(true);
+        };
+
+        setFx(1, {makeEffect(QStringLiteral("invert"))});
+        check(waitFor([&] { return near(barColor(0), 0, 0, 0) && near(barColor(6), 255, 255, 0); }),
+              "invert effect (white->black, blue->yellow)");
+        save(previews[0], "fx-invert");
+
+        // Colour key: the white bar becomes transparent and the red layer below shows through.
+        setFx(1, {makeEffect(QStringLiteral("colorKey"))});
+        check(waitFor([&] { return near(barColor(0), 255, 0, 0) && near(barColor(3), 0, 255, 0); }),
+              "colour key removes white (red layer shows through, green stays)");
+        save(previews[0], "fx-colour-key");
+
+        // Two-pass blur: the hard edge between the white and yellow bars turns into a ramp.
+        EffectInstance blur = makeEffect(QStringLiteral("blur"));
+        blur.params[0] = 40;
+        setFx(1, {blur});
+        auto edgeBlue = [&] {
+            const QImage &img = previews[0];
+            return img.isNull() ? -1 : QColor(img.pixel(img.width() * 2 / 16, img.height() / 3)).blue();
+        };
+        check(waitFor([&] { return edgeBlue() > 50 && edgeBlue() < 205; }), "blur softens edges");
+        save(previews[0], "fx-blur");
+        setFx(1, {});
+        doc.clearLayer(1);
+
+        // LED panel effects on the 10 x 5 wall of 128 px cabinets at 0,0. (A copy: editing the
+        // project detaches its wall list from the undo snapshot, so references would dangle.)
+        const LedWall w = p.walls[0];
+        auto at = [&](double cx, double cy) {
+            const QImage &img = previews[0];
+            if (img.isNull())
+                return QColor();
+            return QColor(img.pixel(qBound(0, int(cx * img.width() / p.compWidth), img.width() - 1),
+                                    qBound(0, int(cy * img.height() / p.compHeight), img.height() - 1)));
+        };
+        auto centre = [&](int c, int r) {
+            const QPointF m = QRectF(w.panelRect(c, r)).center();
+            return at(m.x(), m.y());
+        };
+
+        EffectInstance outline = makeEffect(QStringLiteral("panelOutline"));
+        outline.params[0] = 12;
+        setFx(-1, {outline});
+        const QRect cab = w.panelRect(3, 2);
+        check(waitFor([&] {
+                  return near(at(cab.left() + 5, cab.center().y()), 255, 255, 255) && near(centre(3, 2), 255, 0, 0)
+                         && near(at(w.rect().right() + 100, 300), 255, 0, 0);
+              }),
+              "panel outline draws cabinet edges only on the wall");
+        save(previews[0], "fx-panel-outline");
+
+        // A still chase (speed 0) lights the panels whose order is within the band behind 0:
+        // left to right, column c has order c / 10, so columns 0 and 7..9 are lit, 1..6 dark.
+        EffectInstance chase = makeEffect(QStringLiteral("panelChase"));
+        chase.params = {0, 0, 0.35, 0, 0};
+        setFx(-1, {chase});
+        check(waitFor([&] {
+                  return near(centre(8, 1), 255, 0, 0) && near(centre(0, 3), 255, 0, 0) && near(centre(3, 1), 0, 0, 0)
+                         && near(centre(6, 4), 0, 0, 0) && near(at(w.rect().right() + 100, 300), 0, 0, 0);
+              }),
+              "panel chase lights cabinets in left-to-right order");
+        save(previews[0], "fx-panel-chase");
+        // Not-fitted cabinets are skipped: they stay dark even inside the band.
+        p.walls[0].disabledPanels = {QPoint(8, 1)};
+        doc.notifyChanged();
+        check(waitFor([&] { return near(centre(8, 1), 0, 0, 0) && near(centre(8, 2), 255, 0, 0); }),
+              "panel chase skips cabinets that are not fitted");
+        p.walls[0].disabledPanels.clear();
+        doc.notifyChanged();
+
+        // Panel colours: hue by left-to-right order, column 0 red, column 3 (hue 0.3) green.
+        EffectInstance colours = makeEffect(QStringLiteral("panelColours"));
+        colours.params = {0, 1, 0, 1};
+        setFx(-1, {colours});
+        check(waitFor([&] {
+                  const QColor a = centre(0, 0), b = centre(3, 0);
+                  return near(a, 255, 0, 0) && b.green() > 200 && b.red() < 100 && b.blue() < 60;
+              }),
+              "panel colours give each cabinet its own hue");
+        save(previews[0], "fx-panel-colours");
+        setFx(-1, {});
+
+        // Live control: OSC sets an effect parameter (0..1 spans its range) without an undo step,
+        // and audio-reactive pushes it from its set value towards the maximum.
+        doc.setClip(1, col, Clip::fromPattern(TestPattern::ColorBars));
+        doc.triggerColumn(col);
+        setFx(1, {makeEffect(QStringLiteral("invert"))});
+        doc.commitUndo();
+        const bool couldUndo = doc.canUndo();
+        ControlRouter *router = window.controlRouter();
+        router->setOsc(true, 0, nullptr, false, true);
+        QUdpSocket sender;
+        sender.writeDatagram(Osc::encode({QStringLiteral("/dh/layer/2/effect/1/1"), {0.0}}), QHostAddress::LocalHost,
+                             quint16(router->oscPort()));
+        check(waitFor([&] { return p.layers[1].effects[0].params[0] == 0.0 && near(barColor(0), 255, 255, 255); }, 3000),
+              "OSC sets an effect parameter");
+        doc.undo(); // undoes the effect being added; the live value is not a step of its own
+        check(couldUndo && p.layers[1].effects.isEmpty(), "live effect control is not an undo step");
+        router->setOsc(false, 0, nullptr, false);
+        doc.setClip(1, col, Clip::fromPattern(TestPattern::ColorBars)); // the undo may have taken it too
+        doc.triggerColumn(col);
+
+        setFx(1, {makeEffect(QStringLiteral("invert"))});
+        p.layers[1].effects[0].params[0] = 0.0;
+        doc.notifyChanged();
+        AudioReactive *reactive = window.audioReactive();
+        p.audioReactive.enabled = true;
+        AudioLink link;
+        link.signal = AudioSignal::Bass;
+        link.target = AudioTarget::EffectParam;
+        link.layer = 1;
+        link.effect = 0;
+        link.param = 0;
+        p.audioReactive.links = {link};
+        doc.notifyChanged();
+        reactive->apply(AudioLevels{1.0, 1.0, 0.0, 0.0, false});
+        const bool inverted = waitFor([&] { return near(barColor(0), 0, 0, 0); }, 3000);
+        reactive->apply(AudioLevels{0.0, 0.0, 0.0, 0.0, false});
+        const bool normal = waitFor([&] { return near(barColor(0), 255, 255, 255); }, 3000);
+        check(inverted && normal && p.layers[1].effects[0].params[0] == 0.0,
+              "audio-reactive drives an effect parameter");
+        p.audioReactive.enabled = false;
+        p.audioReactive.links.clear();
+        doc.notifyChanged(true);
+
+        // The layer page with an effect chain, for checking the editor's layout.
+        setFx(1, {makeEffect(QStringLiteral("colorKey")), makeEffect(QStringLiteral("panelChase"))});
+        doc.select(Selection::ofLayer(1));
+        waitMs(300);
+        window.grab().save(QStringLiteral("%1/effects-window.png").arg(outDir));
+        setFx(1, {});
+        doc.clearLayer(1);
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

@@ -1,6 +1,7 @@
 #include "ui/AudioReactiveDialog.h"
 
 #include "audio/AudioReactive.h"
+#include "render/Effects.h"
 #include "model/Document.h"
 
 #include <QCheckBox>
@@ -99,7 +100,7 @@ AudioReactiveDialog::AudioReactiveDialog(Document *doc, AudioReactive *reactive,
     auto *linksBox = new QGroupBox(tr("Links"));
     auto *ll = new QVBoxLayout(linksBox);
     m_links = new QTableWidget(0, 5);
-    m_links->setHorizontalHeaderLabels({tr("Signal"), tr("Drives"), tr("Layer"), tr("Amount"), QString()});
+    m_links->setHorizontalHeaderLabels({tr("Signal"), tr("Drives"), tr("Layer / parameter"), tr("Amount"), QString()});
     m_links->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_links->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Fixed);
     m_links->horizontalHeader()->resizeSection(4, 90);
@@ -192,11 +193,54 @@ void AudioReactiveDialog::refreshLinks()
                     x.signal = AudioSignal::Beat;
             }, true);
         });
-        auto *layer = new QSpinBox;
-        layer->setRange(1, 64);
-        layer->setValue(l.layer + 1);
-        layer->setEnabled(audioTargetUsesLayer(l.target));
-        connect(layer, &QSpinBox::valueChanged, this, [edit](int v) { edit([v](AudioLink &x) { x.layer = v - 1; }); });
+        QWidget *layer = nullptr;
+        if (l.target == AudioTarget::EffectParam) {
+            // Every parameter of every effect in the project, as "Layer 2 / Blur / Radius".
+            auto *param = new QComboBox;
+            const Project &p = m_doc->project();
+            auto addChain = [&](int li, const QString &owner, const QVector<EffectInstance> &chain) {
+                for (int e = 0; e < chain.size(); ++e) {
+                    const EffectDef *def = effectDef(chain[e].type);
+                    if (!def)
+                        continue;
+                    for (int k = 0; k < def->params.size(); ++k) {
+                        if (!def->params[k].choices.isEmpty())
+                            continue; // choices cannot be modulated smoothly
+                        param->addItem(QStringLiteral("%1 / %2 / %3").arg(owner, def->name, def->params[k].name),
+                                       QVariantList{li, e, k});
+                        if (li == l.layer && e == l.effect && k == l.param)
+                            param->setCurrentIndex(param->count() - 1);
+                    }
+                }
+            };
+            addChain(-1, tr("Composition"), p.compEffects);
+            for (int li = 0; li < p.layers.size(); ++li)
+                addChain(li, tr("Layer %1").arg(li + 1), p.layers[li].effects);
+            if (param->count() == 0) {
+                param->addItem(tr("(add an effect first)"));
+                param->setEnabled(false);
+            } else if (param->currentData().toList() != QVariantList{l.layer, l.effect, l.param}) {
+                param->insertItem(0, tr("(choose a parameter)"));
+                param->setCurrentIndex(0);
+            }
+            connect(param, &QComboBox::activated, this, [edit, param](int index) {
+                const QVariantList v = param->itemData(index).toList();
+                if (v.size() == 3)
+                    edit([v](AudioLink &x) {
+                        x.layer = v[0].toInt();
+                        x.effect = v[1].toInt();
+                        x.param = v[2].toInt();
+                    });
+            });
+            layer = param;
+        } else {
+            auto *spin = new QSpinBox;
+            spin->setRange(1, 64);
+            spin->setValue(qMax(0, l.layer) + 1);
+            spin->setEnabled(audioTargetUsesLayer(l.target));
+            connect(spin, &QSpinBox::valueChanged, this, [edit](int v) { edit([v](AudioLink &x) { x.layer = v - 1; }); });
+            layer = spin;
+        }
         auto *amount = new QDoubleSpinBox;
         amount->setRange(0, 100);
         amount->setDecimals(0);

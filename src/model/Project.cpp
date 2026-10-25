@@ -61,6 +61,7 @@ QString audioTargetName(AudioTarget t)
     case AudioTarget::Master: return QStringLiteral("Master");
     case AudioTarget::NextColumn: return QStringLiteral("Next column (on beat)");
     case AudioTarget::NextClip: return QStringLiteral("Layer next clip (on beat)");
+    case AudioTarget::EffectParam: return QStringLiteral("Effect parameter");
     }
     return {};
 }
@@ -80,6 +81,7 @@ QString controlActionName(ControlAction a)
     case ControlAction::LayerVolume: return QStringLiteral("Layer volume");
     case ControlAction::AudioMaster: return QStringLiteral("Audio master");
     case ControlAction::AudioMute: return QStringLiteral("Audio mute");
+    case ControlAction::EffectParam: return QStringLiteral("Effect parameter");
     }
     return {};
 }
@@ -87,7 +89,8 @@ QString controlActionName(ControlAction a)
 bool controlActionUsesLayer(ControlAction a)
 {
     return a == ControlAction::TriggerClip || a == ControlAction::LayerOpacity || a == ControlAction::LayerBypass
-           || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer || a == ControlAction::LayerVolume;
+           || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer || a == ControlAction::LayerVolume
+           || a == ControlAction::EffectParam;
 }
 
 bool controlActionUsesColumn(ControlAction a)
@@ -95,9 +98,43 @@ bool controlActionUsesColumn(ControlAction a)
     return a == ControlAction::TriggerColumn || a == ControlAction::TriggerClip;
 }
 
+static QJsonArray effectsToJson(const QVector<EffectInstance> &chain)
+{
+    QJsonArray arr;
+    for (const EffectInstance &e : chain) {
+        QJsonArray params;
+        for (double v : e.params)
+            params.append(v);
+        arr.append(QJsonObject{{"type", e.type}, {"enabled", e.enabled}, {"params", params}});
+    }
+    return arr;
+}
+
+static QVector<EffectInstance> effectsFromJson(const QJsonArray &arr)
+{
+    QVector<EffectInstance> chain;
+    for (const QJsonValue &v : arr) {
+        const QJsonObject o = v.toObject();
+        EffectInstance e;
+        e.type = o["type"].toString();
+        e.enabled = o["enabled"].toBool(true);
+        for (const QJsonValue &p : o["params"].toArray())
+            e.params.append(p.toDouble());
+        if (!e.type.isEmpty())
+            chain.append(e);
+    }
+    return chain;
+}
+
 QString ControlMapping::targetText() const
 {
     QStringList parts;
+    if (action == ControlAction::EffectParam) {
+        return QStringLiteral("%1, effect %2, parameter %3")
+            .arg(layer < 0 ? QStringLiteral("composition") : QStringLiteral("layer %1").arg(layer + 1))
+            .arg(column + 1)
+            .arg(param + 1);
+    }
     if (controlActionUsesLayer(action))
         parts << QStringLiteral("layer %1").arg(layer + 1);
     if (controlActionUsesColumn(action))
@@ -354,6 +391,7 @@ QJsonObject Project::toJson() const
                                     {"targetWall", l.targetWall},
                                     {"transitionMs", l.transitionMs},
                                     {"activeColumn", l.activeColumn},
+                                    {"effects", effectsToJson(l.effects)},
                                     {"clips", clipArr}});
     }
     root["deck"] = QJsonObject{{"columns", columns}, {"layers", layerArr}};
@@ -363,15 +401,18 @@ QJsonObject Project::toJson() const
         controlArr.append(QJsonObject{{"action", int(m.action)},
                                       {"layer", m.layer},
                                       {"column", m.column},
+                                      {"param", m.param},
                                       {"midiSet", m.midiSet},
                                       {"midiCC", m.midiIsCC},
                                       {"midiChannel", m.midiChannel},
                                       {"midiNumber", m.midiNumber}});
     }
     root["controls"] = controlArr;
+    root["compEffects"] = effectsToJson(compEffects);
     QJsonArray linkArr;
     for (const AudioLink &l : audioReactive.links)
-        linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer}, {"amount", l.amount}});
+        linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer},
+                                   {"effect", l.effect}, {"param", l.param}, {"amount", l.amount}});
     root["audioReactive"] = QJsonObject{{"enabled", audioReactive.enabled},
                                         {"sensitivity", audioReactive.sensitivity},
                                         {"links", linkArr}};
@@ -463,6 +504,7 @@ Project Project::fromJson(const QJsonObject &root)
             l.targetWall = o["targetWall"].toInt(-1);
             l.transitionMs = qMax(0, o["transitionMs"].toInt(0));
             l.activeColumn = o["activeColumn"].toInt(-1);
+            l.effects = effectsFromJson(o["effects"].toArray());
             for (const QJsonValue &cv : o["clips"].toArray())
                 l.clips.append(clipFromJson(cv.toObject()));
             p.layers.append(l);
@@ -487,12 +529,14 @@ Project Project::fromJson(const QJsonObject &root)
         l.activeColumn = 0;
         p.layers.append(l);
     }
+    p.compEffects = effectsFromJson(root["compEffects"].toArray());
     for (const QJsonValue &v : root["controls"].toArray()) {
         const QJsonObject o = v.toObject();
         ControlMapping m;
         m.action = ControlAction(qBound(0, o["action"].toInt(), kControlActionCount - 1));
-        m.layer = qMax(0, o["layer"].toInt());
+        m.layer = qMax(-1, o["layer"].toInt());
         m.column = qMax(0, o["column"].toInt());
+        m.param = qMax(0, o["param"].toInt());
         m.midiSet = o["midiSet"].toBool(false);
         m.midiIsCC = o["midiCC"].toBool(false);
         m.midiChannel = qBound(0, o["midiChannel"].toInt(), 15);
@@ -508,7 +552,9 @@ Project Project::fromJson(const QJsonObject &root)
         AudioLink l;
         l.signal = AudioSignal(qBound(0, o["signal"].toInt(), kAudioSignalCount - 1));
         l.target = AudioTarget(qBound(0, o["target"].toInt(), kAudioTargetCount - 1));
-        l.layer = qMax(0, o["layer"].toInt());
+        l.layer = qMax(-1, o["layer"].toInt());
+        l.effect = qMax(0, o["effect"].toInt());
+        l.param = qMax(0, o["param"].toInt());
         l.amount = qBound(0.0, o["amount"].toDouble(1.0), 1.0);
         p.audioReactive.links.append(l);
     }

@@ -3,6 +3,7 @@
 #include "control/ArtNet.h"
 #include "control/Sacn.h"
 #include "model/Document.h"
+#include "render/Effects.h"
 
 #include <QNetworkDatagram>
 #include <QNetworkInterface>
@@ -20,6 +21,7 @@ Kind kindOf(ControlAction a)
     case ControlAction::LayerOpacity:
     case ControlAction::LayerVolume:
     case ControlAction::AudioMaster:
+    case ControlAction::EffectParam:
         return Kind::Continuous;
     case ControlAction::AudioMute:
     case ControlAction::Blackout:
@@ -136,6 +138,8 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         apply(ControlAction::AudioMaster, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("mute"))
         apply(ControlAction::AudioMute, 0, 0, value, toggleMode);
+    else if (p[1] == QLatin1String("comp") && p.value(2) == QLatin1String("effect") && p.size() >= 5 && hasArg)
+        apply(ControlAction::EffectParam, -1, index(3), value, Mode::Value, index(4));
     else if (p[1] == QLatin1String("column") && p.value(3) == QLatin1String("trigger") && value != 0.0)
         apply(ControlAction::TriggerColumn, 0, index(2), 1.0, Mode::Press);
     else if (p[1] == QLatin1String("layer") && p.size() >= 4) {
@@ -153,6 +157,8 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
             apply(ControlAction::LayerSolo, layer, 0, value, toggleMode);
         else if (what == QLatin1String("clear") && value != 0.0)
             apply(ControlAction::ClearLayer, layer, 0, 1.0, Mode::Press);
+        else if (what == QLatin1String("effect") && p.size() >= 6 && hasArg)
+            apply(ControlAction::EffectParam, layer, index(4), value, Mode::Value, index(5));
     }
 }
 
@@ -196,18 +202,18 @@ void ControlRouter::handleMidi(const MidiMessage &m)
                 if (m.data2 >= 64 && previous < 64) // fire once as the control goes past halfway
                     apply(c.action, c.layer, c.column, 1.0, Mode::Press);
             } else {
-                apply(c.action, c.layer, c.column, v, Mode::Value);
+                apply(c.action, c.layer, c.column, v, Mode::Value, c.param);
             }
         } else if (m.isNoteOn()) {
             if (kind == Kind::Continuous)
-                apply(c.action, c.layer, c.column, m.data2 / 127.0, Mode::Value);
+                apply(c.action, c.layer, c.column, m.data2 / 127.0, Mode::Value, c.param);
             else
                 apply(c.action, c.layer, c.column, 1.0, Mode::Press); // a press flips a toggle
         }
     }
 }
 
-void ControlRouter::apply(ControlAction action, int layer, int column, double value, Mode mode)
+void ControlRouter::apply(ControlAction action, int layer, int column, double value, Mode mode, int param)
 {
     const Project &p = m_doc->project();
     const bool layerOk = layer >= 0 && layer < p.layers.size();
@@ -257,6 +263,21 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
             m_doc->setLayerPlayback(layer, l.opacity, l.bypass, mode == Mode::Press ? !l.solo : on);
         }
         break;
+    case ControlAction::EffectParam: {
+        // 0..1 from the controller spans the parameter's range; choices step through.
+        const QVector<EffectInstance> *chain = layer < 0 ? &p.compEffects : (layerOk ? &p.layers[layer].effects : nullptr);
+        if (!chain || column < 0 || column >= chain->size())
+            break;
+        const EffectDef *def = effectDef((*chain)[column].type);
+        if (!def || param < 0 || param >= def->params.size())
+            break;
+        const EffectParamDef &pd = def->params[param];
+        double v = pd.min + qBound(0.0, value, 1.0) * (pd.max - pd.min);
+        if (!pd.choices.isEmpty())
+            v = qRound(v);
+        m_doc->setEffectParam(layer, column, param, v);
+        break;
+    }
     }
 }
 

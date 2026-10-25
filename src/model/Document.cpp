@@ -1,5 +1,7 @@
 #include "model/Document.h"
 
+#include "render/Effects.h"
+
 #include <QFile>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -322,6 +324,31 @@ void Document::setAudioMuted(bool muted)
 {
     m_project.audioMuted = muted;
     notifyPlaybackChanged();
+}
+
+void Document::setEffectParam(int layer, int effect, int param, double value)
+{
+    auto chainOf = [layer](Project &p) -> QVector<EffectInstance> * {
+        if (layer < 0)
+            return &p.compEffects;
+        return layer < p.layers.size() ? &p.layers[layer].effects : nullptr;
+    };
+    QVector<EffectInstance> *chain = chainOf(m_project);
+    if (!chain || effect < 0 || effect >= chain->size() || param < 0 || param >= 64)
+        return;
+    auto set = [&](EffectInstance &e) {
+        while (e.params.size() <= param)
+            e.params.append(effectParam(e, int(e.params.size())));
+        e.params[param] = value;
+    };
+    set((*chain)[effect]);
+    // Like playback, the undo baseline follows so a fader move is not an undo step; the file
+    // does change, though.
+    QVector<EffectInstance> *committed = chainOf(m_committed);
+    if (committed && effect < committed->size() && (*committed)[effect].type == (*chain)[effect].type)
+        set((*committed)[effect]);
+    setModified(true);
+    emit changed();
 }
 
 void Document::setLayerPlayback(int layer, double opacity, bool bypass, bool solo)

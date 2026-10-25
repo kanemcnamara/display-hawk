@@ -21,7 +21,7 @@ public:
     ControlDialog(Document *doc, ControlRouter *router, QWidget *parent = nullptr);
 
     // Adds a mapping for `action` (layer/column 0-based) and starts learning it.
-    void learnNew(int action, int layer, int column);
+    void learnNew(int action, int layer, int column, int param = 0);
 
 private:
     void refreshOsc();
@@ -29,7 +29,7 @@ private:
     void refreshMappings();
     void refreshDmx();
     void refreshDmxValues();
-    void addMapping(int action, int layer, int column);
+    void addMapping(int action, int layer, int column, int param = 0);
 
     Document *m_doc;
     ControlRouter *m_router;
@@ -41,6 +41,7 @@ private:
     QComboBox *m_newAction;
     QSpinBox *m_newLayer;
     QSpinBox *m_newColumn;
+    QSpinBox *m_newParam;
     QPlainTextEdit *m_monitor;
     QTabWidget *m_tabs;
     QCheckBox *m_dmxEnabled;

@@ -37,6 +37,24 @@ Links (saved with the setup) connect a signal to the show:
 
 - **Layer opacity / Master**: pulse between (1 − amount) and the fader value. The modulation is applied at render time, so faders do not move, nothing lands in undo, and switching audio reactive off returns exactly to the faders. *Beat* used here gives a sharp flash that decays.
 - **Next column / Layer next clip (on beat)**: each beat triggers the next column, or the layer's next clip, that has something in it.
+- **Effect parameter**: pushes any effect parameter from its set value towards its maximum (e.g. bass widens a panel chase or thickens panel outlines). Also applied at render time only.
+
+## Effects
+
+Every layer has an effect chain (select the layer: **Effects** in its properties), and so does the whole composition (select *Composition*). Effects run on the GPU, top to bottom; tick an effect's name to bypass it. Composition effects run before the panel mask, overlay and master fader.
+
+| Group | Effects |
+| --- | --- |
+| Colour | Colour (brightness, contrast, saturation, hue), Tint, Invert, Posterize |
+| Shape | Transform (position, scale, rotation, tile), Mirror, Kaleidoscope, Pixelate |
+| Texture | Blur (two-pass Gaussian), RGB Split, Edges |
+| Time | Strobe |
+| Key | **Colour Key**: makes a colour transparent, e.g. the white background of a logo (key colour, tolerance, softness, spill removal for clean anti-aliased edges); **Luma Key**: removes dark or bright areas |
+| LED panels | **Panel Outline** (edges of every fitted cabinet), **Panel Chase** (a band of lit cabinets travelling left to right, top to bottom, by panel number or in random order; reveals the content or adds white), **Panel Twinkle** (random cabinets flash and fade), **Panel Colours** (a hue per cabinet along an order, optionally drifting) |
+
+The LED panel effects follow the real cabinet layout of every wall, including cabinets marked as not fitted (they are skipped), so chases and outlines work on stepped and irregular walls. Left-to-right and top-to-bottom orders use the cabinets' positions, so gaps keep their physical spacing.
+
+Each parameter can be driven live: OSC `/dh/layer/<l>/effect/<e>/<p>` or `/dh/comp/effect/<e>/<p>` (effects and parameters count from 1; 0..1 spans the parameter's range), MIDI (right-click a parameter → *Learn MIDI control*), or audio reactive. Live control changes the value without adding undo steps.
 
 ## LED tools
 
@@ -60,6 +78,7 @@ Links (saved with the setup) connect a signal to the show:
   | `/dh/layer/<l>/opacity` | 0..1 |
   | `/dh/layer/<l>/bypass`, `/dh/layer/<l>/solo` | 0/1, or none to toggle |
   | `/dh/layer/<l>/clear` | |
+  | `/dh/layer/<l>/effect/<e>/<p>`, `/dh/comp/effect/<e>/<p>` | 0..1 across the parameter's range |
 
   Bundles and int/float/bool/double arguments are accepted, so TouchOSC, QLab, Companion, lighting desks or a few lines of Python all work.
 - **MIDI** from every connected controller (WinMM on Windows, CoreMIDI on macOS; choose devices in the dialog). Mappings are saved with the setup: add one and press **Learn**, then press a key or move a knob, or right-click a clip / column number in the Clip Deck → *MIDI learn*. Notes trigger and flip toggles; CCs drive faders, set toggles (≥ 64 = on) and trigger once as they pass halfway.

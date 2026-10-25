@@ -16,6 +16,10 @@ qt_add_executable(DisplayHawk
     src/model/Document.cpp
     src/render/Patterns.h
     src/render/Patterns.cpp
+    src/render/Effects.h
+    src/render/Effects.cpp
+    src/render/EffectRenderer.h
+    src/render/EffectRenderer.cpp
     src/render/RhiQuad.h
     src/render/RhiQuad.cpp
     src/render/RenderEngine.h
@@ -56,6 +60,8 @@ qt_add_executable(DisplayHawk
     src/ui/CanvasView.cpp
     src/ui/AudioReactiveDialog.h
     src/ui/AudioReactiveDialog.cpp
+    src/ui/EffectChainEditor.h
+    src/ui/EffectChainEditor.cpp
     src/ui/ControlDialog.h
     src/ui/ControlDialog.cpp
     src/ui/ClipDeck.h
@@ -107,6 +113,8 @@ qt_add_shaders(DisplayHawk "shaders"
         shaders/quad.frag
         shaders/yuv.vert
         shaders/yuv.frag
+        shaders/fx.vert
+        shaders/fx.frag
 )
 
 target_include_directories(DisplayHawk PRIVATE src)

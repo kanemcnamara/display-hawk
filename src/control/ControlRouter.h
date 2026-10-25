@@ -68,7 +68,7 @@ signals:
 
 private:
     enum class Mode { Press, Value };
-    void apply(ControlAction action, int layer, int column, double value, Mode mode);
+    void apply(ControlAction action, int layer, int column, double value, Mode mode, int param = 0);
     void readDatagrams();
     void syncArtNet();
     void readArtNet();

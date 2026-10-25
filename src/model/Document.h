@@ -88,6 +88,8 @@ public:
     void setLayerVolume(int layer, double volume);
     void setAudioMaster(double volume);
     void setAudioMuted(bool muted);
+    // Live control of an effect parameter (OSC/MIDI): no undo step per message. layer -1 = composition.
+    void setEffectParam(int layer, int effect, int param, double value);
 
     // Undo works on whole-project snapshots. Rapid edits (drags, typing) are grouped: a step is
     // committed when commitUndo() is called (e.g. on mouse release) or after a short pause.
