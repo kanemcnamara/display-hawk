@@ -121,6 +121,8 @@ public:
     void newProject();
     // recovery = the file is an autosave: reopen it under its original path, marked modified.
     bool load(const QString &path, QString *error, bool recovery = false);
+    // A template: loaded as a new, unsaved setup.
+    bool loadTemplate(const QString &path, QString *error);
     bool save(const QString &path, QString *error);
     // Writes a crash-recovery copy without touching the document's path or modified state.
     bool writeAutosave(const QString &path) const;

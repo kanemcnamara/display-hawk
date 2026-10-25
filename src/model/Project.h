@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QColor>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPoint>
 #include <QPolygonF>
@@ -205,6 +206,9 @@ struct EffectInstance {
     bool enabled = true;
     QVector<double> params;
 };
+// Effect chains as JSON (presets use the same form as projects).
+QJsonArray effectChainToJson(const QVector<EffectInstance> &chain);
+QVector<EffectInstance> effectChainFromJson(const QJsonArray &arr);
 
 // One cell of the clip deck. An empty id means an empty slot.
 struct Clip {
@@ -346,6 +350,7 @@ struct ControlMapping {
     bool midiIsCC = false; // false = note
     int midiChannel = 0;   // 0..15
     int midiNumber = 0;    // note or controller number
+    QString key;           // keyboard shortcut (QKeySequence portable text); empty = none
 
     QString targetText() const;
     QString midiText() const;

@@ -364,6 +364,19 @@ bool controlActionUsesColumn(ControlAction a)
     return a == ControlAction::TriggerColumn || a == ControlAction::TriggerClip;
 }
 
+static QJsonArray effectsToJson(const QVector<EffectInstance> &chain);
+static QVector<EffectInstance> effectsFromJson(const QJsonArray &arr);
+
+QJsonArray effectChainToJson(const QVector<EffectInstance> &chain)
+{
+    return effectsToJson(chain);
+}
+
+QVector<EffectInstance> effectChainFromJson(const QJsonArray &arr)
+{
+    return effectsFromJson(arr);
+}
+
 static QJsonArray effectsToJson(const QVector<EffectInstance> &chain)
 {
     QJsonArray arr;
@@ -410,9 +423,12 @@ QString ControlMapping::targetText() const
 
 QString ControlMapping::midiText() const
 {
-    if (!midiSet)
-        return QStringLiteral("not learned");
-    return QStringLiteral("%1 %2, ch %3").arg(midiIsCC ? QStringLiteral("CC") : QStringLiteral("Note")).arg(midiNumber).arg(midiChannel + 1);
+    QStringList parts;
+    if (midiSet)
+        parts << QStringLiteral("%1 %2, ch %3").arg(midiIsCC ? QStringLiteral("CC") : QStringLiteral("Note")).arg(midiNumber).arg(midiChannel + 1);
+    if (!key.isEmpty())
+        parts << QStringLiteral("key %1").arg(key);
+    return parts.isEmpty() ? QStringLiteral("not learned") : parts.join(QStringLiteral(" / "));
 }
 
 QString newId()
@@ -817,7 +833,8 @@ QJsonObject Project::toJson() const
                                       {"midiSet", m.midiSet},
                                       {"midiCC", m.midiIsCC},
                                       {"midiChannel", m.midiChannel},
-                                      {"midiNumber", m.midiNumber}});
+                                      {"midiNumber", m.midiNumber},
+                                      {"key", m.key}});
     }
     root["controls"] = controlArr;
     root["compEffects"] = effectsToJson(compEffects);
@@ -1073,6 +1090,7 @@ Project Project::fromJson(const QJsonObject &root)
         m.midiIsCC = o["midiCC"].toBool(false);
         m.midiChannel = qBound(0, o["midiChannel"].toInt(), 15);
         m.midiNumber = qBound(0, o["midiNumber"].toInt(), 127);
+        m.key = o["key"].toString();
         p.controls.append(m);
     }
 

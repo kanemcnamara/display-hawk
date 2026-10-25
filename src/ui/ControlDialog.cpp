@@ -65,7 +65,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     auto *maps = new QGroupBox(tr("MIDI mappings (saved with the setup)"));
     auto *mapl = new QVBoxLayout(maps);
     m_mappings = new QTableWidget(0, 5);
-    m_mappings->setHorizontalHeaderLabels({tr("Action"), tr("Target"), tr("MIDI control"), QString(), QString()});
+    m_mappings->setHorizontalHeaderLabels({tr("Action"), tr("Target"), tr("MIDI control / key"), QString(), QString()});
     m_mappings->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     // Button columns: fixed, since the buttons are cell widgets that "resize to contents" ignores.
     for (int col : {3, 4}) {
@@ -96,7 +96,8 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     addRow->addWidget(add);
     mapl->addWidget(m_mappings, 1);
     mapl->addLayout(addRow);
-    mapl->addWidget(new QLabel(tr("Learn: press the button, then press a key or move a knob/fader on your controller. "
+    mapl->addWidget(new QLabel(tr("Learn: press the button, then press a key or move a knob/fader on your controller, "
+                                  "or press a key on the computer keyboard (not while typing in a field). "
                                   "Tip: right-click a clip or column number in the Clip Deck to learn it directly.")));
 
     // Monitor
@@ -367,7 +368,8 @@ void ControlDialog::refreshMappings()
         m_mappings->setItem(i, 0, new QTableWidgetItem(controlActionName(c.action)));
         m_mappings->setItem(i, 1, new QTableWidgetItem(c.targetText()));
         const bool learning = m_router->learningIndex() == i;
-        auto *midiItem = new QTableWidgetItem(learning ? tr("Waiting for a key, knob or fader...") : c.midiText());
+        auto *midiItem = new QTableWidgetItem(learning ? tr("Waiting for a MIDI key, knob or fader, or a computer key...")
+                                                       : c.midiText());
         if (learning)
             midiItem->setForeground(QColor(255, 190, 60));
         m_mappings->setItem(i, 2, midiItem);

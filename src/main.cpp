@@ -15,6 +15,9 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <QLineEdit>
+#include <QKeyEvent>
+#include "model/Library.h"
 #include <QMediaPlayer>
 #include "ui/MediaBrowser.h"
 #include "ui/ClipPreviewPanel.h"
@@ -1839,6 +1842,77 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
                              .arg(error.isEmpty() ? QString() : QStringLiteral(": ") + error)));
         doc.select(Selection::composition());
         doc.clearLayer(0);
+    }
+
+    // Keyboard mappings, effect presets and setup templates.
+    {
+        Project &p = doc.project();
+        ControlRouter *router = window.controlRouter();
+        const int col = p.columns;
+        doc.addColumn();
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        doc.clearLayer(0);
+        ControlMapping trigger;
+        trigger.action = ControlAction::TriggerClip;
+        trigger.layer = 0;
+        trigger.column = col;
+        trigger.key = QStringLiteral("1");
+        ControlMapping master;
+        master.action = ControlAction::Master;
+        p.controls = {trigger, master};
+        doc.notifyChanged(true);
+        // A real key press, through the application's event filter (nothing focused that takes typing).
+        window.activateWindow();
+        if (QWidget *focused = QApplication::focusWidget())
+            focused->clearFocus();
+        QKeyEvent press(QEvent::KeyPress, Qt::Key_1, Qt::NoModifier, QStringLiteral("1"));
+        QCoreApplication::sendEvent(&window, &press);
+        check(p.layers[0].activeColumn == col, "a key mapped to a clip triggers it");
+        // Learning assigns the next key; a held key drives a fader, its release lets go.
+        router->startLearn(1);
+        router->handleKey(QStringLiteral("M"), true);
+        const bool learned = p.controls[1].key == QLatin1String("M") && router->learningIndex() < 0;
+        router->handleKey(QStringLiteral("M"), true);
+        const bool held = p.master > 0.99;
+        router->handleKey(QStringLiteral("M"), false);
+        check(learned && held && p.master < 0.01, "key learn, and a held key drives the master");
+        doc.setMaster(1.0);
+        // Typing in a field is not playing the show.
+        doc.clearLayer(0);
+        QLineEdit field;
+        field.show();
+        field.setFocus();
+        QApplication::setActiveWindow(&field);
+        QKeyEvent typed(QEvent::KeyPress, Qt::Key_1, Qt::NoModifier, QStringLiteral("1"));
+        QCoreApplication::sendEvent(&field, &typed);
+        const bool ignored = p.layers[0].activeColumn == -1;
+        field.hide();
+        check(ignored, "keys typed into a field are not mappings");
+        p.controls.clear();
+        doc.notifyChanged(true);
+
+        // Presets: a chain saved and loaded back.
+        EffectInstance blur = makeEffect(QStringLiteral("blur"));
+        blur.params[0] = 21;
+        const QVector<EffectInstance> chain = {makeEffect(QStringLiteral("invert")), blur};
+        const bool saved = Library::savePreset(QStringLiteral("selftest chain"), chain);
+        bool ok = false;
+        const QVector<EffectInstance> loaded = Library::loadPreset(QStringLiteral("selftest chain"), &ok);
+        check(saved && ok && Library::presetNames().contains(QStringLiteral("selftest chain")) && loaded.size() == 2
+                  && loaded[1].type == QLatin1String("blur") && loaded[1].params[0] == 21,
+              "effect chain presets save and load");
+        QFile::remove(Library::presetFolder() + QStringLiteral("/selftest chain.dhfx"));
+
+        // Templates: the setup without anything playing, opened as a new unsaved setup.
+        doc.triggerClip(0, col);
+        const int wallsBefore = int(p.walls.size());
+        const bool tsaved = Library::saveTemplate(QStringLiteral("selftest template"), p);
+        QString error;
+        const bool opened = doc.loadTemplate(Library::templatePath(QStringLiteral("selftest template")), &error);
+        check(tsaved && opened && doc.filePath().isEmpty() && doc.isModified() && doc.project().walls.size() == wallsBefore
+                  && doc.project().layers[0].activeColumn == -1,
+              "templates open as new setups with nothing playing");
+        QFile::remove(Library::templatePath(QStringLiteral("selftest template")));
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

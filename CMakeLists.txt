@@ -14,6 +14,8 @@ qt_add_executable(DisplayHawk
     src/model/Project.cpp
     src/model/Document.h
     src/model/CabinetMapping.h
+    src/model/Library.h
+    src/model/Library.cpp
     src/model/CabinetMapping.cpp
     src/model/Document.cpp
     src/render/Patterns.h

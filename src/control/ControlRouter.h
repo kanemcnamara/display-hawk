@@ -46,6 +46,9 @@ public:
 
     void handleOsc(const OscMessage &message, const QString &from = QString());
     void handleMidi(const MidiMessage &message);
+    // Keyboard mappings (and key learn). Returns true if the key was used. Called by the
+    // application-wide event filter; public for tests.
+    bool handleKey(const QString &key, bool press);
 
     // DMX input (Art-Net on UDP 6454 or sACN on UDP 5568) while the project's DMX patch is enabled.
     bool artNetListening() const { return m_artnet != nullptr; }
@@ -76,6 +79,9 @@ private:
     void readArtNet();
     void readSacn();
     void closeDmxInputs();
+    bool eventFilter(QObject *watched, QEvent *event) override;
+    qint64 m_lastKeyTime = -1;
+    int m_lastKeyType = 0;
     void handleDmx(int universe, const QByteArray &data, const QString &from);
 
     Document *m_doc;

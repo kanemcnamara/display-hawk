@@ -3,6 +3,10 @@
 #include "model/Document.h"
 #include "render/Effects.h"
 #include "render/Isf.h"
+#include "model/Library.h"
+#include <QInputDialog>
+#include <QLineEdit>
+#include <QMessageBox>
 
 #include <QCheckBox>
 #include <QColorDialog>
@@ -89,6 +93,31 @@ EffectChainEditor::EffectChainEditor(Document *doc, QWidget *parent)
             isf->addAction(tr("(none: put .fs files in Documents/Display Hawk/ISF)"))->setEnabled(false);
     });
     isf->setToolTipsVisible(true);
+    // Presets: whole chains saved to the library, added to any chain.
+    QMenu *presets = menu->addMenu(tr("Presets"));
+    connect(presets, &QMenu::aboutToShow, this, [this, presets] {
+        presets->clear();
+        presets->addAction(tr("Save this chain as a preset..."), this, [this] {
+            const QVector<EffectInstance> *c = chain();
+            if (!c || c->isEmpty())
+                return;
+            bool ok = false;
+            const QString name = QInputDialog::getText(this, tr("Save preset"), tr("Preset name"), QLineEdit::Normal, QString(), &ok);
+            QString error;
+            if (ok && !name.trimmed().isEmpty() && !Library::savePreset(name, *c, &error))
+                QMessageBox::warning(this, tr("Save preset"), error);
+        })->setEnabled(chain() && !chain()->isEmpty());
+        const QStringList names = Library::presetNames();
+        if (!names.isEmpty())
+            presets->addSeparator();
+        for (const QString &name : names)
+            presets->addAction(name, this, [this, name] {
+                bool ok = false;
+                const QVector<EffectInstance> loaded = Library::loadPreset(name, &ok);
+                if (ok)
+                    edit([&](QVector<EffectInstance> &c) { c += loaded; }, true);
+            });
+    });
     add->setMenu(menu);
     v->addWidget(add);
 }

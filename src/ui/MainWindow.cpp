@@ -13,6 +13,8 @@
 #include "ui/LfoDialog.h"
 #include "ui/ClipPreviewPanel.h"
 #include "ui/MediaBrowser.h"
+#include "model/Library.h"
+#include <QInputDialog>
 #include "media/OutputRecorder.h"
 #include <QDateTime>
 #include <QLabel>
@@ -261,6 +263,31 @@ void MainWindow::buildActions()
     QAction *saveAct = file->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::saveProject);
     file->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::saveProjectAs);
     file->addAction(tr("Export setup &report..."), this, &MainWindow::exportReport);
+    file->addSeparator();
+    QMenu *templates = file->addMenu(tr("New from &template"));
+    connect(templates, &QMenu::aboutToShow, this, [this, templates] {
+        templates->clear();
+        const QStringList names = Library::templateNames();
+        for (const QString &name : names)
+            templates->addAction(name, this, [this, name] {
+                if (!confirmDiscard())
+                    return;
+                QString error;
+                if (!m_doc->loadTemplate(Library::templatePath(name), &error))
+                    QMessageBox::warning(this, tr("New from template"), error);
+            });
+        if (names.isEmpty())
+            templates->addAction(tr("(none yet: File > Save as template)"))->setEnabled(false);
+    });
+    file->addAction(tr("Save as te&mplate..."), this, [this] {
+        bool ok = false;
+        const QString name = QInputDialog::getText(this, tr("Save as template"),
+                                                   tr("Template name (walls, screens, layers, clips and effects; nothing playing)"),
+                                                   QLineEdit::Normal, QString(), &ok);
+        QString error;
+        if (ok && !name.trimmed().isEmpty() && !Library::saveTemplate(name, m_doc->project(), &error))
+            QMessageBox::warning(this, tr("Save as template"), error);
+    });
     file->addSeparator();
     m_reopenLastAction = file->addAction(tr("Reopen last setup on launch"));
     m_reopenLastAction->setCheckable(true);

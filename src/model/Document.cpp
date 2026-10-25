@@ -789,6 +789,17 @@ void Document::newProject()
     emit fileStateChanged();
 }
 
+bool Document::loadTemplate(const QString &path, QString *error)
+{
+    if (!load(path, error))
+        return false;
+    m_filePath.clear();
+    m_savedJson = QJsonObject(); // never saved under a name of its own
+    setModified(true);
+    emit fileStateChanged();
+    return true;
+}
+
 bool Document::load(const QString &path, QString *error, bool recovery)
 {
     QFile f(path);

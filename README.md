@@ -99,6 +99,9 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 
 - **Preview** monitor (dock next to the clip deck): the clip selected in the deck, with its transform and effects, as it would look in its layer's area, without sending it to the outputs. Movies run muted while previewed.
 - **Media** browser (tab next to *Setup*): folders on the left, thumbnails of the videos and images in the chosen folder on the right. Drag files onto the clip deck, or double-click to add one to the next empty slot of the selected layer.
+- **Keyboard**: every control action can be mapped to a computer key as well as (or instead of) MIDI: *Learn* in **Control → OSC, MIDI & DMX…**, then press the key. Triggers fire on the key, held keys drive faders (released = 0), piano clips stop on release; keys typed into a text field are left alone.
+- **Effect presets**: *Add effect → Presets → Save this chain as a preset…* stores a chain (in *Documents/Display Hawk/Presets*); its name in the same menu adds it to any layer, clip, group or the composition.
+- **Templates**: *File → Save as template…* keeps the setup (walls, screens, layers, clips, effects; nothing playing); *File → New from template* starts a new, unsaved setup from it.
 - **Output → Record Composition…** (Ctrl/Cmd+Shift+R): records what the composition shows to an MP4 (H.264, 30 fps, up to 4K) with the platform's encoder; a red *REC* timer shows in the status bar.
 
 ## Remote control: OSC, MIDI and DMX

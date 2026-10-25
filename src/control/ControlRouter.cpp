@@ -5,7 +5,15 @@
 #include "model/Document.h"
 #include "render/Effects.h"
 
+#include <QAbstractSpinBox>
+#include <QApplication>
+#include <QComboBox>
+#include <QKeyEvent>
+#include <QKeySequenceEdit>
+#include <QLineEdit>
 #include <QNetworkDatagram>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QNetworkInterface>
 #include <QSettings>
 #include <QUdpSocket>
@@ -52,6 +60,7 @@ ControlRouter::ControlRouter(Document *doc, QObject *parent)
     // Art-Net follows the project: on while its DMX patch is enabled.
     connect(m_doc, &Document::changed, this, &ControlRouter::syncArtNet);
     syncArtNet();
+    qApp->installEventFilter(this); // keyboard mappings work in every window, outputs included
 }
 
 ControlRouter::~ControlRouter() = default;
@@ -171,6 +180,67 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         else if (what == QLatin1String("effect") && p.size() >= 6 && hasArg)
             apply(ControlAction::EffectParam, layer, index(4), value, Mode::Value, index(5));
     }
+}
+
+bool ControlRouter::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() != QEvent::KeyPress && event->type() != QEvent::KeyRelease)
+        return QObject::eventFilter(watched, event);
+    auto *k = static_cast<QKeyEvent *>(event);
+    if (k->isAutoRepeat())
+        return false;
+    // The same event is offered again as it propagates to parents: handle it once.
+    if (qint64(k->timestamp()) == m_lastKeyTime && int(event->type()) == m_lastKeyType)
+        return false;
+    // Typing in a field is typing, not playing the show.
+    QWidget *focus = QApplication::focusWidget();
+    if (qobject_cast<QLineEdit *>(focus) || qobject_cast<QAbstractSpinBox *>(focus) || qobject_cast<QTextEdit *>(focus)
+        || qobject_cast<QPlainTextEdit *>(focus) || qobject_cast<QKeySequenceEdit *>(focus)
+        || (qobject_cast<QComboBox *>(focus) && static_cast<QComboBox *>(focus)->isEditable()))
+        return false;
+    const int key = k->key();
+    if (key == Qt::Key_Control || key == Qt::Key_Shift || key == Qt::Key_Alt || key == Qt::Key_Meta || key == 0
+        || key == Qt::Key_unknown)
+        return false;
+    m_lastKeyTime = qint64(k->timestamp());
+    m_lastKeyType = int(event->type());
+    const QString text = QKeySequence(k->keyCombination()).toString(QKeySequence::PortableText);
+    return handleKey(text, event->type() == QEvent::KeyPress);
+}
+
+bool ControlRouter::handleKey(const QString &key, bool press)
+{
+    QVector<ControlMapping> &controls = m_doc->project().controls;
+    if (press && m_learn >= 0 && m_learn < controls.size()) {
+        controls[m_learn].key = key;
+        const int index = m_learn;
+        m_learn = -1;
+        m_doc->notifyChanged(true);
+        emit learned(index);
+        emit learnStateChanged();
+        return true;
+    }
+    bool used = false;
+    const QVector<ControlMapping> mappings = controls; // an action may change the list
+    for (const ControlMapping &c : mappings) {
+        if (c.key.isEmpty() || c.key != key)
+            continue;
+        used = true;
+        const Kind kind = kindOf(c.action);
+        if (press) {
+            if (kind == Kind::Continuous)
+                apply(c.action, c.layer, c.column, 1.0, Mode::Value, c.param); // held = full
+            else
+                apply(c.action, c.layer, c.column, 1.0, Mode::Press);
+        } else if (kind == Kind::Continuous) {
+            apply(c.action, c.layer, c.column, 0.0, Mode::Value, c.param);
+        } else if (c.action == ControlAction::TriggerClip) {
+            m_doc->releaseClip(c.layer, c.column); // piano clips play while the key is held
+        }
+    }
+    if (used)
+        emit activity(QStringLiteral("Key %1 %2").arg(key, press ? QStringLiteral("down") : QStringLiteral("up")));
+    return used;
 }
 
 void ControlRouter::handleMidi(const MidiMessage &m)
