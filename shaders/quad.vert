@@ -12,6 +12,7 @@ layout(std140, binding = 0) uniform Buf {
     ivec4 flags2;   // useTex
     vec4 gain;      // per-channel gain (slice colour correction)
     vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
+    vec4 axes;      // flags2.z == 1: source edge vectors (u, v); src.xy is then the source origin
 } ubuf;
 
 void main()
@@ -30,7 +31,9 @@ void main()
     if (rot == 1) s = vec2(s.y, 1.0 - s.x);
     else if (rot == 2) s = vec2(1.0 - s.x, 1.0 - s.y);
     else if (rot == 3) s = vec2(1.0 - s.y, s.x);
-    vec2 uv = ubuf.src.xy + s * ubuf.src.zw;
+    // A rotated source area (slices at an angle) is given as an origin and two edge vectors.
+    vec2 uv = ubuf.flags2.z == 1 ? ubuf.src.xy + s.x * ubuf.axes.xy + s.y * ubuf.axes.zw
+                                 : ubuf.src.xy + s * ubuf.src.zw;
     if (ubuf.flags.w == 1) uv.y = 1.0 - uv.y;
     vUV = uv;
 }

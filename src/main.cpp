@@ -7,6 +7,7 @@
 #include "media/MediaSource.h"
 #include "media/Ndi.h"
 #include "media/TextureShare.h"
+#include "model/CabinetMapping.h"
 #include "model/Document.h"
 #include "render/Effects.h"
 #include "render/RenderEngine.h"
@@ -842,6 +843,120 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         window.grab().save(QStringLiteral("%1/effects-window.png").arg(outDir));
         setFx(1, {});
         doc.clearLayer(1);
+    }
+
+    // Cabinet layouts: the 10 x 5 wall of 128 px cabinets, one slice per cabinet on screen 1.
+    {
+        Project &p = doc.project();
+        const QVector<Slice> savedSlices = p.screens[0].slices;
+        p.screens[0].width = 1920;
+        p.screens[0].height = 1080;
+        p.screens[0].slices.clear();
+        doc.notifyChanged(true);
+        CabinetLayout layout;
+        layout.wall = 0;
+        layout.arrange = CabinetArrange::PackRows;
+        layout.order = CabinetOrder::RowsSerpentine;
+        layout.portCapacity = 655360; // 40 cabinets of 16,384 px per port
+        doc.addCabinetLayout(0, layout);
+        const QVector<Slice> &cabs = p.screens[0].slices;
+        check(cabs.size() == 50 && cabs[9].cabinet == QPoint(9, 0) && cabs[10].cabinet == QPoint(9, 1)
+                  && cabs[19].cabinet == QPoint(0, 1),
+              "cabinet chain runs serpentine through the rows");
+        check(cabs[14].output == QRect(14 * 128, 0, 128, 128) && cabs[15].output == QRect(0, 128, 128, 128),
+              "packed rows wrap at the screen width");
+        check(cabs[39].port == 1 && cabs[40].port == 2 && CabinetMapping::summarize(p.screens[0], 0).ports == 2,
+              "cabinets are split onto ports by capacity");
+
+        // Per-cabinet settings survive regeneration; a cabinet marked not fitted drops out of the chain.
+        for (Slice &sl : p.screens[0].slices)
+            if (sl.cabinet == QPoint(5, 2))
+                sl.gainR = 0.0;
+        LedWall w = p.walls[0];
+        w.disabledPanels = {QPoint(3, 0)};
+        doc.applyWall(0, w);
+        bool kept = false;
+        for (const Slice &sl : p.screens[0].slices)
+            kept = kept || (sl.cabinet == QPoint(5, 2) && sl.gainR == 0.0);
+        check(p.screens[0].slices.size() == 49 && p.screens[0].slices[3].cabinet == QPoint(4, 0) && kept,
+              "layouts follow wall edits and keep per-cabinet colour correction");
+        w.disabledPanels.clear();
+        doc.applyWall(0, w);
+        for (Slice &sl : p.screens[0].slices)
+            sl.gainR = 1.0;
+
+        // Wall shape turned 90 degrees clockwise: the wall's top-left cabinet lands top-right.
+        layout.arrange = CabinetArrange::WallShape;
+        layout.rotation = 1;
+        layout.portCapacity = 0;
+        doc.setCabinetLayout(0, 0, layout);
+        check(p.screens[0].slices[0].cabinet == QPoint(0, 0) && p.screens[0].slices[0].output == QRect(4 * 128, 0, 128, 128)
+                  && p.screens[0].slices[0].rotation == 1 && p.screens[0].slices[0].port == 0,
+              "wall-shape layout rotates the whole wall");
+
+        // On the GPU: every cabinet shows its own cabinet. Panel Colours gives each one a hue by panel
+        // number; each packed output cabinet must match its cabinet's colour in the composition.
+        layout.arrange = CabinetArrange::PackRows;
+        layout.rotation = 0;
+        layout.portCapacity = 655360;
+        doc.setCabinetLayout(0, 0, layout);
+        p.compEffects = {makeEffect(QStringLiteral("panelColours"))};
+        p.compEffects[0].params = {2, 1, 0, 1}; // by panel number, full spread, no drift
+        doc.notifyChanged(true);
+        auto pixelAt = [&](int view, const QPointF &pt, const QSize &space) {
+            const QImage &img = previews[view];
+            if (img.isNull())
+                return QColor();
+            return QColor(img.pixel(qBound(0, int(pt.x() * img.width() / space.width()), img.width() - 1),
+                                    qBound(0, int(pt.y() * img.height() / space.height()), img.height() - 1)));
+        };
+        auto cabinetsMatch = [&] {
+            const QSize screen(p.screens[0].width, p.screens[0].height);
+            for (int i : {0, 7, 13, 22, 38, 49}) {
+                const Slice &sl = p.screens[0].slices[i];
+                const QColor in = pixelAt(0, QRectF(sl.input).center(), p.compSize());
+                const QColor out = pixelAt(1, QRectF(sl.output).center(), screen);
+                if (!in.isValid() || !out.isValid() || qGray(in.rgb()) < 40 || !near(in, out.red(), out.green(), out.blue()))
+                    return false;
+            }
+            return true;
+        };
+        check(waitFor(cabinetsMatch, 8000), "each output cabinet shows its own cabinet's content");
+        save(previews[1], "cabinet-layout-output");
+        doc.select(Selection::ofScreen(0));
+        waitMs(300);
+        window.grab().save(QStringLiteral("%1/cabinet-layout-window.png").arg(outDir));
+        p.compEffects.clear();
+        doc.removeCabinetLayout(0, 0);
+        check(p.screens[0].slices.isEmpty() && p.screens[0].cabinetLayouts.isEmpty(),
+              "removing a layout removes its cabinet slices");
+
+        // Angled slice: a 480 px square over the white and yellow bars, turned 90 degrees, shows the
+        // bars lying down: yellow along the top of the output, white along the bottom.
+        doc.setClip(0, 2, Clip::fromPattern(TestPattern::ColorBars));
+        doc.clearLayer(1);
+        doc.triggerClip(0, 2);
+        Slice sq;
+        sq.input = QRect(0, 0, 480, 480);
+        sq.output = QRect(0, 0, 480, 480);
+        p.screens[0].slices = {sq};
+        doc.notifyChanged(true);
+        const QSize screen(p.screens[0].width, p.screens[0].height);
+        auto isWhite = [](const QColor &c) { return c.red() > 200 && c.green() > 200 && c.blue() > 200; };
+        auto isYellow = [](const QColor &c) { return c.red() > 200 && c.green() > 200 && c.blue() < 80; };
+        const bool upright = waitFor([&] {
+            return isWhite(pixelAt(1, {60, 240}, screen)) && isYellow(pixelAt(1, {420, 240}, screen));
+        });
+        p.screens[0].slices[0].angle = 90.0;
+        doc.notifyChanged();
+        const bool turned = waitFor([&] {
+            return isYellow(pixelAt(1, {240, 60}, screen)) && isWhite(pixelAt(1, {240, 420}, screen));
+        });
+        save(previews[1], "slice-angle");
+        check(upright && turned, "angled slice samples a rotated area");
+
+        p.screens[0].slices = savedSlices;
+        doc.notifyChanged(true);
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

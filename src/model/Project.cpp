@@ -1,5 +1,7 @@
 #include "model/Project.h"
 
+#include <QTransform>
+
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QUuid>
@@ -50,6 +52,40 @@ QString audioSignalName(AudioSignal s)
     case AudioSignal::Mid: return QStringLiteral("Mid");
     case AudioSignal::Treble: return QStringLiteral("Treble");
     case AudioSignal::Beat: return QStringLiteral("Beat");
+    }
+    return {};
+}
+
+QPolygonF Slice::inputPolygon() const
+{
+    const QRectF r(input);
+    QPolygonF poly({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+    if (angle == 0.0)
+        return poly;
+    QTransform t;
+    t.translate(r.center().x(), r.center().y());
+    t.rotate(angle); // clockwise on screen (y points down)
+    t.translate(-r.center().x(), -r.center().y());
+    return t.map(poly);
+}
+
+QString cabinetArrangeName(CabinetArrange a)
+{
+    switch (a) {
+    case CabinetArrange::WallShape: return QStringLiteral("Same shape as the wall");
+    case CabinetArrange::PackRows: return QStringLiteral("Packed in rows");
+    case CabinetArrange::PackColumns: return QStringLiteral("Packed in columns");
+    }
+    return {};
+}
+
+QString cabinetOrderName(CabinetOrder o)
+{
+    switch (o) {
+    case CabinetOrder::Rows: return QStringLiteral("Rows");
+    case CabinetOrder::RowsSerpentine: return QStringLiteral("Rows, serpentine");
+    case CabinetOrder::Columns: return QStringLiteral("Columns");
+    case CabinetOrder::ColumnsSerpentine: return QStringLiteral("Columns, serpentine");
     }
     return {};
 }
@@ -360,6 +396,10 @@ QJsonObject Project::toJson() const
                                         {"rotation", sl.rotation},
                                         {"flipH", sl.flipH},
                                         {"flipV", sl.flipV},
+                                        {"angle", sl.angle},
+                                        {"wall", sl.wall},
+                                        {"cabinet", QJsonArray{sl.cabinet.x(), sl.cabinet.y()}},
+                                        {"port", sl.port},
                                         {"brightness", sl.brightness},
                                         {"gainR", sl.gainR},
                                         {"gainG", sl.gainG},
@@ -367,12 +407,28 @@ QJsonObject Project::toJson() const
                                         {"gamma", sl.gamma},
                                         {"blackLevel", sl.blackLevel}});
         }
+        QJsonArray layoutArr;
+        for (const CabinetLayout &c : s.cabinetLayouts)
+            layoutArr.append(QJsonObject{{"wall", c.wall},
+                                         {"arrange", int(c.arrange)},
+                                         {"order", int(c.order)},
+                                         {"startCorner", c.startCorner},
+                                         {"x", c.x},
+                                         {"y", c.y},
+                                         {"gap", c.gap},
+                                         {"rotation", c.rotation},
+                                         {"flipH", c.flipH},
+                                         {"flipV", c.flipV},
+                                         {"portCapacity", c.portCapacity},
+                                         {"firstPort", c.firstPort},
+                                         {"newLinePerPort", c.newLinePerPort}});
         screenArr.append(QJsonObject{{"name", s.name},
                                      {"width", s.width},
                                      {"height", s.height},
                                      {"display", s.display},
                                      {"enabled", s.enabled},
-                                     {"slices", sliceArr}});
+                                     {"slices", sliceArr},
+                                     {"cabinetLayouts", layoutArr}});
     }
     root["screens"] = screenArr;
 
@@ -477,6 +533,11 @@ Project Project::fromJson(const QJsonObject &root)
             sl.rotation = so["rotation"].toInt(0) & 3;
             sl.flipH = so["flipH"].toBool(false);
             sl.flipV = so["flipV"].toBool(false);
+            sl.angle = so["angle"].toDouble(0.0);
+            sl.wall = so["wall"].toInt(-1);
+            const QJsonArray cab = so["cabinet"].toArray();
+            sl.cabinet = cab.size() == 2 ? QPoint(cab[0].toInt(), cab[1].toInt()) : QPoint(-1, -1);
+            sl.port = qMax(0, so["port"].toInt(0));
             sl.brightness = so["brightness"].toDouble(1.0);
             sl.gainR = so["gainR"].toDouble(1.0);
             sl.gainG = so["gainG"].toDouble(1.0);
@@ -484,6 +545,24 @@ Project Project::fromJson(const QJsonObject &root)
             sl.gamma = qBound(0.1, so["gamma"].toDouble(1.0), 5.0);
             sl.blackLevel = qBound(0.0, so["blackLevel"].toDouble(0.0), 0.5);
             s.slices.append(sl);
+        }
+        for (const QJsonValue &lv : o["cabinetLayouts"].toArray()) {
+            const QJsonObject lo = lv.toObject();
+            CabinetLayout c;
+            c.wall = lo["wall"].toInt(0);
+            c.arrange = CabinetArrange(qBound(0, lo["arrange"].toInt(0), 2));
+            c.order = CabinetOrder(qBound(0, lo["order"].toInt(1), 3));
+            c.startCorner = qBound(0, lo["startCorner"].toInt(0), 3);
+            c.x = lo["x"].toInt(0);
+            c.y = lo["y"].toInt(0);
+            c.gap = qMax(0, lo["gap"].toInt(0));
+            c.rotation = lo["rotation"].toInt(0) & 3;
+            c.flipH = lo["flipH"].toBool(false);
+            c.flipV = lo["flipV"].toBool(false);
+            c.portCapacity = qMax(0, lo["portCapacity"].toInt(655360));
+            c.firstPort = qMax(1, lo["firstPort"].toInt(1));
+            c.newLinePerPort = lo["newLinePerPort"].toBool(false);
+            s.cabinetLayouts.append(c);
         }
         p.screens.append(s);
     }

@@ -60,6 +60,13 @@ Each parameter can be driven live: OSC `/dh/layer/<l>/effect/<e>/<p>` or `/dh/co
 
 - **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.
 - **Irregular walls:** in a wall's properties, click or drag on the panel grid to mark cabinets that are not fitted (stepped or odd-shaped walls). Panel maps cross them out and number only fitted cabinets; specs and port estimates count only fitted cabinets. *Black out areas without LED panels* (composition properties) multiplies the output by the real panel layout, so content never lands where there are no LEDs.
+- **Cabinet layouts** (screen properties → *Cabinet layouts*, or a wall's *Map each cabinet on screen*): one slice per fitted cabinet, placed on the processor's output canvas and chained onto ports, for walls that are not simple rectangles.
+  - *Arrange*: the same shape as the wall, packed in rows, or packed in columns (wrapping at the screen size).
+  - *Chain*: rows or columns, straight or serpentine, starting from any corner: the order the processor's data runs through the cabinets.
+  - Position, gap between cabinets, rotation (the whole layout and each cabinet's content) and flips.
+  - *Port size* (1G / 5G / 10G presets or custom pixels): cabinets are split onto ports in chain order, optionally starting a new row per port. The output map draws each port's route with arrows, colour-coded; the setup report draws it on the processor view, and the CSV lists wall, cabinet and port per slice.
+  - Layouts are stored with the screen and regenerate when the wall changes (cabinets marked as not fitted drop out of the chain); each cabinet keeps its own brightness, colour correction and angle.
+- **Slice angle:** a slice can sample a rotated area of the composition (any angle, about its centre) while its output stays upright, for walls hung at an angle such as diamond layouts.
 - **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
 - **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
 

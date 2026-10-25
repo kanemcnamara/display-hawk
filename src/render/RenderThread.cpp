@@ -991,6 +991,14 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         qp.dst = QRectF(screenRect.x() + sl.output.x() * sx, screenRect.y() + sl.output.y() * sy,
                         sl.output.width() * sx, sl.output.height() * sy);
         qp.src = QRectF(sl.input.x() / cw, sl.input.y() / ch, sl.input.width() / cw, sl.input.height() / ch);
+        if (sl.angle != 0.0) {
+            // The input rect turned clockwise about its centre: origin and edge vectors.
+            const QPolygonF q = sl.inputPolygon();
+            qp.srcAxes = true;
+            qp.src.moveTopLeft(QPointF(q[0].x() / cw, q[0].y() / ch));
+            qp.srcU = QPointF((q[1].x() - q[0].x()) / cw, (q[1].y() - q[0].y()) / ch);
+            qp.srcV = QPointF((q[3].x() - q[0].x()) / cw, (q[3].y() - q[0].y()) / ch);
+        }
         qp.rotation = sl.rotation;
         qp.flipH = sl.flipH;
         qp.flipV = sl.flipV;

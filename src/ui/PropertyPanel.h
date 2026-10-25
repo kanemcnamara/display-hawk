@@ -7,6 +7,7 @@
 #include <functional>
 
 class Document;
+class CabinetLayoutEditor;
 class EffectChainEditor;
 class PanelGridEditor;
 class RenderEngine;
@@ -105,6 +106,7 @@ private:
     QSpinBox *m_screenW, *m_screenH;
     QComboBox *m_display;
     QLabel *m_screenInfo;
+    CabinetLayoutEditor *m_cabinets;
 
     // Slice
     QLineEdit *m_sliceName;
@@ -115,4 +117,6 @@ private:
     QDoubleSpinBox *m_brightness;
     QDoubleSpinBox *m_gainR, *m_gainG, *m_gainB, *m_gamma, *m_blackLevel;
     QComboBox *m_sliceWall;
+    QDoubleSpinBox *m_angle;
+    QLabel *m_cabinetInfo;
 };

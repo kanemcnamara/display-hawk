@@ -1,5 +1,7 @@
 #include "ui/ReportExporter.h"
 
+#include "model/CabinetMapping.h"
+
 #include "model/Project.h"
 #include "render/Patterns.h"
 
@@ -103,7 +105,19 @@ QImage screenLayout(const Project &project, const Screen &screen, const QImage &
         if (!sl.enabled || sl.input.isEmpty() || sl.output.isEmpty())
             continue;
         // Same mapping as the GPU: rotate the content clockwise, then flip in output space.
-        const QImage part = panelMap.copy(sl.input);
+        QImage part;
+        if (sl.angle == 0.0) {
+            part = panelMap.copy(sl.input);
+        } else { // the input area turned about its centre
+            part = QImage(sl.input.size(), QImage::Format_RGB32);
+            part.fill(Qt::black);
+            QPainter pp(&part);
+            pp.setRenderHint(QPainter::SmoothPixmapTransform);
+            pp.translate(sl.input.width() / 2.0, sl.input.height() / 2.0);
+            pp.rotate(-sl.angle);
+            pp.translate(-QRectF(sl.input).center());
+            pp.drawImage(0, 0, panelMap);
+        }
         const bool quarter = sl.rotation & 1;
         const QSizeF drawn = quarter ? QSizeF(sl.output.height(), sl.output.width()) : QSizeF(sl.output.size());
         p.save();
@@ -119,13 +133,35 @@ QImage screenLayout(const Project &project, const Screen &screen, const QImage &
         f.setPixelSize(qBound(12, sl.output.height() / 14, 48));
         f.setBold(true);
         p.setFont(f);
-        const QString label = QStringLiteral("%1   in %2   out %3").arg(sl.name, rectText(sl.input), rectText(sl.output));
+        // Cabinets are small: column/row and port only.
+        const QString label = sl.isCabinet()
+                                  ? QStringLiteral("C%1 R%2%3").arg(sl.cabinet.x() + 1).arg(sl.cabinet.y() + 1)
+                                        .arg(sl.port > 0 ? QStringLiteral("  P%1").arg(sl.port) : QString())
+                                  : QStringLiteral("%1   in %2   out %3").arg(sl.name, rectText(sl.input), rectText(sl.output));
         // Bottom-left on a dark band, clear of the panel map's own wall title at the top.
         const QRect lr = QRect(sl.output).adjusted(8, 6, -8, -6);
         const QRect band = p.fontMetrics().boundingRect(lr, Qt::AlignLeft | Qt::AlignBottom | Qt::TextWordWrap, label);
         p.fillRect(band.adjusted(-6, -3, 6, 3), QColor(0, 0, 0, 190));
         p.setPen(QColor(255, 200, 120));
         p.drawText(lr, Qt::AlignLeft | Qt::AlignBottom | Qt::TextWordWrap, label);
+    }
+    // Port routes: the order the processor's data runs through the cabinets on each port.
+    const QVector<CabinetMapping::PortRoute> routes = CabinetMapping::portRoutes(screen);
+    for (const CabinetMapping::PortRoute &route : routes) {
+        p.setPen(QPen(route.color, qMax(3, screen.width / 400), Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        p.drawPolyline(route.points);
+        if (!route.points.isEmpty()) {
+            QFont f = p.font();
+            f.setPixelSize(qBound(14, screen.height / 40, 40));
+            f.setBold(true);
+            p.setFont(f);
+            const QString text = QStringLiteral("Port %1").arg(route.port);
+            const QRectF tr(route.points.first() + QPointF(6, -f.pixelSize() - 8),
+                            QSizeF(p.fontMetrics().horizontalAdvance(text) + 12, f.pixelSize() + 8));
+            p.fillRect(tr, route.color);
+            p.setPen(Qt::black);
+            p.drawText(tr, Qt::AlignCenter, text);
+        }
     }
     Q_UNUSED(project);
     return img;
@@ -159,7 +195,7 @@ QStringList exportReport(const Project &project, const QString &dir, const QStri
         if (csv.open(QIODevice::WriteOnly | QIODevice::Text)) {
             QTextStream s(&csv);
             s << "screen,slice,enabled,in_x,in_y,in_w,in_h,out_x,out_y,out_w,out_h,rotation_deg,flip_h,flip_v,"
-                 "brightness,gain_r,gain_g,gain_b,gamma,black_level\n";
+                 "brightness,gain_r,gain_g,gain_b,gamma,black_level,angle_deg,wall,cabinet_col,cabinet_row,port\n";
             auto q = [](const QString &v) { return QStringLiteral("\"%1\"").arg(QString(v).replace('"', "\"\"")); };
             for (const Screen &sc : project.screens) {
                 for (const Slice &sl : sc.slices) {
@@ -168,7 +204,11 @@ QStringList exportReport(const Project &project, const QString &dir, const QStri
                       << ',' << sl.output.y() << ',' << sl.output.width() << ',' << sl.output.height() << ','
                       << sl.rotation * 90 << ',' << int(sl.flipH) << ',' << int(sl.flipV) << ',' << sl.brightness
                       << ',' << sl.gainR << ',' << sl.gainG << ',' << sl.gainB << ',' << sl.gamma << ','
-                      << sl.blackLevel << '\n';
+                      << sl.blackLevel << ',' << sl.angle << ','
+                      << (sl.wall >= 0 && sl.wall < project.walls.size() ? q(project.walls[sl.wall].name) : QString())
+                      << ',' << (sl.isCabinet() ? QString::number(sl.cabinet.x() + 1) : QString()) << ','
+                      << (sl.isCabinet() ? QString::number(sl.cabinet.y() + 1) : QString()) << ','
+                      << (sl.port > 0 ? QString::number(sl.port) : QString()) << '\n';
                 }
             }
             written << csv.fileName();

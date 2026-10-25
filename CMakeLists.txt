@@ -13,6 +13,8 @@ qt_add_executable(DisplayHawk
     src/model/Project.h
     src/model/Project.cpp
     src/model/Document.h
+    src/model/CabinetMapping.h
+    src/model/CabinetMapping.cpp
     src/model/Document.cpp
     src/render/Patterns.h
     src/render/Patterns.cpp
@@ -60,6 +62,8 @@ qt_add_executable(DisplayHawk
     src/ui/CanvasView.cpp
     src/ui/AudioReactiveDialog.h
     src/ui/AudioReactiveDialog.cpp
+    src/ui/CabinetLayoutEditor.h
+    src/ui/CabinetLayoutEditor.cpp
     src/ui/EffectChainEditor.h
     src/ui/EffectChainEditor.cpp
     src/ui/ControlDialog.h

@@ -7,8 +7,8 @@
 
 namespace {
 
-constexpr quint32 kUniformSize = 192; // must match the std140 block in quad.vert / quad.frag
-constexpr quint32 kMaxDrawsPerFrame = 1024;
+constexpr quint32 kUniformSize = 208; // must match the std140 block in quad.vert / quad.frag
+constexpr quint32 kMaxDrawsPerFrame = 8192; // cabinet layouts add a slice per cabinet
 
 QShader loadShader(const QString &path)
 {
@@ -181,10 +181,12 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         std::memcpy(fp + 16, vecs, sizeof(vecs));
         const qint32 inputMode = p.blend == Blend::Straight ? 0 : (p.blend == Blend::Darken ? 2 : 1);
         const qint32 ints[] = {p.rotation & 3, p.flipH ? 1 : 0, p.flipV ? 1 : 0, p.texFlipY ? 1 : 0,
-                               p.texture ? 1 : 0, inputMode, 0, 0};
+                               p.texture ? 1 : 0, inputMode, p.srcAxes ? 1 : 0, 0};
         std::memcpy(data + 128, ints, sizeof(ints));
         const float grade[] = {p.gain[0], p.gain[1], p.gain[2], 1.0f, p.gamma, p.blackLevel, p.colorCorrect ? 1.0f : 0.0f, 0.0f};
         std::memcpy(data + 160, grade, sizeof(grade));
+        const float axes[] = {float(p.srcU.x()), float(p.srcU.y()), float(p.srcV.x()), float(p.srcV.y())};
+        std::memcpy(data + 192, axes, sizeof(axes));
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
         m_offset += m_stride;

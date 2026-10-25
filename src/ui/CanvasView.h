@@ -40,6 +40,7 @@ private:
         QString label;
         bool resizable = true;
         bool dim = false;
+        QPolygonF poly; // set for slices sampling a rotated area: drawn and hit-tested instead of rect
     };
 
     QVector<Item> items() const;
@@ -49,6 +50,8 @@ private:
     QPointF toWidget(const QPointF &c) const;
     QPointF toCanvas(const QPointF &w) const;
     QRectF toWidget(const QRect &r) const;
+    QPolygonF toWidget(const QPolygonF &poly) const;
+    static bool contains(const Item &item, const QPointF &canvasPos);
     QVector<QPointF> handlePositions(const QRectF &wr) const;
     int hitHandle(const QPointF &pos) const;
     int hitItem(const QVector<Item> &list, const QPointF &pos) const;

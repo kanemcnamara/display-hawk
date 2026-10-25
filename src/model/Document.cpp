@@ -1,5 +1,6 @@
 #include "model/Document.h"
 
+#include "model/CabinetMapping.h"
 #include "render/Effects.h"
 
 #include <QFile>
@@ -400,7 +401,71 @@ void Document::applyWall(int index, const LedWall &wall)
         }
     }
     m_project.walls[index] = wall;
-    notifyChanged(renamed);
+    CabinetMapping::regenerate(m_project, index); // cabinet slices follow the wall
+    notifyChanged(renamed || hasCabinetLayout(index));
+}
+
+bool Document::hasCabinetLayout(int wall) const
+{
+    for (const Screen &s : m_project.screens)
+        for (const CabinetLayout &c : s.cabinetLayouts)
+            if (c.wall == wall)
+                return true;
+    return false;
+}
+
+int Document::addCabinetLayout(int screen, const CabinetLayout &layout)
+{
+    if (screen < 0 || screen >= m_project.screens.size())
+        return -1;
+    Screen &s = m_project.screens[screen];
+    for (int i = 0; i < s.cabinetLayouts.size(); ++i) {
+        if (s.cabinetLayouts[i].wall == layout.wall) { // one layout per wall and screen
+            setCabinetLayout(screen, i, layout);
+            return i;
+        }
+    }
+    s.cabinetLayouts.append(layout);
+    CabinetMapping::regenerate(m_project, layout.wall);
+    notifyChanged(true);
+    return int(s.cabinetLayouts.size()) - 1;
+}
+
+void Document::setCabinetLayout(int screen, int index, const CabinetLayout &layout)
+{
+    if (screen < 0 || screen >= m_project.screens.size() || index < 0
+        || index >= m_project.screens[screen].cabinetLayouts.size())
+        return;
+    Screen &s = m_project.screens[screen];
+    const int oldWall = s.cabinetLayouts[index].wall;
+    if (oldWall != layout.wall)
+        removeCabinetSlices(s, oldWall);
+    s.cabinetLayouts[index] = layout;
+    CabinetMapping::regenerate(m_project, layout.wall);
+    validateSelection();
+    notifyChanged(true);
+}
+
+void Document::removeCabinetLayout(int screen, int index)
+{
+    if (screen < 0 || screen >= m_project.screens.size() || index < 0
+        || index >= m_project.screens[screen].cabinetLayouts.size())
+        return;
+    Screen &s = m_project.screens[screen];
+    removeCabinetSlices(s, s.cabinetLayouts[index].wall);
+    s.cabinetLayouts.removeAt(index);
+    validateSelection();
+    notifyChanged(true);
+}
+
+void Document::removeCabinetSlices(Screen &screen, int wall)
+{
+    for (int i = 0; i < screen.slices.size();) {
+        if (screen.slices[i].isCabinet() && screen.slices[i].wall == wall)
+            screen.slices.removeAt(i);
+        else
+            ++i;
+    }
 }
 
 int Document::addWall()
@@ -427,6 +492,23 @@ void Document::removeWall(int index)
     if (index < 0 || index >= m_project.walls.size())
         return;
     m_project.walls.removeAt(index);
+    // Its cabinet slices and layouts go with it; later walls move down one index.
+    for (Screen &s : m_project.screens) {
+        removeCabinetSlices(s, index);
+        for (int i = 0; i < s.cabinetLayouts.size();) {
+            if (s.cabinetLayouts[i].wall == index) {
+                s.cabinetLayouts.removeAt(i);
+                continue;
+            }
+            if (s.cabinetLayouts[i].wall > index)
+                --s.cabinetLayouts[i].wall;
+            ++i;
+        }
+        for (Slice &sl : s.slices)
+            if (sl.wall > index)
+                --sl.wall;
+    }
+    validateSelection();
     for (Layer &l : m_project.layers) {
         if (l.targetWall == index)
             l.targetWall = -1;

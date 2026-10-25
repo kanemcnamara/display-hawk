@@ -66,6 +66,13 @@ public:
     void duplicateSelection();
     void deleteSelection();
 
+    // Cabinet layouts: one generated slice per fitted cabinet of a wall (see CabinetMapping).
+    // Adding a layout for a wall that already has one on that screen replaces it.
+    int addCabinetLayout(int screen, const CabinetLayout &layout);
+    void setCabinetLayout(int screen, int index, const CabinetLayout &layout);
+    void removeCabinetLayout(int screen, int index);
+    bool hasCabinetLayout(int wall) const;
+
     // Adds a 1:1 slice that maps the wall's composition area onto the next free spot of a screen.
     int createSliceForWall(int wall, int screen);
     // Resizes the composition to the bounding box of all walls and moves the walls to start at 0,0.
@@ -124,6 +131,7 @@ private:
     void resetHistory();
     void restoreSnapshot(const Project &snapshot);
     void notifyPlaybackChanged();
+    static void removeCabinetSlices(::Screen &screen, int wall);
     static void copyPlayback(const Project &from, Project &to);
 
     Project m_project;

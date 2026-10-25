@@ -1,5 +1,7 @@
 ﻿#include "ui/CanvasView.h"
 
+#include "model/CabinetMapping.h"
+
 
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -144,6 +146,19 @@ QRectF CanvasView::toWidget(const QRect &r) const
     return QRectF(toWidget(QPointF(r.x(), r.y())), QSizeF(r.width(), r.height()) * scale());
 }
 
+QPolygonF CanvasView::toWidget(const QPolygonF &poly) const
+{
+    QPolygonF out;
+    for (const QPointF &pt : poly)
+        out << toWidget(pt);
+    return out;
+}
+
+bool CanvasView::contains(const Item &item, const QPointF &c)
+{
+    return item.poly.isEmpty() ? QRectF(item.rect).contains(c) : item.poly.containsPoint(c, Qt::OddEvenFill);
+}
+
 QVector<CanvasView::Item> CanvasView::items() const
 {
     const Project &p = m_doc->project();
@@ -160,16 +175,27 @@ QVector<CanvasView::Item> CanvasView::items() const
             for (int i = 0; i < sc.slices.size(); ++i) {
                 const Slice &sl = sc.slices[i];
                 const bool dim = activeScreen >= 0 && activeScreen != s;
-                list.append({Selection::ofSlice(s, i), sl.input, QColor(255, 160, 40),
-                             sc.name + QStringLiteral(" / ") + sl.name, true, dim || !sl.enabled});
+                Item item{Selection::ofSlice(s, i), sl.input, QColor(255, 160, 40),
+                          sc.name + QStringLiteral(" / ") + sl.name, true, dim || !sl.enabled, {}};
+                if (sl.angle != 0.0) { // resized numerically; dragging moves it
+                    item.poly = sl.inputPolygon();
+                    item.resizable = false;
+                }
+                list.append(item);
             }
         }
     } else if (m_screen >= 0 && m_screen < p.screens.size()) {
         const Screen &sc = p.screens[m_screen];
         for (int i = 0; i < sc.slices.size(); ++i) {
             const Slice &sl = sc.slices[i];
-            list.append({Selection::ofSlice(m_screen, i), sl.output, QColor(255, 160, 40), sl.name, true,
-                         !sl.enabled});
+            // Cabinets are small: column/row and port are what matter on the output.
+            const QString label = sl.isCabinet()
+                                      ? QStringLiteral("C%1 R%2%3").arg(sl.cabinet.x() + 1).arg(sl.cabinet.y() + 1)
+                                            .arg(sl.port > 0 ? QStringLiteral(" P%1").arg(sl.port) : QString())
+                                      : sl.name;
+            list.append({Selection::ofSlice(m_screen, i), sl.output,
+                         sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40), label, true,
+                         !sl.enabled, {}});
         }
     }
     return list;
@@ -222,6 +248,9 @@ int CanvasView::hitHandle(const QPointF &pos) const
     const Selection sel = m_doc->selection();
     if (!ownsSelection(sel) || sel.kind != Selection::Slice)
         return -1;
+    for (const Item &it : items())
+        if (it.sel == sel && !it.resizable)
+            return -1;
     const QVector<QPointF> hs = handlePositions(toWidget(rectFor(sel)));
     for (int i = 0; i < hs.size(); ++i)
         if (qAbs(hs[i].x() - pos.x()) <= kHandleSize && qAbs(hs[i].y() - pos.y()) <= kHandleSize)
@@ -235,10 +264,10 @@ int CanvasView::hitItem(const QVector<Item> &list, const QPointF &pos) const
     const Selection sel = m_doc->selection();
     // The current selection wins so it can always be dragged even under other items.
     for (int i = 0; i < list.size(); ++i)
-        if (list[i].sel == sel && QRectF(list[i].rect).contains(c))
+        if (list[i].sel == sel && contains(list[i], c))
             return i;
     for (int i = list.size() - 1; i >= 0; --i)
-        if (QRectF(list[i].rect).contains(c))
+        if (contains(list[i], c))
             return i;
     return -1;
 }
@@ -349,6 +378,10 @@ void CanvasView::paintEvent(QPaintEvent *)
             painter.fillRect(wr, fill);
         }
         painter.setPen(QPen(c, isSel ? 2 : 1, it.sel.kind == Selection::Wall ? Qt::DashLine : Qt::SolidLine));
+        if (!it.poly.isEmpty()) {
+            painter.drawPolygon(toWidget(it.poly));
+            continue; // rotated: no label box
+        }
         painter.drawRect(wr);
         if (wr.width() > 40 && wr.height() > 16) {
             const QRectF lr(wr.x() + 3, wr.y() + 2, wr.width() - 6, 14);
@@ -356,6 +389,35 @@ void CanvasView::paintEvent(QPaintEvent *)
             painter.drawText(lr, Qt::AlignLeft | Qt::AlignVCenter,
                              painter.fontMetrics().elidedText(it.label, Qt::ElideRight, int(lr.width())));
         }
+    }
+
+    // Processor port routes through the cabinets, in chain order, with an arrow at each step.
+    if (m_mode == OutputMap && validScreen) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        for (const CabinetMapping::PortRoute &route : CabinetMapping::portRoutes(p.screens[m_screen])) {
+            const QPolygonF pts = toWidget(route.points);
+            painter.setPen(QPen(route.color, 2));
+            painter.drawPolyline(pts);
+            for (int i = 1; i < pts.size(); ++i) {
+                const QPointF a = pts[i - 1], b = pts[i];
+                const QPointF mid = (a + b) / 2;
+                const double len = qSqrt(QPointF::dotProduct(b - a, b - a));
+                if (len < 14)
+                    continue;
+                const QPointF dir = (b - a) / len, n(-dir.y(), dir.x());
+                painter.setBrush(route.color);
+                painter.drawPolygon(QPolygonF({mid + dir * 5, mid - dir * 4 + n * 4, mid - dir * 4 - n * 4}));
+                painter.setBrush(Qt::NoBrush);
+            }
+            if (!pts.isEmpty()) {
+                const QString text = tr("Port %1").arg(route.port);
+                const QRectF tr(pts.first() + QPointF(-4, -22), QSizeF(painter.fontMetrics().horizontalAdvance(text) + 8, 16));
+                painter.fillRect(tr, route.color);
+                painter.setPen(Qt::black);
+                painter.drawText(tr, Qt::AlignCenter, text);
+            }
+        }
+        painter.setRenderHint(QPainter::Antialiasing, false);
     }
 
     if (selected) {

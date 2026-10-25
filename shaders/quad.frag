@@ -13,6 +13,7 @@ layout(std140, binding = 0) uniform Buf {
     ivec4 flags2; // useTex, input mode (see below)
     vec4 gain;      // per-channel gain (slice colour correction)
     vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
+    vec4 axes;      // flags2.z == 1: source edge vectors (u, v); src.xy is then the source origin
 } ubuf;
 
 layout(binding = 1) uniform sampler2D tex;
@@ -20,6 +21,9 @@ layout(binding = 1) uniform sampler2D tex;
 void main()
 {
     vec4 c = ubuf.flags2.x == 1 ? texture(tex, vUV) : ubuf.color;
+    // A rotated source area may reach past the composition: nothing is there.
+    if (ubuf.flags2.z == 1 && (vUV.x < 0.0 || vUV.y < 0.0 || vUV.x > 1.0 || vUV.y > 1.0))
+        c = vec4(0.0, 0.0, 0.0, 1.0);
     int mode = ubuf.flags2.y;
     if (mode == 0) {
         // Straight alpha (images, patterns, solids): opacity scales alpha only.

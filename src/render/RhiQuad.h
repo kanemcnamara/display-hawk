@@ -21,6 +21,9 @@ public:
         QSizeF target;             // render target size in pixels
         QRectF dst;                // destination rect, top-left origin
         QRectF src = {0, 0, 1, 1}; // normalized source rect, top-left origin
+        // Rotated source: when set, the source is src.topLeft() + s * srcU + t * srcV (normalized).
+        bool srcAxes = false;
+        QPointF srcU, srcV;
         int rotation = 0;          // quarter turns clockwise
         bool flipH = false;
         bool flipV = false;
