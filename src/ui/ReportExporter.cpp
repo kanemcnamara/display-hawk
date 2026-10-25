@@ -120,15 +120,31 @@ QImage screenLayout(const Project &project, const Screen &screen, const QImage &
         }
         const bool quarter = sl.rotation & 1;
         const QSizeF drawn = quarter ? QSizeF(sl.output.height(), sl.output.width()) : QSizeF(sl.output.size());
+        // The upright output first, then (corner pin) mapped onto its quad.
+        QImage upright(sl.output.size(), QImage::Format_ARGB32_Premultiplied);
+        upright.fill(Qt::transparent);
+        {
+            QPainter up(&upright);
+            up.setRenderHint(QPainter::SmoothPixmapTransform);
+            up.translate(upright.width() / 2.0, upright.height() / 2.0);
+            up.scale(sl.flipH ? -1 : 1, sl.flipV ? -1 : 1);
+            up.rotate(90.0 * (sl.rotation & 3));
+            up.drawImage(QRectF(-drawn.width() / 2, -drawn.height() / 2, drawn.width(), drawn.height()), part);
+        }
+        QTransform toQuad;
+        const QPolygonF quad = sl.outputQuad();
+        if (!QTransform::quadToQuad(QPolygonF(QRectF(QPointF(), QSizeF(sl.output.size()))).mid(0, 4), quad, toQuad))
+            toQuad = QTransform::fromTranslate(sl.output.x(), sl.output.y());
         p.save();
-        p.translate(QRectF(sl.output).center());
-        p.scale(sl.flipH ? -1 : 1, sl.flipV ? -1 : 1);
-        p.rotate(90.0 * (sl.rotation & 3));
-        p.drawImage(QRectF(-drawn.width() / 2, -drawn.height() / 2, drawn.width(), drawn.height()), part);
+        p.setTransform(toQuad);
+        p.drawImage(0, 0, upright);
         p.restore();
 
         p.setPen(QPen(QColor(255, 160, 40), qMax(2, screen.width / 640)));
-        p.drawRect(QRect(sl.output).adjusted(0, 0, -1, -1));
+        if (sl.isWarped())
+            p.drawPolygon(quad);
+        else
+            p.drawRect(QRect(sl.output).adjusted(0, 0, -1, -1));
         QFont f = p.font();
         f.setPixelSize(qBound(12, sl.output.height() / 14, 48));
         f.setBold(true);

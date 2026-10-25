@@ -1005,6 +1005,10 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
             qp.srcU = QPointF((q[1].x() - q[0].x()) / cw, (q[1].y() - q[0].y()) / ch);
             qp.srcV = QPointF((q[3].x() - q[0].x()) / cw, (q[3].y() - q[0].y()) / ch);
         }
+        if (sl.isWarped()) {
+            for (const QPointF &pt : sl.warp)
+                qp.quad << QPointF(screenRect.x() + pt.x() * sx, screenRect.y() + pt.y() * sy);
+        }
         qp.rotation = sl.rotation;
         qp.flipH = sl.flipH;
         qp.flipV = sl.flipV;

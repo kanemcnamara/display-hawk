@@ -1,6 +1,6 @@
 #version 440
 
-layout(location = 0) out vec2 vUV;
+layout(location = 0) out vec3 vUV; // (u, v) * q and q: perspective-correct for corner pins
 
 layout(std140, binding = 0) uniform Buf {
     mat4 clipCorr;  // QRhi clip-space correction for the active backend
@@ -14,6 +14,9 @@ layout(std140, binding = 0) uniform Buf {
     vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
     vec4 axes;      // flags2.z == 1: source edge vectors (u, v); src.xy is then the source origin
     vec4 pivot;     // destination turned by z radians (clockwise) about (x, y), in target pixels
+    vec4 quadTop;   // flags2.w == 1: corner-pinned destination, top-left and top-right corners
+    vec4 quadBottom;// bottom-left and bottom-right corners (target pixels)
+    vec4 quadQ;     // projective weights for top-left, top-right, bottom-left, bottom-right
 } ubuf;
 
 void main()
@@ -21,6 +24,12 @@ void main()
     // Corner of the destination quad, (0,0) = top-left; drawn as a 4-vertex triangle strip.
     vec2 c = vec2(float(gl_VertexIndex & 1), float(gl_VertexIndex >> 1));
     vec2 p = ubuf.dst.xy + c * ubuf.dst.zw;
+    float q = 1.0;
+    if (ubuf.flags2.w == 1) { // corner pin: the four corners are given
+        int i = gl_VertexIndex;
+        p = i == 0 ? ubuf.quadTop.xy : (i == 1 ? ubuf.quadTop.zw : (i == 2 ? ubuf.quadBottom.xy : ubuf.quadBottom.zw));
+        q = i == 0 ? ubuf.quadQ.x : (i == 1 ? ubuf.quadQ.y : (i == 2 ? ubuf.quadQ.z : ubuf.quadQ.w));
+    }
     if (ubuf.pivot.z != 0.0) { // layers fitted into a rotated wall
         float cs = cos(ubuf.pivot.z), sn = sin(ubuf.pivot.z);
         vec2 q = p - ubuf.pivot.xy;
@@ -41,5 +50,5 @@ void main()
     vec2 uv = ubuf.flags2.z == 1 ? ubuf.src.xy + s.x * ubuf.axes.xy + s.y * ubuf.axes.zw
                                  : ubuf.src.xy + s * ubuf.src.zw;
     if (ubuf.flags.w == 1) uv.y = 1.0 - uv.y;
-    vUV = uv;
+    vUV = vec3(uv * q, q);
 }

@@ -196,9 +196,14 @@ QVector<CanvasView::Item> CanvasView::items() const
                                       ? QStringLiteral("C%1 R%2%3").arg(sl.cabinet.x() + 1).arg(sl.cabinet.y() + 1)
                                             .arg(sl.port > 0 ? QStringLiteral(" P%1").arg(sl.port) : QString())
                                       : sl.name;
-            list.append({Selection::ofSlice(m_screen, i), sl.output,
-                         sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40), label, true,
-                         !sl.enabled, {}});
+            Item item{Selection::ofSlice(m_screen, i), sl.output,
+                      sl.port > 0 ? CabinetMapping::portColor(sl.port) : QColor(255, 160, 40), label, true,
+                      !sl.enabled, {}};
+            if (sl.isWarped()) { // corner pin: its corners are the handles
+                item.poly = sl.warp;
+                item.resizable = false;
+            }
+            list.append(item);
         }
     }
     return list;
@@ -234,6 +239,8 @@ void CanvasView::setRectFor(const Selection &s, const QRect &r)
         m_doc->applyWall(s.wall, w);
     } else if (s.kind == Selection::Slice) {
         Slice &sl = p.screens[s.screen].slices[s.slice];
+        if (m_mode == OutputMap && sl.isWarped()) // moving a pinned slice moves its corners
+            sl.warp.translate(QPointF(r.topLeft() - sl.output.topLeft()));
         (m_mode == InputMap ? sl.input : sl.output) = r;
         m_doc->notifyChanged();
     }
@@ -246,11 +253,30 @@ QVector<QPointF> CanvasView::handlePositions(const QRectF &r) const
             r.bottomRight(), {cx, r.bottom()}, r.bottomLeft(), {r.left(), cy}};
 }
 
+QPolygonF CanvasView::selectedWarp() const
+{
+    const Selection sel = m_doc->selection();
+    const Project &p = m_doc->project();
+    if (m_mode != OutputMap || sel.kind != Selection::Slice || sel.screen != m_screen || sel.screen >= p.screens.size()
+        || sel.slice < 0 || sel.slice >= p.screens[sel.screen].slices.size())
+        return {};
+    return p.screens[sel.screen].slices[sel.slice].warp;
+}
+
 int CanvasView::hitHandle(const QPointF &pos) const
 {
     const Selection sel = m_doc->selection();
     if (!ownsSelection(sel) || sel.kind != Selection::Slice)
         return -1;
+    const QPolygonF warp = selectedWarp();
+    if (warp.size() == 4) {
+        for (int k = 0; k < 4; ++k) {
+            const QPointF h = toWidget(warp[k]);
+            if (qAbs(h.x() - pos.x()) <= kHandleSize + 2 && qAbs(h.y() - pos.y()) <= kHandleSize + 2)
+                return kCornerHandle + k;
+        }
+        return -1;
+    }
     for (const Item &it : items())
         if (it.sel == sel && !it.resizable)
             return -1;
@@ -308,6 +334,22 @@ void CanvasView::dragTo(const QPointF &widgetPos, bool snapping)
     if (snapping)
         snapCandidates(xs, ys);
 
+    if (m_drag == Corner) {
+        const Selection s = m_dragSel;
+        Slice &sl = m_doc->project().screens[s.screen].slices[s.slice];
+        QPolygonF warp = m_startWarp;
+        QPointF pt = warp[m_handle - kCornerHandle] + QPointF(dx, dy);
+        if (snapping) { // corners snap to the screen edges and to other slices' edges
+            QVector<int> xs, ys;
+            snapCandidates(xs, ys);
+            pt = QPointF(snapValue(qRound(pt.x()), xs, threshold), snapValue(qRound(pt.y()), ys, threshold));
+        }
+        warp[m_handle - kCornerHandle] = pt;
+        sl.warp = warp;
+        sl.output = warp.boundingRect().toAlignedRect(); // keeps the slice's bounds for sizing and reports
+        m_doc->notifyChanged();
+        return;
+    }
     QRect r = m_startRect;
     if (m_drag == Move) {
         r.translate(dx, dy);
@@ -427,6 +469,21 @@ void CanvasView::paintEvent(QPaintEvent *)
 
     if (selected) {
         const QRectF wr = toWidget(selected->rect);
+        const QPolygonF warp = selectedWarp();
+        if (warp.size() == 4) { // corner-pin handles, numbered clockwise from the top-left
+            painter.setRenderHint(QPainter::Antialiasing);
+            for (int k = 0; k < 4; ++k) {
+                const QPointF h = toWidget(warp[k]);
+                painter.setPen(QPen(Qt::black, 1));
+                painter.setBrush(QColor(255, 210, 60));
+                painter.drawEllipse(h, kHandleSize, kHandleSize);
+                painter.setPen(Qt::black);
+                painter.drawText(QRectF(h.x() - kHandleSize, h.y() - kHandleSize, 2 * kHandleSize, 2 * kHandleSize),
+                                 Qt::AlignCenter, QString::number(k + 1));
+            }
+            painter.setBrush(Qt::NoBrush);
+            painter.setRenderHint(QPainter::Antialiasing, false);
+        }
         if (selected->resizable) {
             painter.setPen(QPen(Qt::black, 1));
             painter.setBrush(Qt::white);
@@ -468,6 +525,13 @@ void CanvasView::mousePressEvent(QMouseEvent *e)
         return;
 
     const int handle = hitHandle(e->position());
+    if (handle >= kCornerHandle) {
+        m_drag = Corner;
+        m_handle = handle;
+        m_dragSel = m_doc->selection();
+        m_startWarp = selectedWarp();
+        return;
+    }
     if (handle >= 0) {
         m_drag = Resize;
         m_handle = handle;
@@ -509,14 +573,14 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
     if (m_drag == Pan) {
         m_pan += pos - m_lastPos;
         update();
-    } else if (m_drag == Move || m_drag == Resize) {
+    } else if (m_drag == Move || m_drag == Resize || m_drag == Corner) {
         dragTo(pos, !(e->modifiers() & Qt::ShiftModifier));
     } else {
         static const Qt::CursorShape shapes[] = {Qt::SizeFDiagCursor, Qt::SizeVerCursor, Qt::SizeBDiagCursor,
                                                  Qt::SizeHorCursor,   Qt::SizeFDiagCursor, Qt::SizeVerCursor,
                                                  Qt::SizeBDiagCursor, Qt::SizeHorCursor};
         const int h = hitHandle(pos);
-        setCursor(h >= 0 ? shapes[h] : Qt::ArrowCursor);
+        setCursor(h >= kCornerHandle ? Qt::CrossCursor : (h >= 0 ? shapes[h] : Qt::ArrowCursor));
     }
     m_lastPos = pos;
     const QPointF c = toCanvas(pos);
@@ -526,7 +590,7 @@ void CanvasView::mouseMoveEvent(QMouseEvent *e)
 
 void CanvasView::mouseReleaseEvent(QMouseEvent *)
 {
-    if (m_drag == Move || m_drag == Resize)
+    if (m_drag == Move || m_drag == Resize || m_drag == Corner)
         m_doc->commitUndo(); // one undo step per drag
     m_drag = NoDrag;
     m_handle = -1;

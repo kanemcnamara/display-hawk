@@ -71,11 +71,14 @@ private:
     double m_zoom = 1.0;
     QPointF m_pan;
 
-    enum DragKind { NoDrag, Pan, Move, Resize };
+    enum DragKind { NoDrag, Pan, Move, Resize, Corner };
+    static constexpr int kCornerHandle = 100; // hitHandle() result for corner-pin corner k: 100 + k
+    QPolygonF selectedWarp() const; // corner pin of the selected slice on this output map, if any
     DragKind m_drag = NoDrag;
     int m_handle = -1;
     Selection m_dragSel;
     QRect m_startRect;
+    QPolygonF m_startWarp;
     QPointF m_pressPos;
     QPointF m_lastPos;
 

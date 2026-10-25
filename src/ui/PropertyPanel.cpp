@@ -1066,6 +1066,10 @@ QWidget *PropertyPanel::buildSlicePage()
     outf->addRow(tr("W / H"), row({m_outW, m_outH}));
     outf->addRow(tr("Rotation"), m_rotation);
     outf->addRow(QString(), row({m_flipH, m_flipV}));
+    m_cornerPin = new QCheckBox(tr("Corner pin"));
+    m_cornerPin->setToolTip(tr("Place the slice as a free four-cornered shape on the output (with perspective): "
+                               "drag the numbered corners on the output map"));
+    outf->addRow(QString(), m_cornerPin);
     outf->addRow(tr("Brightness"), m_brightness);
     outf->addRow(oneToOne);
     outf->addRow(row({fitScreen, fillScreen}));
@@ -1162,6 +1166,18 @@ QWidget *PropertyPanel::buildSlicePage()
         if (!m_refreshing)
             editSlice([&](Slice &s) { s.flipH = on; });
     });
+    connect(m_cornerPin, &QCheckBox::toggled, this, [this](bool on) {
+        if (m_refreshing)
+            return;
+        editSlice([&](Slice &s) {
+            if (!on) {
+                s.warp.clear();
+                return;
+            }
+            const QRectF r(s.output);
+            s.warp = QPolygonF({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+        });
+    });
     connect(m_flipV, &QCheckBox::toggled, this, [this](bool on) {
         if (!m_refreshing)
             editSlice([&](Slice &s) { s.flipV = on; });
@@ -1243,6 +1259,7 @@ void PropertyPanel::refreshSlice()
                                    .arg(s->port > 0 ? tr(" on port %1").arg(s->port) : QString()));
     m_flipH->setChecked(s->flipH);
     m_flipV->setChecked(s->flipV);
+    m_cornerPin->setChecked(s->isWarped());
     setValue(m_brightness, qRound(s->brightness * 100.0));
     setValue(m_gainR, s->gainR * 100.0);
     setValue(m_gainG, s->gainG * 100.0);

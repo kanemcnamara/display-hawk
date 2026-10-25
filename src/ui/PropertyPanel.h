@@ -119,5 +119,6 @@ private:
     QDoubleSpinBox *m_gainR, *m_gainG, *m_gainB, *m_gamma, *m_blackLevel;
     QComboBox *m_sliceWall;
     QDoubleSpinBox *m_angle;
+    QCheckBox *m_cornerPin;
     QLabel *m_cabinetInfo;
 };

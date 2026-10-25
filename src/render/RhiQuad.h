@@ -27,6 +27,9 @@ public:
         // Turns the destination quad clockwise by dstAngle degrees about pivot (target pixels).
         double dstAngle = 0.0;
         QPointF pivot;
+        // Corner pin: when set (4 points: top-left, top-right, bottom-right, bottom-left, in target
+        // pixels) the destination is this quad, mapped with perspective; dst is then unused.
+        QPolygonF quad;
         int rotation = 0;          // quarter turns clockwise
         bool flipH = false;
         bool flipV = false;

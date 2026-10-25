@@ -88,6 +88,14 @@ QRect LedWall::bounds() const
     return outline().boundingRect().toAlignedRect();
 }
 
+QPolygonF Slice::outputQuad() const
+{
+    if (isWarped())
+        return warp;
+    const QRectF r(output);
+    return QPolygonF({r.topLeft(), r.topRight(), r.bottomRight(), r.bottomLeft()});
+}
+
 QPolygonF Slice::inputPolygon() const
 {
     const QRectF r(input);
@@ -430,6 +438,12 @@ QJsonObject Project::toJson() const
                                         {"flipH", sl.flipH},
                                         {"flipV", sl.flipV},
                                         {"angle", sl.angle},
+                                        {"warp", [&sl] {
+                                             QJsonArray a;
+                                             for (const QPointF &pt : sl.warp)
+                                                 a << pt.x() << pt.y();
+                                             return a;
+                                         }()},
                                         {"wall", sl.wall},
                                         {"cabinet", QJsonArray{sl.cabinet.x(), sl.cabinet.y()}},
                                         {"port", sl.port},
@@ -568,6 +582,10 @@ Project Project::fromJson(const QJsonObject &root)
             sl.flipH = so["flipH"].toBool(false);
             sl.flipV = so["flipV"].toBool(false);
             sl.angle = so["angle"].toDouble(0.0);
+            const QJsonArray warp = so["warp"].toArray();
+            if (warp.size() == 8)
+                for (int k = 0; k < 8; k += 2)
+                    sl.warp << QPointF(warp[k].toDouble(), warp[k + 1].toDouble());
             sl.wall = so["wall"].toInt(-1);
             const QJsonArray cab = so["cabinet"].toArray();
             sl.cabinet = cab.size() == 2 ? QPoint(cab[0].toInt(), cab[1].toInt()) : QPoint(-1, -1);

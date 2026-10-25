@@ -3,12 +3,13 @@
 #include <QFile>
 #include <QImage>
 #include <QMatrix4x4>
+#include <QVector4D>
 #include <QtMath>
 #include <cstring>
 
 namespace {
 
-constexpr quint32 kUniformSize = 224; // must match the std140 block in quad.vert / quad.frag
+constexpr quint32 kUniformSize = 272; // must match the std140 block in quad.vert / quad.frag
 constexpr quint32 kMaxDrawsPerFrame = 8192; // cabinet layouts add a slice per cabinet
 
 QShader loadShader(const QString &path)
@@ -19,6 +20,25 @@ QShader loadShader(const QString &path)
         return {};
     }
     return QShader::fromSerialized(f.readAll());
+}
+
+// Perspective-correct texturing of a quad from two triangles: each corner's weight comes from where
+// the diagonals cross (q = (d + d_opposite) / d_opposite). Returns tl, tr, br, bl; 1s if degenerate.
+QVector4D projectiveWeights(const QPointF &tl, const QPointF &tr, const QPointF &br, const QPointF &bl)
+{
+    const QPointF r = br - tl, s = bl - tr;
+    const double denom = r.x() * s.y() - r.y() * s.x();
+    if (qAbs(denom) < 1e-9)
+        return QVector4D(1, 1, 1, 1);
+    const QPointF d = tr - tl;
+    const double t = (d.x() * s.y() - d.y() * s.x()) / denom;
+    const double u = (d.x() * r.y() - d.y() * r.x()) / denom;
+    if (t <= 0 || t >= 1 || u <= 0 || u >= 1) // not convex
+        return QVector4D(1, 1, 1, 1);
+    const QPointF c = tl + r * t;
+    auto len = [](const QPointF &v) { return qSqrt(v.x() * v.x() + v.y() * v.y()); };
+    const double d0 = len(tl - c), d1 = len(tr - c), d2 = len(br - c), d3 = len(bl - c);
+    return QVector4D(float((d0 + d2) / d2), float((d1 + d3) / d3), float((d2 + d0) / d0), float((d3 + d1) / d1));
 }
 
 } // namespace
@@ -182,7 +202,7 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         std::memcpy(fp + 16, vecs, sizeof(vecs));
         const qint32 inputMode = p.blend == Blend::Straight ? 0 : (p.blend == Blend::Darken ? 2 : 1);
         const qint32 ints[] = {p.rotation & 3, p.flipH ? 1 : 0, p.flipV ? 1 : 0, p.texFlipY ? 1 : 0,
-                               p.texture ? 1 : 0, inputMode, p.srcAxes ? 1 : 0, 0};
+                               p.texture ? 1 : 0, inputMode, p.srcAxes ? 1 : 0, p.quad.size() == 4 ? 1 : 0};
         std::memcpy(data + 128, ints, sizeof(ints));
         const float grade[] = {p.gain[0], p.gain[1], p.gain[2], 1.0f, p.gamma, p.blackLevel, p.colorCorrect ? 1.0f : 0.0f, 0.0f};
         std::memcpy(data + 160, grade, sizeof(grade));
@@ -190,6 +210,16 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         std::memcpy(data + 192, axes, sizeof(axes));
         const float pivot[] = {float(p.pivot.x()), float(p.pivot.y()), float(qDegreesToRadians(p.dstAngle)), 0.0f};
         std::memcpy(data + 208, pivot, sizeof(pivot));
+        if (p.quad.size() == 4) {
+            // Strip order: top-left, top-right, bottom-left, bottom-right.
+            const QPointF tl = p.quad[0], tr = p.quad[1], br = p.quad[2], bl = p.quad[3];
+            const float corners[] = {float(tl.x()), float(tl.y()), float(tr.x()), float(tr.y()),
+                                     float(bl.x()), float(bl.y()), float(br.x()), float(br.y())};
+            std::memcpy(data + 224, corners, sizeof(corners));
+            const QVector4D q = projectiveWeights(tl, tr, br, bl);
+            const float weights[] = {q.x(), q.y(), q.w(), q.z()}; // tl, tr, bl, br
+            std::memcpy(data + 256, weights, sizeof(weights));
+        }
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
         m_offset += m_stride;

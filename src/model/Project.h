@@ -63,6 +63,9 @@ struct Slice {
     bool enabled = true;
     QRect input;  // composition pixels
     QRect output; // screen pixels
+    // Corner pin: the output as a free quad (top-left, top-right, bottom-right, bottom-left, screen
+    // pixels), mapped with perspective. Empty = the output rect.
+    QPolygonF warp;
     int rotation = 0; // quarter turns clockwise, 0..3
     bool flipH = false;
     bool flipV = false;
@@ -85,6 +88,9 @@ struct Slice {
         return gainR != 1.0 || gainG != 1.0 || gainB != 1.0 || gamma != 1.0 || blackLevel != 0.0;
     }
     bool isCabinet() const { return wall >= 0 && cabinet.x() >= 0; }
+    bool isWarped() const { return warp.size() == 4; }
+    // Where the slice lands on the screen: the corner pin, or the output rect's corners.
+    QPolygonF outputQuad() const;
     // The sampled area: the input rect turned by `angle`, corners clockwise from the top-left.
     QPolygonF inputPolygon() const;
 };

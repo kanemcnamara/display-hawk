@@ -955,6 +955,21 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         save(previews[1], "slice-angle");
         check(upright && turned, "angled slice samples a rotated area");
 
+        // Corner pin: the whole composition squeezed into a trapezoid (narrower at the top).
+        Slice pin;
+        pin.input = QRect(QPoint(), p.compSize());
+        pin.output = QRect(0, 0, 960, 540);
+        pin.warp = QPolygonF({QPointF(100, 0), QPointF(860, 0), QPointF(960, 540), QPointF(0, 540)});
+        p.screens[0].slices = {pin};
+        doc.notifyChanged(true);
+        auto isBlue = [](const QColor &c) { return c.blue() > 200 && c.red() < 60 && c.green() < 60; };
+        const bool pinned = waitFor([&] {
+            return qGray(pixelAt(1, {40, 300}, screen).rgb()) < 10 && isWhite(pixelAt(1, {75, 300}, screen))
+                   && isBlue(pixelAt(1, {750, 300}, screen)) && qGray(pixelAt(1, {935, 300}, screen).rgb()) < 10;
+        });
+        save(previews[1], "slice-corner-pin");
+        check(pinned, "corner-pinned slice fills its quad");
+
         p.screens[0].slices = savedSlices;
         doc.notifyChanged(true);
     }
