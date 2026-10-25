@@ -220,6 +220,7 @@ bool RenderEngine::start(QString *error)
         connect(m_thread, &RenderThread::statsUpdated, this, &RenderEngine::statsUpdated);
         connect(m_thread, &RenderThread::clipPreviewReady, this, &RenderEngine::clipPreviewReady);
         connect(m_thread, &RenderThread::recordFrame, this, &RenderEngine::recordFrame);
+        connect(m_thread, &RenderThread::dmxFrame, this, &RenderEngine::dmxFrame);
         pushProject();
         m_thread->start(QThread::HighPriority);
         QString reason;
@@ -350,6 +351,12 @@ void RenderEngine::setRecording(bool on, int fps)
 {
     if (m_thread)
         m_thread->setRecording(on, fps);
+}
+
+void RenderEngine::setDmxSampling(bool on, int fps)
+{
+    if (m_thread)
+        m_thread->setDmxSampling(on, fps);
 }
 
 void RenderEngine::setIdentifySlices(bool on)

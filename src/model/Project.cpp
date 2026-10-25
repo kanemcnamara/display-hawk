@@ -264,6 +264,58 @@ double Project::crossfadeGain(CrossfadeSide side) const
     return 1.0;
 }
 
+QString fixtureKindName(FixtureKind k)
+{
+    switch (k) {
+    case FixtureKind::Strip: return QStringLiteral("LED strip");
+    case FixtureKind::Matrix: return QStringLiteral("LED matrix");
+    case FixtureKind::Point: return QStringLiteral("Single fixture");
+    }
+    return {};
+}
+
+QString colorOrderName(ColorOrder o)
+{
+    static const char *const names[] = {"RGB", "GRB", "BRG", "RBG", "GBR", "BGR", "RGBW", "White"};
+    return QString::fromLatin1(names[int(o)]);
+}
+
+int channelsPerPixel(ColorOrder o)
+{
+    return o == ColorOrder::RGBW ? 4 : o == ColorOrder::White ? 1 : 3;
+}
+
+int PixelFixture::pixelCount() const
+{
+    switch (kind) {
+    case FixtureKind::Strip: return qMax(1, pixels);
+    case FixtureKind::Matrix: return qMax(1, columns) * qMax(1, rows);
+    case FixtureKind::Point: return 1;
+    }
+    return 1;
+}
+
+QVector<QPointF> PixelFixture::samplePoints() const
+{
+    QVector<QPointF> pts;
+    if (kind == FixtureKind::Point) {
+        pts << start;
+    } else if (kind == FixtureKind::Strip) {
+        const int n = qMax(1, pixels);
+        for (int i = 0; i < n; ++i)
+            pts << (n == 1 ? start : start + (end - start) * (double(i) / (n - 1)));
+    } else {
+        // Pixel centres, row by row from the top-left; serpentine rows run back the other way.
+        const int c = qMax(1, columns), r = qMax(1, rows);
+        for (int y = 0; y < r; ++y)
+            for (int i = 0; i < c; ++i) {
+                const int x = serpentine && y % 2 == 1 ? c - 1 - i : i;
+                pts << QPointF(rect.x() + (x + 0.5) * rect.width() / c, rect.y() + (y + 0.5) * rect.height() / r);
+            }
+    }
+    return pts;
+}
+
 QString cueActionName(CueAction a)
 {
     switch (a) {
@@ -926,6 +978,17 @@ QJsonObject Project::toJson() const
         cueArr.append(QJsonObject{{"name", c.name}, {"action", int(c.action)}, {"layer", c.layer}, {"column", c.column},
                                   {"value", c.value}, {"time", c.time}});
     root["cues"] = cueArr;
+    QJsonArray fixArr;
+    for (const PixelFixture &f : fixtures)
+        fixArr.append(QJsonObject{{"name", f.name}, {"enabled", f.enabled}, {"kind", int(f.kind)},
+                                  {"start", QJsonArray{f.start.x(), f.start.y()}}, {"end", QJsonArray{f.end.x(), f.end.y()}},
+                                  {"rect", QJsonArray{f.rect.x(), f.rect.y(), f.rect.width(), f.rect.height()}},
+                                  {"pixels", f.pixels}, {"columns", f.columns}, {"rows", f.rows},
+                                  {"serpentine", f.serpentine}, {"universe", f.universe}, {"address", f.address},
+                                  {"order", int(f.order)}});
+    root["fixtures"] = fixArr;
+    root["dmxOut"] = QJsonObject{{"enabled", dmxOut.enabled}, {"protocol", int(dmxOut.protocol)},
+                                 {"target", dmxOut.target}, {"rate", dmxOut.rate}};
     root["timecode"] = QJsonObject{{"source", int(timecodeSource)}, {"fps", timecodeFps}};
     QJsonArray linkArr;
     for (const AudioLink &l : audioReactive.links)
@@ -1140,6 +1203,33 @@ Project Project::fromJson(const QJsonObject &root)
         c.time = o["time"].toDouble(-1.0);
         p.cues.append(c);
     }
+    for (const QJsonValue &v : root["fixtures"].toArray()) {
+        const QJsonObject o = v.toObject();
+        PixelFixture f;
+        f.name = o["name"].toString(f.name);
+        f.enabled = o["enabled"].toBool(true);
+        f.kind = FixtureKind(qBound(0, o["kind"].toInt(0), 2));
+        const QJsonArray st = o["start"].toArray(), en = o["end"].toArray(), rc = o["rect"].toArray();
+        if (st.size() == 2)
+            f.start = QPointF(st[0].toDouble(), st[1].toDouble());
+        if (en.size() == 2)
+            f.end = QPointF(en[0].toDouble(), en[1].toDouble());
+        if (rc.size() == 4)
+            f.rect = QRectF(rc[0].toDouble(), rc[1].toDouble(), rc[2].toDouble(), rc[3].toDouble());
+        f.pixels = qBound(1, o["pixels"].toInt(60), 100000);
+        f.columns = qBound(1, o["columns"].toInt(16), 4096);
+        f.rows = qBound(1, o["rows"].toInt(9), 4096);
+        f.serpentine = o["serpentine"].toBool(true);
+        f.universe = qBound(0, o["universe"].toInt(1), 63999);
+        f.address = qBound(1, o["address"].toInt(1), 512);
+        f.order = ColorOrder(qBound(0, o["order"].toInt(0), kColorOrderCount - 1));
+        p.fixtures.append(f);
+    }
+    const QJsonObject dout = root["dmxOut"].toObject();
+    p.dmxOut.enabled = dout["enabled"].toBool(false);
+    p.dmxOut.protocol = DmxProtocol(qBound(0, dout["protocol"].toInt(0), 1));
+    p.dmxOut.target = dout["target"].toString();
+    p.dmxOut.rate = qBound(1, dout["rate"].toInt(40), 60);
     const QJsonObject tc = root["timecode"].toObject();
     p.timecodeSource = TimecodeSource(qBound(0, tc["source"].toInt(0), 2));
     p.timecodeFps = qBound(1.0, tc["fps"].toDouble(25.0), 120.0);

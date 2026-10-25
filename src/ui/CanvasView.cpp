@@ -478,6 +478,33 @@ void CanvasView::paintEvent(QPaintEvent *)
         }
     }
 
+    // DMX pixel-mapping fixtures on the composition: their pixels as dots, strips joined by a line.
+    if (m_mode == InputMap && !p.fixtures.isEmpty()) {
+        painter.setRenderHint(QPainter::Antialiasing);
+        for (const PixelFixture &f : p.fixtures) {
+            QColor c(230, 80, 230);
+            if (!f.enabled)
+                c.setAlpha(90);
+            painter.setPen(QPen(c, 1));
+            painter.setBrush(Qt::NoBrush);
+            if (f.kind == FixtureKind::Strip)
+                painter.drawLine(toWidget(f.start), toWidget(f.end));
+            else if (f.kind == FixtureKind::Matrix)
+                painter.drawRect(QRectF(toWidget(f.rect.topLeft()), toWidget(f.rect.bottomRight())));
+            const QVector<QPointF> pts = f.samplePoints();
+            const double r = pts.size() > 400 ? 1.0 : 2.0;
+            painter.setBrush(c);
+            painter.setPen(Qt::NoPen);
+            for (const QPointF &pt : pts)
+                painter.drawEllipse(toWidget(pt), r, r);
+            painter.setPen(c);
+            painter.drawText(toWidget(f.kind == FixtureKind::Matrix ? f.rect.topLeft() : f.start) + QPointF(4, -4),
+                             QStringLiteral("%1  U%2.%3").arg(f.name).arg(f.universe).arg(f.address));
+        }
+        painter.setBrush(Qt::NoBrush);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+    }
+
     // Projection masks: dashed outlines; the one being edited gets point handles.
     if (m_mode == OutputMap && validScreen) {
         painter.setRenderHint(QPainter::Antialiasing);

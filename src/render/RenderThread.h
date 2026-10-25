@@ -45,6 +45,7 @@ public:
     // emits clipPreviewReady; an empty clip turns it off.
     void setClipPreview(const Clip &clip, const QRect &area, const QSize &size);
     void setRecording(bool on, int fps);
+    void setDmxSampling(bool on, int fps);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -53,6 +54,7 @@ signals:
     void statsUpdated(int fps, const QSize &compSize);
     void clipPreviewReady(const QString &clipId, const QImage &image);
     void recordFrame(const QImage &image);
+    void dmxFrame(const QImage &image); // the composition, scaled down, for pixel mapping
 
 protected:
     void run() override;
@@ -172,18 +174,24 @@ private:
     QString m_clipPreviewId;
     QElapsedTimer m_clipPreviewClock;
     void renderClipPreview(QRhiCommandBuffer *cb);
-    // Recording the composition.
-    bool m_sharedRecording = false;
-    int m_sharedRecordFps = 30;
-    bool m_recording = false;
-    int m_recordFps = 30;
-    Target m_recordTarget;
-    QRhiReadbackResult m_recordReadback;
-    bool m_recordPending = false;
-    bool m_recordDone = false;
-    QElapsedTimer m_recordClock;
-    qint64 m_nextRecordMs = 0;
-    void renderRecording(QRhiCommandBuffer *cb);
+    // The composition read back at a steady rate: for recording, and for DMX pixel mapping.
+    struct CompReadback {
+        bool sharedOn = false;
+        int sharedFps = 30;
+        bool on = false;
+        int fps = 30;
+        QSize maxSize;
+        Target target;
+        QRhiReadbackResult result;
+        bool pending = false;
+        bool done = false;
+        QElapsedTimer clock;
+        qint64 next = 0;
+    };
+    CompReadback m_recordRb{false, 30, false, 30, QSize(3840, 2160)};
+    CompReadback m_dmxRb{false, 40, false, 40, QSize(1024, 1024)}; // pixel maps are coarse
+    void renderCompReadback(QRhiCommandBuffer *cb, CompReadback &r);
+    QImage takeCompReadback(CompReadback &r);
     bool m_identify = false;
     // Per screen while identifying slices: the overlay drawn on top of its output.
     struct ScreenOverlay {

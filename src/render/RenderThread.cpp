@@ -214,31 +214,38 @@ void RenderThread::renderClipPreview(QRhiCommandBuffer *cb)
 void RenderThread::setRecording(bool on, int fps)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedRecording = on;
-    m_sharedRecordFps = qBound(1, fps, 120);
+    m_recordRb.sharedOn = on;
+    m_recordRb.sharedFps = qBound(1, fps, 120);
 }
 
-void RenderThread::renderRecording(QRhiCommandBuffer *cb)
+void RenderThread::setDmxSampling(bool on, int fps)
 {
-    if (!m_recording) {
-        if (m_recordTarget.tex && !m_recordPending)
-            releaseTarget(m_recordTarget);
-        m_recordClock.invalidate();
+    QMutexLocker lock(&m_mutex);
+    m_dmxRb.sharedOn = on;
+    m_dmxRb.sharedFps = qBound(1, fps, 120);
+}
+
+void RenderThread::renderCompReadback(QRhiCommandBuffer *cb, CompReadback &r)
+{
+    if (!r.on) {
+        if (r.target.tex && !r.pending)
+            releaseTarget(r.target);
+        r.clock.invalidate();
         return;
     }
-    if (!m_recordClock.isValid()) {
-        m_recordClock.start();
-        m_nextRecordMs = 0;
+    if (!r.clock.isValid()) {
+        r.clock.start();
+        r.next = 0;
     }
-    if (m_recordPending || !m_compOut || m_recordClock.elapsed() < m_nextRecordMs)
+    if (r.pending || !m_compOut || r.clock.elapsed() < r.next)
         return;
-    m_nextRecordMs += 1000 / m_recordFps;
-    if (m_recordClock.elapsed() > m_nextRecordMs + 500) // far behind (a stall): catch up, don't burst
-        m_nextRecordMs = m_recordClock.elapsed();
-    // The composition, even-sized (encoders need it) and at most 4K wide.
-    QSize size = m_compSize.boundedTo(QSize(3840, 2160));
+    r.next += 1000 / r.fps;
+    if (r.clock.elapsed() > r.next + 500) // far behind (a stall): catch up, don't burst
+        r.next = r.clock.elapsed();
+    // The composition, fitted into the maximum size, even-sized (encoders need it).
+    QSize size = m_compSize.scaled(m_compSize.boundedTo(r.maxSize), Qt::KeepAspectRatio);
     size = QSize(size.width() & ~1, size.height() & ~1).expandedTo(QSize(2, 2));
-    if (!ensureTarget(m_recordTarget, size, true))
+    if (!ensureTarget(r.target, size, true))
         return;
     RhiQuad::Params qp;
     qp.target = size;
@@ -246,11 +253,22 @@ void RenderThread::renderRecording(QRhiCommandBuffer *cb)
     qp.texture = m_compOut;
     qp.texFlipY = m_rhi->isYUpInFramebuffer();
     QRhiResourceUpdateBatch *after = m_rhi->nextResourceUpdateBatch();
-    m_recordReadback = QRhiReadbackResult();
-    m_recordReadback.completed = [this] { m_recordDone = true; };
-    after->readBackTexture(QRhiReadbackDescription(m_recordTarget.tex), &m_recordReadback);
-    m_quad.recordPass(cb, m_recordTarget.rt, Qt::black, {qp}, nullptr, after);
-    m_recordPending = true;
+    r.result = QRhiReadbackResult();
+    r.result.completed = [&r] { r.done = true; };
+    after->readBackTexture(QRhiReadbackDescription(r.target.tex), &r.result);
+    m_quad.recordPass(cb, r.target.rt, Qt::black, {qp}, nullptr, after);
+    r.pending = true;
+}
+
+QImage RenderThread::takeCompReadback(CompReadback &r)
+{
+    if (!r.done)
+        return {};
+    r.done = false;
+    r.pending = false;
+    const QImage img(reinterpret_cast<const uchar *>(r.result.data.constData()), r.result.pixelSize.width(),
+                     r.result.pixelSize.height(), QImage::Format_RGBA8888);
+    return m_rhi->isYUpInFramebuffer() ? img.mirrored() : img.copy();
 }
 
 void RenderThread::releaseScreenOverlays()
@@ -505,7 +523,8 @@ void RenderThread::run()
                 renderComposition(cb);
                 renderPreviews(cb);
                 renderClipPreview(cb);
-                renderRecording(cb);
+                renderCompReadback(cb, m_recordRb);
+                renderCompReadback(cb, m_dmxRb);
                 renderNdiOutputs(cb);
                 renderShareOutputs(cb);
                 m_rhi->endOffscreenFrame();
@@ -531,7 +550,8 @@ void RenderThread::run()
                     renderComposition(cb);
                     renderPreviews(cb);
                     renderClipPreview(cb);
-                    renderRecording(cb);
+                    renderCompReadback(cb, m_recordRb);
+                    renderCompReadback(cb, m_dmxRb);
                     renderNdiOutputs(cb);
                     renderShareOutputs(cb);
                     compositionDone = true;
@@ -587,7 +607,8 @@ void RenderThread::run()
     releaseTarget(m_compFinal);
     releaseTarget(m_clipPreviewLayer);
     releaseTarget(m_clipPreviewOut);
-    releaseTarget(m_recordTarget);
+    releaseTarget(m_recordRb.target);
+    releaseTarget(m_dmxRb.target);
     m_compOut = nullptr;
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
@@ -644,8 +665,10 @@ void RenderThread::syncState()
     m_effectMod = m_sharedEffectMod;
     m_identify = m_sharedIdentify;
     m_clipPreview = m_sharedClipPreview;
-    m_recording = m_sharedRecording;
-    m_recordFps = m_sharedRecordFps;
+    for (CompReadback *r : {&m_recordRb, &m_dmxRb}) {
+        r->on = r->sharedOn;
+        r->fps = r->sharedFps;
+    }
     const bool ndiChanged = m_ndiDirty;
     if (m_ndiDirty) {
         m_ndiWanted = m_sharedNdi;
@@ -1631,14 +1654,15 @@ void RenderThread::deliverReadbacks()
         // NDI wants the top row first; rendered textures are bottom-up on Y-up backends (OpenGL).
         o->sender->send(m_rhi->isYUpInFramebuffer() ? img.mirrored() : img.copy());
     }
-    if (m_recordDone) {
-        m_recordDone = false;
-        m_recordPending = false;
-        const QRhiReadbackResult &rb = m_recordReadback;
-        const QImage img(reinterpret_cast<const uchar *>(rb.data.constData()), rb.pixelSize.width(),
-                         rb.pixelSize.height(), QImage::Format_RGBA8888);
-        if (m_recording)
-            emit recordFrame(m_rhi->isYUpInFramebuffer() ? img.mirrored() : img.copy());
+    if (m_recordRb.done) {
+        const QImage img = takeCompReadback(m_recordRb);
+        if (m_recordRb.on)
+            emit recordFrame(img);
+    }
+    if (m_dmxRb.done) {
+        const QImage img = takeCompReadback(m_dmxRb);
+        if (m_dmxRb.on)
+            emit dmxFrame(img);
     }
     if (m_clipPreviewDone) {
         m_clipPreviewDone = false;

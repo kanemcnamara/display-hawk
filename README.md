@@ -95,6 +95,14 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
 - **Projection masks** per screen: polygons that black out light (or with *Invert*, everything outside them), with a soft *feather*. *Edit* a mask to drag its points on the output map; double-click an edge to add a point, Alt+click a point to remove it, drag inside it to move it.
 - **Output → Identify Slices on Outputs** also draws an 8 x 8 alignment grid through every warped slice on the projectors, for lining warps up on the surface.
 
+## Pixel mapping (DMX out)
+
+**Output → Pixel Mapping (DMX out)…** drives DMX fixtures from the composition over **Art-Net** (broadcast, or a node's IP) or **sACN** (each universe's multicast group, or unicast):
+
+- **LED strips** (a line of N pixels between two points), **LED matrices** (columns × rows over an area, optionally serpentine) and **single fixtures** (one point).
+- Universe and start address per fixture, colour order RGB / GRB / BRG / RBG / GBR / BGR, **RGBW** (white takes the shared part) or **White** (luminance). A fixture longer than a universe carries on in the next one.
+- Pixels are sampled from the composition as the outputs show it (master and blackout included), at 1 to 60 frames a second (default 40). Fixtures show on the input map with their universe and address.
+
 ## Show control
 
 - **Control → Cue list…** (Ctrl/Cmd+K): cues that trigger a column or clip, stop a layer or everything, or set the master, blackout, crossfader or tempo. **GO** fires the next cue, *Back* the previous one, *Fire* any one; OSC `/dh/cue/go`, `/dh/cue/back`, `/dh/cue/<n>/fire`, and *Cue GO* / *Cue back* can be mapped to keys or MIDI.

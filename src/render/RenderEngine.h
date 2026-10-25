@@ -80,6 +80,8 @@ public:
     void setPreviewClip(const QString &clipId, const QSize &size);
     // Recording: the composition read back `fps` times a second, delivered as recordFrame.
     void setRecording(bool on, int fps);
+    // DMX pixel mapping: the composition, scaled down, delivered as dmxFrame `fps` times a second.
+    void setDmxSampling(bool on, int fps);
     QString previewClip() const { return m_previewClip; }
     bool identifySlices() const { return m_identifySlices; }
 
@@ -94,6 +96,7 @@ signals:
     void clipFinished(const QString &clipId, bool ended);
     void clipPreviewReady(const QString &clipId, const QImage &image);
     void recordFrame(const QImage &image);
+    void dmxFrame(const QImage &image);
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);
     void statsUpdated(int fps, const QSize &compSize);
 

@@ -11,6 +11,7 @@ class OutputRecorder;
 class CueList;
 class TimecodeInput;
 class WebRemote;
+class PixelMapper;
 class QDialog;
 class ModulationHub;
 class TempoClock;
@@ -46,6 +47,7 @@ public:
     CueList *cueList() const { return m_cueList; }
     TimecodeInput *timecodeInput() const { return m_timecode; }
     WebRemote *webRemote() const { return m_webRemote; }
+    PixelMapper *pixelMapper() const { return m_pixelMapper; }
     void showCueList();
     void showControls();
     void showAudioReactive();
@@ -92,6 +94,8 @@ private:
     TimecodeInput *m_timecode;
     CueList *m_cueList;
     WebRemote *m_webRemote;
+    PixelMapper *m_pixelMapper;
+    QDialog *m_pixelDialog = nullptr;
     QDialog *m_cueDialog = nullptr;
     QAction *m_recordAction;
     ModulationHub *m_modulation;

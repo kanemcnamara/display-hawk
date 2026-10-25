@@ -15,6 +15,8 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include <QNetworkDatagram>
+#include "control/PixelMapper.h"
 #include <QJsonDocument>
 #include <QNetworkReply>
 #include <QNetworkAccessManager>
@@ -2047,6 +2049,113 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         web->setEnabled(false, 0);
         doc.setMaster(1.0);
         p.cues.clear();
+        doc.notifyChanged(true);
+        doc.clearLayer(0);
+    }
+
+    // DMX pixel mapping out: fixture sampling and channel packing, then real Art-Net and sACN.
+    {
+        Project &p = doc.project();
+        // A picture: left half red, right half blue (the composition, scaled down).
+        QImage pic(192, 108, QImage::Format_RGBA8888);
+        pic.fill(Qt::blue);
+        for (int y = 0; y < pic.height(); ++y)
+            for (int x = 0; x < pic.width() / 2; ++x)
+                pic.setPixel(x, y, qRgb(255, 0, 0));
+        Project t;
+        t.compWidth = 1920;
+        t.compHeight = 1080;
+        PixelFixture strip;
+        strip.start = QPointF(48, 540);
+        strip.end = QPointF(1872, 540);
+        strip.pixels = 10;
+        strip.universe = 3;
+        PixelFixture grb = strip;
+        grb.order = ColorOrder::GRB;
+        grb.universe = 4;
+        PixelFixture matrix;
+        matrix.kind = FixtureKind::Matrix;
+        matrix.rect = QRectF(0, 0, 1920, 1080);
+        matrix.columns = 2;
+        matrix.rows = 2;
+        matrix.serpentine = true;
+        matrix.universe = 5;
+        PixelFixture rgbw;
+        rgbw.kind = FixtureKind::Point;
+        rgbw.start = QPointF(100, 100);
+        rgbw.order = ColorOrder::RGBW;
+        rgbw.universe = 6;
+        PixelFixture longStrip = strip;
+        longStrip.pixels = 200; // 600 channels: 170 pixels in universe 7, 30 in universe 8
+        longStrip.universe = 7;
+        t.fixtures = {strip, grb, matrix, rgbw, longStrip};
+        QImage white(4, 4, QImage::Format_RGBA8888);
+        white.fill(Qt::white);
+        const QHash<int, QByteArray> u = PixelMapper::universes(t, pic);
+        auto byteAt = [](const QByteArray &b, int i) { return i >= 0 && i < b.size() ? quint8(b[i]) : quint8(0); };
+        auto ch = [&](int universe, int channel) { return byteAt(u.value(universe), channel); };
+        const bool stripOk = ch(3, 0) == 255 && ch(3, 1) == 0 && ch(3, 2) == 0 && ch(3, 27) == 0 && ch(3, 29) == 255;
+        const bool grbOk = ch(4, 0) == 0 && ch(4, 1) == 255;
+        // Matrix pixels in order: top-left, top-right, then (serpentine) bottom-right, bottom-left.
+        const bool matrixOk = ch(5, 0) == 255 && ch(5, 5) == 255 && ch(5, 8) == 255 && ch(5, 9) == 255;
+        const bool spanOk = u.contains(7) && u.contains(8) && ch(8, 89) == 255 && ch(8, 90) == 0;
+        Project tw = t;
+        tw.fixtures = {rgbw};
+        const QHash<int, QByteArray> uw = PixelMapper::universes(tw, white);
+        const bool whiteOk = byteAt(uw.value(6), 0) == 0 && byteAt(uw.value(6), 3) == 255;
+        check(stripOk && grbOk && matrixOk && spanOk && whiteOk,
+              "pixel mapping samples fixtures and packs channels (orders, serpentine, RGBW, universe overflow)");
+
+        // End to end: Art-Net, then sACN, to a local receiver, from a red composition.
+        QUdpSocket receiver;
+        receiver.bind(QHostAddress::LocalHost, 0);
+        const int col = p.columns;
+        doc.addColumn();
+        Clip red = Clip::fromPattern(TestPattern::Solid);
+        red.solidColor = Qt::red;
+        doc.setClip(0, col, red);
+        p.layers[0].effects.clear();
+        p.compEffects.clear();
+        doc.clearLayer(1);
+        doc.triggerClip(0, col);
+        PixelFixture live;
+        live.start = QPointF(p.compWidth * 0.2, p.compHeight * 0.5);
+        live.end = QPointF(p.compWidth * 0.8, p.compHeight * 0.5);
+        live.pixels = 8;
+        live.universe = 1;
+        p.fixtures = {live};
+        p.dmxOut.enabled = true;
+        p.dmxOut.protocol = DmxProtocol::ArtNet;
+        p.dmxOut.target = QStringLiteral("127.0.0.1:%1").arg(receiver.localPort());
+        doc.notifyChanged(true);
+        QByteArray last;
+        auto receive = [&](bool sacn) {
+            while (receiver.hasPendingDatagrams()) {
+                const QNetworkDatagram d = receiver.receiveDatagram();
+                if (sacn) {
+                    Sacn::Packet packet;
+                    if (Sacn::parse(d.data(), packet) && packet.universe == 1)
+                        last = packet.data;
+                } else {
+                    ArtNet::Dmx dmx;
+                    if (ArtNet::parseDmx(d.data(), dmx) && dmx.universe == 1)
+                        last = dmx.data;
+                }
+            }
+            return last;
+        };
+        auto isRed = [&](const QByteArray &d) { return d.size() >= 24 && quint8(d[0]) > 240 && quint8(d[1]) < 15 && quint8(d[23]) < 15 && quint8(d[21]) > 240; };
+        const bool artnet = waitFor([&] { return isRed(receive(false)); }, 5000);
+        doc.setBlackout(true);
+        const bool dark = waitFor([&] { const QByteArray d = receive(false); return d.size() >= 3 && quint8(d[0]) < 5; }, 5000);
+        doc.setBlackout(false);
+        p.dmxOut.protocol = DmxProtocol::Sacn;
+        doc.notifyChanged();
+        last.clear();
+        const bool sacn = waitFor([&] { return isRed(receive(true)); }, 5000);
+        check(artnet && dark && sacn, "pixel mapping sends the composition over Art-Net and sACN (blackout included)");
+        p.dmxOut.enabled = false;
+        p.fixtures.clear();
         doc.notifyChanged(true);
         doc.clearLayer(0);
     }

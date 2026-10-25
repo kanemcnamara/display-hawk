@@ -7,6 +7,7 @@
 #include <QPolygonF>
 #include <QTransform>
 #include <QRect>
+#include <QRectF>
 #include <QString>
 #include <QVector>
 
@@ -419,6 +420,36 @@ struct AudioLink {
     double amount = 1.0; // 0..1: how deep the modulation goes (ignored for beat targets)
 };
 
+// Pixel mapping: DMX fixtures fed from the composition over Art-Net or sACN.
+enum class FixtureKind { Strip = 0, Matrix, Point };
+enum class ColorOrder { RGB = 0, GRB, BRG, RBG, GBR, BGR, RGBW, White };
+constexpr int kColorOrderCount = int(ColorOrder::White) + 1;
+QString fixtureKindName(FixtureKind k);
+QString colorOrderName(ColorOrder o);
+int channelsPerPixel(ColorOrder o);
+struct PixelFixture {
+    QString name = QStringLiteral("Fixture");
+    bool enabled = true;
+    FixtureKind kind = FixtureKind::Strip;
+    QPointF start{100, 100};    // Strip: first pixel; Point: where it samples (composition px)
+    QPointF end{500, 100};      // Strip: last pixel
+    QRectF rect{100, 100, 320, 180}; // Matrix: its area
+    int pixels = 60;            // Strip
+    int columns = 16, rows = 9; // Matrix
+    bool serpentine = true;     // Matrix: rows alternate direction
+    int universe = 1;           // Art-Net Port-Address / sACN universe; long fixtures continue into the next ones
+    int address = 1;            // first channel, 1..512
+    ColorOrder order = ColorOrder::RGB;
+    int pixelCount() const;
+    QVector<QPointF> samplePoints() const; // in pixel (DMX) order
+};
+struct DmxOutputSettings {
+    bool enabled = false;
+    DmxProtocol protocol = DmxProtocol::ArtNet;
+    QString target; // "ip" or "ip:port"; empty = broadcast (Art-Net) / multicast (sACN)
+    int rate = 40;  // packets a second per universe
+};
+
 // A tempo-synced low-frequency oscillator driving something, like an audio link but from a wave.
 enum class LfoShape { Sine = 0, Triangle, SawUp, SawDown, Square, Random };
 constexpr int kLfoShapeCount = int(LfoShape::Random) + 1;
@@ -464,6 +495,8 @@ struct Project {
     QVector<LayerGroup> groups;
     QVector<Deck> decks; // empty = one deck with every column
     QVector<Cue> cues;
+    QVector<PixelFixture> fixtures;
+    DmxOutputSettings dmxOut;
     TimecodeSource timecodeSource = TimecodeSource::Off;
     double timecodeFps = 25.0; // for showing and typing cue times (incoming timecode reports its own)
     const LayerGroup *groupById(const QString &id) const;

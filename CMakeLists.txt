@@ -64,6 +64,8 @@ qt_add_executable(DisplayHawk
     src/control/CueList.h
     src/control/CueList.cpp
     src/control/WebRemote.h
+    src/control/PixelMapper.h
+    src/control/PixelMapper.cpp
     src/control/WebRemote.cpp
     src/control/TempoClock.cpp
     src/control/ModulationHub.h
@@ -98,6 +100,8 @@ qt_add_executable(DisplayHawk
     src/ui/ClipPreviewPanel.cpp
     src/ui/MediaBrowser.h
     src/ui/CueListDialog.h
+    src/ui/PixelMapDialog.h
+    src/ui/PixelMapDialog.cpp
     src/ui/CueListDialog.cpp
     src/ui/MediaBrowser.cpp
     src/ui/MaskEditor.h

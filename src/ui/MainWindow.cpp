@@ -17,6 +17,8 @@
 #include "control/Timecode.h"
 #include "control/WebRemote.h"
 #include "ui/CueListDialog.h"
+#include "control/PixelMapper.h"
+#include "ui/PixelMapDialog.h"
 #include "model/Library.h"
 #include <QInputDialog>
 #include "media/OutputRecorder.h"
@@ -180,6 +182,7 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     connect(m_router, &ControlRouter::cueBackRequested, m_cueList, &CueList::back);
     connect(m_router, &ControlRouter::cueFireRequested, m_cueList, &CueList::fire);
     m_webRemote = new WebRemote(doc, m_router, m_cueList, this);
+    m_pixelMapper = new PixelMapper(doc, engine, this); // DMX out to LED strips and fixtures
     if (QSettings().value(QStringLiteral("web/enabled"), false).toBool())
         m_webRemote->setEnabled(true, QSettings().value(QStringLiteral("web/port"), 8080).toInt());
     new AutopilotController(doc, engine, this); // clip ends: autopilot and "play once and clear"
@@ -396,6 +399,12 @@ void MainWindow::buildActions()
     connect(m_recorder, &OutputRecorder::stateChanged, this, [this] {
         const QSignalBlocker b(m_recordAction);
         m_recordAction->setChecked(m_recorder->isRecording());
+    });
+    output->addAction(tr("&Pixel Mapping (DMX out)..."), this, [this] {
+        if (!m_pixelDialog)
+            m_pixelDialog = new PixelMapDialog(m_doc, m_pixelMapper, this);
+        m_pixelDialog->show();
+        m_pixelDialog->raise();
     });
     QAction *identifySlices = output->addAction(tr("Identify &Slices on Outputs"));
     identifySlices->setCheckable(true);
