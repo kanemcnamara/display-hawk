@@ -125,7 +125,10 @@ elseif(APPLE)
     file(GLOB SYPHON_SOURCES CONFIGURE_DEPENDS third_party/syphon/Syphon/*.m third_party/syphon/Syphon/*.c)
     target_sources(DisplayHawk PRIVATE src/media/TextureShareSyphon.mm ${SYPHON_SOURCES})
     target_include_directories(DisplayHawk PRIVATE third_party/syphon third_party/syphon/Syphon)
-    set_source_files_properties(src/media/TextureShareSyphon.mm ${SYPHON_SOURCES} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    # Built like Syphon's Xcode target: ARC, plus its prefix header (Cocoa import, SYPHONLOG).
+    set_source_files_properties(${SYPHON_SOURCES} PROPERTIES COMPILE_OPTIONS
+        "-fobjc-arc;-include;${CMAKE_CURRENT_SOURCE_DIR}/third_party/syphon/Syphon/Syphon_Prefix.pch")
+    set_source_files_properties(src/media/TextureShareSyphon.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     target_link_libraries(DisplayHawk PRIVATE "-framework Foundation" "-framework AppKit" "-framework Metal" "-framework IOSurface")
 else()
     target_sources(DisplayHawk PRIVATE src/media/TextureShareNone.cpp)
