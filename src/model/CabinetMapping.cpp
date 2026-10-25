@@ -93,12 +93,17 @@ QVector<Slice> generate(const Project &project, const Screen &screen, const Cabi
         Slice sl;
         for (const Slice &p : previous) {
             if (p.wall == layout.wall && p.cabinet == cab) {
-                sl = p; // keeps enabled, angle, brightness and colour correction
+                sl = p; // keeps enabled, brightness and colour correction
                 break;
             }
         }
         sl.name = QStringLiteral("%1 C%2 R%3").arg(w.name).arg(cab.x() + 1).arg(cab.y() + 1);
-        sl.input = w.panelRect(cab.x(), cab.y());
+        // A cabinet of a rotated wall: its own rect around its rotated centre, sampled at the wall's angle.
+        const QRect unrotated = w.panelRect(cab.x(), cab.y());
+        const QPointF centre = w.panelCentre(cab.x(), cab.y());
+        sl.input = QRect(qRound(centre.x() - unrotated.width() / 2.0), qRound(centre.y() - unrotated.height() / 2.0),
+                         unrotated.width(), unrotated.height());
+        sl.angle = w.angle;
         sl.output = QRect(pos, QSize(cw, ch));
         sl.rotation = rot;
         sl.flipH = layout.flipH;

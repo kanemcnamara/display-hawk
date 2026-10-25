@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QPoint>
 #include <QPolygonF>
+#include <QTransform>
 #include <QRect>
 #include <QString>
 #include <QVector>
@@ -31,6 +32,9 @@ struct LedWall {
     int x = 0; // top-left position in the composition (pixels)
     int y = 0;
     QColor color = QColor(0, 190, 255);
+    // Rotation of the whole wall about its centre, clockwise, in degrees (diamond or tilted walls).
+    // x, y and the panel rects describe the wall before rotation.
+    double angle = 0.0;
     // Cabinets that are not fitted (stepped or irregular walls), as (column, row).
     QVector<QPoint> disabledPanels;
 
@@ -39,7 +43,13 @@ struct LedWall {
     int enabledPanelCount() const;
     int pixelWidth() const { return panelPxW * cols; }
     int pixelHeight() const { return panelPxH * rows; }
-    QRect rect() const { return QRect(x, y, pixelWidth(), pixelHeight()); }
+    QRect rect() const { return QRect(x, y, pixelWidth(), pixelHeight()); } // unrotated
+    bool rotated() const { return angle != 0.0; }
+    QTransform transform() const; // unrotated wall -> composition
+    QPolygonF outline() const;
+    QPolygonF panelPolygon(int col, int row) const;
+    QPointF panelCentre(int col, int row) const;
+    QRect bounds() const; // bounding box in the composition
     double pitchMm() const { return panelPxW > 0 ? panelMmW / panelPxW : 0.0; }
     double widthM() const { return panelMmW * cols / 1000.0; }
     double heightM() const { return panelMmH * rows / 1000.0; }

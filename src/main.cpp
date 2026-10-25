@@ -959,6 +959,117 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.notifyChanged(true);
     }
 
+    // Rotated walls: a 4 x 2 wall of 128 px cabinets at 700,400 turned 90 degrees clockwise about its
+    // centre (956,528). Cabinet C1 R1 (unrotated centre 764,464) hangs at 1020,336; C4 R1 at 1020,720.
+    {
+        Project &p = doc.project();
+        const LedWall savedWall = p.walls[0];
+        const QVector<Screen> savedScreens = p.screens;
+        LedWall w = savedWall;
+        w.cols = 4;
+        w.rows = 2;
+        w.x = 700;
+        w.y = 400;
+        w.angle = 90.0;
+        w.disabledPanels.clear();
+        doc.applyWall(0, w);
+        const QPointF c11 = p.walls[0].panelCentre(0, 0), c41 = p.walls[0].panelCentre(3, 0);
+        check(qAbs(c11.x() - 1020) < 0.01 && qAbs(c11.y() - 336) < 0.01 && qAbs(c41.y() - 720) < 0.01
+                  && QRect(827, 271, 258, 514).contains(p.walls[0].bounds())
+                  && p.walls[0].bounds().contains(QRect(829, 273, 254, 510)),
+              "rotated wall geometry");
+
+        auto pixel = [&](const QPointF &pt) {
+            const QImage &img = previews[0];
+            if (img.isNull())
+                return QColor();
+            return QColor(img.pixel(qBound(0, int(pt.x() * img.width() / p.compWidth), img.width() - 1),
+                                    qBound(0, int(pt.y() * img.height() / p.compHeight), img.height() - 1)));
+        };
+        const QPointF unrotatedOnly(720, 420); // inside the upright rect, outside the turned wall
+
+        // Panel mask over a white solid: only the turned cabinets stay lit.
+        Clip white = Clip::fromPattern(TestPattern::Solid);
+        white.solidColor = Qt::white;
+        const int col = p.columns;
+        doc.addColumn();
+        doc.setClip(0, col, white);
+        doc.clearLayer(1);
+        p.layers[0].targetWall = -1;
+        p.layers[0].effects.clear();
+        p.compEffects.clear();
+        doc.triggerClip(0, col);
+        p.maskToPanels = true;
+        doc.notifyChanged();
+        check(waitFor([&] { return qGray(pixel(c11).rgb()) > 200 && qGray(pixel(c41).rgb()) > 200
+                                   && qGray(pixel(unrotatedOnly).rgb()) < 10; }),
+              "panel mask follows a rotated wall");
+        save(previews[0], "rotated-wall-mask");
+        p.maskToPanels = false;
+
+        // Panel outline in each cabinet's own frame: 5 px inside C1 R1's left edge (unrotated 705,464).
+        EffectInstance outline = makeEffect(QStringLiteral("panelOutline"));
+        outline.params = {12, 1, 0, 0, 1}; // red, 12 px
+        p.compEffects = {outline};
+        doc.notifyChanged(true);
+        const QPointF nearEdge = p.walls[0].transform().map(QPointF(705, 464));
+        check(waitFor([&] { return near(pixel(nearEdge), 255, 0, 0) && near(pixel(c11), 255, 255, 255); }),
+              "panel outline follows rotated cabinets");
+        save(previews[0], "rotated-wall-outline");
+
+        // Panel colours by panel number: C1 R1 is red where it hangs.
+        EffectInstance colours = makeEffect(QStringLiteral("panelColours"));
+        colours.params = {2, 1, 0, 1};
+        p.compEffects = {colours};
+        doc.notifyChanged(true);
+        check(waitFor([&] { return near(pixel(c11), 255, 0, 0); }), "panel effects find rotated cabinets");
+        p.compEffects.clear();
+        doc.notifyChanged(true);
+
+        // A layer fitted into the wall turns with it: colour bars stretched over the upright wall
+        // put white (left bar) in C1 R1 and black (right bar) in C4 R1, wherever they hang.
+        Clip bars = Clip::fromPattern(TestPattern::ColorBars);
+        bars.scale = ScaleMode::Stretch;
+        doc.setClip(0, col, bars);
+        p.layers[0].targetWall = 0;
+        doc.triggerClip(0, col);
+        doc.notifyChanged();
+        const QPointF inWhiteBar = p.walls[0].transform().map(QPointF(730, 464));
+        const QPointF inBlackBar = p.walls[0].transform().map(QPointF(1180, 464));
+        check(waitFor([&] { return near(pixel(inWhiteBar), 255, 255, 255) && qGray(pixel(inBlackBar).rgb()) < 40
+                                   && qGray(pixel(unrotatedOnly).rgb()) < 10; }),
+              "layers fitted into a rotated wall turn with it");
+        save(previews[0], "rotated-wall-layer");
+
+        // Cabinet slices sample each cabinet where it hangs, at the wall's angle.
+        p.screens[0].slices.clear();
+        CabinetLayout layout;
+        layout.wall = 0;
+        layout.arrange = CabinetArrange::PackRows;
+        doc.addCabinetLayout(0, layout);
+        const Slice first = p.screens[0].slices.value(0);
+        check(p.screens[0].slices.size() == 8 && first.angle == 90.0
+                  && QRectF(first.input).center() == c11,
+              "cabinet slices of a rotated wall sample each cabinet where it hangs");
+        const QSize screen(p.screens[0].width, p.screens[0].height);
+        auto outPixel = [&](const QPointF &pt) {
+            const QImage &img = previews[1];
+            return img.isNull() ? QColor()
+                                : QColor(img.pixel(qBound(0, int(pt.x() * img.width() / screen.width()), img.width() - 1),
+                                                   qBound(0, int(pt.y() * img.height() / screen.height()), img.height() - 1)));
+        };
+        // The output shows the cabinet upright: 30 px from its left is the wall's white bar.
+        check(waitFor([&] { return near(outPixel(QPointF(first.output.x() + 30, QRectF(first.output).center().y())), 255, 255, 255); }),
+              "rotated cabinet content reaches the output");
+        save(previews[1], "rotated-wall-output");
+
+        doc.removeCabinetLayout(0, 0);
+        p.layers[0].targetWall = -1;
+        doc.applyWall(0, savedWall);
+        p.screens = savedScreens;
+        doc.notifyChanged(true);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};

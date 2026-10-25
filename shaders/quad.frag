@@ -14,6 +14,7 @@ layout(std140, binding = 0) uniform Buf {
     vec4 gain;      // per-channel gain (slice colour correction)
     vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
     vec4 axes;      // flags2.z == 1: source edge vectors (u, v); src.xy is then the source origin
+    vec4 pivot;     // destination turned by z radians (clockwise) about (x, y), in target pixels
 } ubuf;
 
 layout(binding = 1) uniform sampler2D tex;

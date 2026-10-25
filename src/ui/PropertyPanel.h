@@ -92,6 +92,7 @@ private:
     QLineEdit *m_wallName;
     QComboBox *m_wallPreset;
     QSpinBox *m_panelPxW, *m_panelPxH, *m_cols, *m_rows, *m_wallX, *m_wallY;
+    QDoubleSpinBox *m_wallAngle;
     QDoubleSpinBox *m_panelMmW, *m_panelMmH;
     QPushButton *m_wallColor;
     QLabel *m_wallInfo;

@@ -56,6 +56,38 @@ QString audioSignalName(AudioSignal s)
     return {};
 }
 
+QTransform LedWall::transform() const
+{
+    QTransform t;
+    if (angle == 0.0)
+        return t;
+    const QPointF c = QRectF(rect()).center();
+    t.translate(c.x(), c.y());
+    t.rotate(angle); // clockwise on screen (y points down)
+    t.translate(-c.x(), -c.y());
+    return t;
+}
+
+QPolygonF LedWall::outline() const
+{
+    return transform().map(QPolygonF(QRectF(rect())));
+}
+
+QPolygonF LedWall::panelPolygon(int col, int row) const
+{
+    return transform().map(QPolygonF(QRectF(panelRect(col, row))));
+}
+
+QPointF LedWall::panelCentre(int col, int row) const
+{
+    return transform().map(QRectF(panelRect(col, row)).center());
+}
+
+QRect LedWall::bounds() const
+{
+    return outline().boundingRect().toAlignedRect();
+}
+
 QPolygonF Slice::inputPolygon() const
 {
     const QRectF r(input);
@@ -376,6 +408,7 @@ QJsonObject Project::toJson() const
                                    {"x", w.x},
                                    {"y", w.y},
                                    {"color", w.color.name()},
+                                   {"angle", w.angle},
                                    {"disabledPanels", [&w] {
                                         QJsonArray a;
                                         for (const QPoint &p : w.disabledPanels)
@@ -508,6 +541,7 @@ Project Project::fromJson(const QJsonObject &root)
         w.x = o["x"].toInt();
         w.y = o["y"].toInt();
         w.color = QColor(o["color"].toString(w.color.name()));
+        w.angle = o["angle"].toDouble(0.0);
         for (const QJsonValue &pv : o["disabledPanels"].toArray()) {
             const QJsonArray xy = pv.toArray();
             w.disabledPanels.append(QPoint(xy.at(0).toInt(), xy.at(1).toInt()));

@@ -8,6 +8,7 @@
 #include <QMatrix4x4>
 #include <QPainter>
 #include <QRandomGenerator>
+#include <QtMath>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -17,6 +18,7 @@ namespace {
 constexpr quint32 kUniformSize = 128; // must match the std140 block in fx.vert / fx.frag
 constexpr quint32 kMaxPassesPerFrame = 512;
 constexpr int kTableWidth = 4096;
+constexpr int kTableRows = 3; // texels per panel, stacked: order, centre + size, rotation
 
 QShader loadShader(const QString &path)
 {
@@ -29,7 +31,11 @@ QShader loadShader(const QString &path)
 }
 
 struct PanelEntry {
-    QRect rect;
+    QPointF centre;   // in the composition (after the wall's rotation)
+    QSizeF size;
+    double angle = 0; // the wall's rotation, degrees clockwise
+    QTransform transform;
+    QRectF local;     // the panel before rotation
     float order[4] = {0, 0, 0, 0}; // left-right, top-bottom, by number, random
 };
 
@@ -37,24 +43,32 @@ struct PanelEntry {
 QVector<PanelEntry> collectPanels(const Project &p)
 {
     QVector<PanelEntry> panels;
-    for (const LedWall &w : p.walls)
+    for (const LedWall &w : p.walls) {
+        const QTransform t = w.transform();
         for (int r = 0; r < w.rows; ++r)
             for (int c = 0; c < w.cols; ++c)
-                if (w.panelEnabled(c, r))
-                    panels.append({w.panelRect(c, r), {}});
+                if (w.panelEnabled(c, r)) {
+                    const QRectF local(w.panelRect(c, r));
+                    panels.append({t.map(local.center()), local.size(), w.angle, t, local, {}});
+                }
+    }
     const int n = panels.size();
     if (n == 0)
         return panels;
 
-    // Left-right and top-bottom follow position, so panels in the same column (row) light together
-    // and gaps in odd layouts keep their physical spacing.
-    int minX = INT_MAX, maxX = INT_MIN, minY = INT_MAX, maxY = INT_MIN;
+    // Left-right and top-bottom follow the panel centres, so panels in the same column (row) light
+    // together, gaps in odd layouts keep their physical spacing and rotated walls sweep as they hang.
+    // The span includes one panel, so the last column is not the same phase as the first.
+    double minX = 1e18, maxX = -1e18, minY = 1e18, maxY = -1e18, sumW = 0, sumH = 0;
     for (const PanelEntry &e : std::as_const(panels)) {
-        minX = qMin(minX, e.rect.left());
-        maxX = qMax(maxX, e.rect.left() + e.rect.width());
-        minY = qMin(minY, e.rect.top());
-        maxY = qMax(maxY, e.rect.top() + e.rect.height());
+        minX = qMin(minX, e.centre.x());
+        maxX = qMax(maxX, e.centre.x());
+        minY = qMin(minY, e.centre.y());
+        maxY = qMax(maxY, e.centre.y());
+        sumW += e.size.width();
+        sumH += e.size.height();
     }
+    const double spanX = maxX - minX + sumW / n, spanY = maxY - minY + sumH / n;
     QVector<int> shuffled(n);
     for (int i = 0; i < n; ++i)
         shuffled[i] = i;
@@ -63,8 +77,8 @@ QVector<PanelEntry> collectPanels(const Project &p)
         std::swap(shuffled[i], shuffled[int(rng.bounded(i + 1))]);
     for (int i = 0; i < n; ++i) {
         PanelEntry &e = panels[i];
-        e.order[0] = float(e.rect.left() - minX) / float(qMax(1, maxX - minX));
-        e.order[1] = float(e.rect.top() - minY) / float(qMax(1, maxY - minY));
+        e.order[0] = float((e.centre.x() - minX) / spanX);
+        e.order[1] = float((e.centre.y() - minY) / spanY);
         e.order[2] = float(i) / float(n);
         e.order[3] = float(shuffled[i]) / float(n);
     }
@@ -89,7 +103,7 @@ bool EffectRenderer::init(QRhi *rhi)
                                 QRhiSampler::ClampToEdge, QRhiSampler::ClampToEdge);
     // Placeholders until a project with walls arrives: no panels anywhere.
     m_placeholderId = rhi->newTexture(QRhiTexture::RGBA8, QSize(1, 1));
-    m_placeholderTable = rhi->newTexture(QRhiTexture::RGBA32F, QSize(1, 2));
+    m_placeholderTable = rhi->newTexture(QRhiTexture::RGBA32F, QSize(1, kTableRows));
     if (!m_ubuf->create() || !m_linear->create() || !m_nearest->create() || !m_placeholderId->create()
         || !m_placeholderTable->create())
         return false;
@@ -97,7 +111,7 @@ bool EffectRenderer::init(QRhi *rhi)
     QImage none(1, 1, QImage::Format_RGBA8888);
     none.fill(Qt::transparent);
     m_pendingUpload->uploadTexture(m_placeholderId, none);
-    const float zeros[8] = {};
+    const float zeros[4 * kTableRows] = {};
     m_pendingUpload->uploadTexture(m_placeholderTable,
                                    QRhiTextureUploadEntry(0, 0, QRhiTextureSubresourceUploadDescription(zeros, sizeof(zeros))));
     m_layoutSrb = newSrb(m_placeholderId, m_placeholderId, m_placeholderTable);
@@ -187,7 +201,7 @@ void EffectRenderer::syncPanels(const Project &project, const QSize &compSize)
         QDataStream ds(&key, QIODevice::WriteOnly);
         ds << compSize;
         for (const LedWall &w : project.walls) {
-            ds << w.x << w.y << w.cols << w.rows << w.panelPxW << w.panelPxH;
+            ds << w.x << w.y << w.cols << w.rows << w.panelPxW << w.panelPxH << w.angle;
             for (const QPoint &d : w.disabledPanels)
                 ds << d;
             ds << qint32(-1);
@@ -204,27 +218,32 @@ void EffectRenderer::syncPanels(const Project &project, const QSize &compSize)
     QImage ids(compSize.expandedTo(QSize(1, 1)), QImage::Format_RGBA8888);
     ids.fill(Qt::transparent);
     {
-        QPainter painter(&ids);
+        QPainter painter(&ids); // no antialiasing: ids must stay exact
         painter.setCompositionMode(QPainter::CompositionMode_Source);
+        painter.setPen(Qt::NoPen);
         for (int i = 0; i < panels.size(); ++i) {
             const int v = i + 1;
-            painter.fillRect(panels[i].rect, QColor(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, 255));
+            painter.setTransform(panels[i].transform);
+            painter.fillRect(panels[i].local, QColor(v & 0xff, (v >> 8) & 0xff, (v >> 16) & 0xff, 255));
         }
     }
     const int width = qBound(1, int(panels.size()), kTableWidth);
     const int rows = qMax(1, int((panels.size() + width - 1) / width));
-    QByteArray table(width * rows * 2 * 4 * int(sizeof(float)), 0);
+    QByteArray table(width * rows * kTableRows * 4 * int(sizeof(float)), 0);
     float *f = reinterpret_cast<float *>(table.data());
     for (int i = 0; i < panels.size(); ++i) {
         const PanelEntry &e = panels[i];
-        const int x = i % width, y = (i / width) * 2;
+        const int x = i % width, y = (i / width) * kTableRows;
         float *order = f + (y * width + x) * 4;
-        float *rect = f + ((y + 1) * width + x) * 4;
+        float *box = f + ((y + 1) * width + x) * 4;
+        float *rot = f + ((y + 2) * width + x) * 4;
         std::memcpy(order, e.order, sizeof(e.order));
-        rect[0] = float(e.rect.x());
-        rect[1] = float(e.rect.y());
-        rect[2] = float(e.rect.width());
-        rect[3] = float(e.rect.height());
+        box[0] = float(e.centre.x());
+        box[1] = float(e.centre.y());
+        box[2] = float(e.size.width());
+        box[3] = float(e.size.height());
+        rot[0] = float(qCos(qDegreesToRadians(e.angle)));
+        rot[1] = float(qSin(qDegreesToRadians(e.angle)));
     }
 
     // New textures (sizes change); every bindings object refers to the old ones.
@@ -234,7 +253,7 @@ void EffectRenderer::syncPanels(const Project &project, const QSize &compSize)
     if (m_panelTable)
         m_panelTable->deleteLater();
     m_panelId = m_rhi->newTexture(QRhiTexture::RGBA8, ids.size());
-    m_panelTable = m_rhi->newTexture(QRhiTexture::RGBA32F, QSize(width, rows * 2));
+    m_panelTable = m_rhi->newTexture(QRhiTexture::RGBA32F, QSize(width, rows * kTableRows));
     if (!m_panelId->create() || !m_panelTable->create()) {
         qWarning("EffectRenderer: could not create the panel textures");
         delete m_panelId;

@@ -640,6 +640,11 @@ QWidget *PropertyPanel::buildWallPage()
     f->addRow(tr("Panels high"), m_rows);
     f->addRow(tr("Position X"), m_wallX);
     f->addRow(tr("Position Y"), m_wallY);
+    m_wallAngle = makeDouble(-180, 180, 1, QStringLiteral("°"));
+    m_wallAngle->setWrapping(true);
+    m_wallAngle->setToolTip(tr("Rotates the whole wall about its centre, clockwise: for diamond or tilted walls. "
+                               "Panel maps, masks, panel effects, slices and cabinet layouts follow it."));
+    f->addRow(tr("Angle"), m_wallAngle);
     f->addRow(tr("Colour"), m_wallColor);
     v->addWidget(box);
 
@@ -707,6 +712,10 @@ QWidget *PropertyPanel::buildWallPage()
     intField(m_rows, &LedWall::rows);
     intField(m_wallX, &LedWall::x);
     intField(m_wallY, &LedWall::y);
+    connect(m_wallAngle, &QDoubleSpinBox::valueChanged, this, [this](double a) {
+        if (!m_refreshing)
+            editWall([&](LedWall &w) { w.angle = a; });
+    });
     auto mmField = [this](QDoubleSpinBox *s, double LedWall::*field) {
         connect(s, &QDoubleSpinBox::valueChanged, this, [this, field](double v) {
             if (!m_refreshing)
@@ -776,6 +785,7 @@ void PropertyPanel::refreshWall()
     setValue(m_rows, w->rows);
     setValue(m_wallX, w->x);
     setValue(m_wallY, w->y);
+    setValue(m_wallAngle, w->angle);
     setButtonColor(m_wallColor, w->color);
     m_panelGrid->setWall(w->cols, w->rows, w->disabledPanels, w->color);
     m_panelCount->setText(tr("%1 of %2 fitted").arg(w->enabledPanelCount()).arg(w->cols * w->rows));
@@ -1166,7 +1176,11 @@ QWidget *PropertyPanel::buildSlicePage()
         if (w < 0 || w >= p.walls.size())
             return;
         const QRect r = p.walls[w].rect();
-        editSlice([&](Slice &s) { s.input = r; });
+        const double angle = p.walls[w].angle;
+        editSlice([&](Slice &s) {
+            s.input = r;
+            s.angle = angle;
+        });
     });
     connect(fullComp, &QPushButton::clicked, this, [this] {
         const QSize c = m_doc->project().compSize();
@@ -1243,7 +1257,7 @@ void PropertyPanel::refreshSlice()
         m_sliceWall->addItem(p.walls[i].name, i);
     int match = -1;
     for (int i = 0; i < p.walls.size(); ++i)
-        if (p.walls[i].rect() == s->input)
+        if (p.walls[i].rect() == s->input && p.walls[i].angle == s->angle)
             match = i;
     m_sliceWall->setCurrentIndex(qMax(0, m_sliceWall->findData(match >= 0 ? match : prev)));
 }

@@ -16,8 +16,9 @@ layout(std140, binding = 0) uniform Buf {
 
 layout(binding = 1) uniform sampler2D tex;
 // LED panels: panelId holds (panel index + 1) in RGB at every composition pixel (0 = no panel);
-// panelTable holds two texels per panel: (order left-right, order top-bottom, order by number,
-// random) and the panel rectangle (x, y, w, h) in composition pixels.
+// panelTable holds three texels per panel, stacked: (order left-right, order top-bottom, order by
+// number, random), (centre x, centre y, width, height) in composition pixels, and (cos, sin) of the
+// wall's clockwise rotation.
 layout(binding = 2) uniform sampler2D panelId;
 layout(binding = 3) uniform sampler2D panelTable;
 
@@ -65,7 +66,7 @@ int panelAt(vec2 px)
 vec4 panelInfo(int i, int row)
 {
     int w = textureSize(panelTable, 0).x;
-    return texelFetch(panelTable, ivec2(i - (i / w) * w, (i / w) * 2 + row), 0);
+    return texelFetch(panelTable, ivec2(i - (i / w) * w, (i / w) * 3 + row), 0);
 }
 
 float panelOrder(int i, float which)
@@ -190,8 +191,13 @@ void main()
     } else if (mode == 12) { // Panel outline
         int id = panelAt(px);
         if (id >= 0) {
-            vec4 r = panelInfo(id, 1);
-            float d = min(min(px.x - r.x, r.x + r.z - px.x), min(px.y - r.y, r.y + r.w - px.y));
+            // Distance to the nearest edge, in the panel's own (unrotated) frame.
+            vec4 box = panelInfo(id, 1);
+            vec2 cs = panelInfo(id, 2).xy;
+            vec2 q = px - box.xy;
+            vec2 local = vec2(cs.x * q.x + cs.y * q.y, -cs.y * q.x + cs.x * q.y);
+            vec2 edge = box.zw * 0.5 - abs(local);
+            float d = min(edge.x, edge.y);
             float line = clamp(p0.x - d + 0.5, 0.0, 1.0) * p1.x;
             o = mix(c, vec4(p0.yzw, 1.0), line);
         }

@@ -13,6 +13,7 @@ layout(std140, binding = 0) uniform Buf {
     vec4 gain;      // per-channel gain (slice colour correction)
     vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
     vec4 axes;      // flags2.z == 1: source edge vectors (u, v); src.xy is then the source origin
+    vec4 pivot;     // destination turned by z radians (clockwise) about (x, y), in target pixels
 } ubuf;
 
 void main()
@@ -20,6 +21,11 @@ void main()
     // Corner of the destination quad, (0,0) = top-left; drawn as a 4-vertex triangle strip.
     vec2 c = vec2(float(gl_VertexIndex & 1), float(gl_VertexIndex >> 1));
     vec2 p = ubuf.dst.xy + c * ubuf.dst.zw;
+    if (ubuf.pivot.z != 0.0) { // layers fitted into a rotated wall
+        float cs = cos(ubuf.pivot.z), sn = sin(ubuf.pivot.z);
+        vec2 q = p - ubuf.pivot.xy;
+        p = ubuf.pivot.xy + vec2(cs * q.x - sn * q.y, sn * q.x + cs * q.y);
+    }
     vec2 ndc = vec2(p.x / ubuf.params.x * 2.0 - 1.0, 1.0 - p.y / ubuf.params.y * 2.0);
     gl_Position = ubuf.clipCorr * vec4(ndc, 0.0, 1.0);
 

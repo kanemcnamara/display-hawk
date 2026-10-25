@@ -387,16 +387,18 @@ void Document::applyWall(int index, const LedWall &wall)
     if (index < 0 || index >= m_project.walls.size())
         return;
     const QRect oldRect = m_project.walls[index].rect();
+    const double oldAngle = m_project.walls[index].angle;
     const QRect newRect = wall.rect();
     const bool renamed = m_project.walls[index].name != wall.name;
-    if (oldRect != newRect) {
+    if (oldRect != newRect || oldAngle != wall.angle) {
         for (Screen &s : m_project.screens) {
             for (Slice &sl : s.slices) {
-                if (sl.input != oldRect)
+                if (sl.isCabinet() || sl.input != oldRect || sl.angle != oldAngle)
                     continue;
                 if (sl.output.size() == oldRect.size())
                     sl.output.setSize(newRect.size());
                 sl.input = newRect;
+                sl.angle = wall.angle;
             }
         }
     }
@@ -665,6 +667,7 @@ int Document::createSliceForWall(int wall, int screen)
     Slice sl;
     sl.name = w.name;
     sl.input = w.rect();
+    sl.angle = w.angle; // a rotated wall is sampled at its angle; the output stays upright
     sl.output = QRect(x, y, w.pixelWidth(), w.pixelHeight());
     s.slices.append(sl);
     const int idx = s.slices.size() - 1;
@@ -679,7 +682,7 @@ void Document::fitCompositionToWalls()
         return;
     QRect bounds;
     for (const LedWall &w : m_project.walls)
-        bounds = bounds.united(w.rect());
+        bounds = bounds.united(w.bounds());
     const QPoint shift = -bounds.topLeft();
     for (LedWall &w : m_project.walls) {
         w.x += shift.x();

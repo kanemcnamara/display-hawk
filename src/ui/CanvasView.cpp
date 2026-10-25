@@ -167,7 +167,10 @@ QVector<CanvasView::Item> CanvasView::items() const
     if (m_mode == InputMap) {
         for (int i = 0; i < p.walls.size(); ++i) {
             const LedWall &w = p.walls[i];
-            list.append({Selection::ofWall(i), w.rect(), w.color, w.name, false, false});
+            Item item{Selection::ofWall(i), w.rect(), w.color, w.name, false, false, {}};
+            if (w.rotated())
+                item.poly = w.outline();
+            list.append(item);
         }
         const int activeScreen = (sel.kind == Selection::Screen || sel.kind == Selection::Slice) ? sel.screen : -1;
         for (int s = 0; s < p.screens.size(); ++s) {
@@ -286,6 +289,8 @@ void CanvasView::snapCandidates(QVector<int> &xs, QVector<int> &ys) const
     if (m_mode == InputMap && m_dragSel.kind == Selection::Slice) {
         // Panel seams are the natural place to cut slices for LED processors.
         for (const LedWall &w : m_doc->project().walls) {
+            if (w.rotated())
+                continue;
             for (int i = 1; i < w.cols; ++i)
                 xs << w.x + i * w.panelPxW;
             for (int i = 1; i < w.rows; ++i)

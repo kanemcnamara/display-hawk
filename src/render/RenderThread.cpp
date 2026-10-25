@@ -854,6 +854,12 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         lp.texFlipY = m_rhi->isYUpInFramebuffer();
         lp.opacity = float(opacity);
         lp.blend = RhiQuad::fromLayer(layer.blend);
+        // Clips were fitted into the wall as if it were upright; the layer turns with the wall.
+        if (layer.targetWall >= 0 && layer.targetWall < p.walls.size() && p.walls[layer.targetWall].rotated()) {
+            const LedWall &w = p.walls[layer.targetWall];
+            lp.dstAngle = w.angle;
+            lp.pivot = QRectF(w.rect()).center();
+        }
         compDraws.append(lp);
     }
 

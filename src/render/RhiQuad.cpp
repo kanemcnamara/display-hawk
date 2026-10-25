@@ -3,11 +3,12 @@
 #include <QFile>
 #include <QImage>
 #include <QMatrix4x4>
+#include <QtMath>
 #include <cstring>
 
 namespace {
 
-constexpr quint32 kUniformSize = 208; // must match the std140 block in quad.vert / quad.frag
+constexpr quint32 kUniformSize = 224; // must match the std140 block in quad.vert / quad.frag
 constexpr quint32 kMaxDrawsPerFrame = 8192; // cabinet layouts add a slice per cabinet
 
 QShader loadShader(const QString &path)
@@ -187,6 +188,8 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         std::memcpy(data + 160, grade, sizeof(grade));
         const float axes[] = {float(p.srcU.x()), float(p.srcU.y()), float(p.srcV.x()), float(p.srcV.y())};
         std::memcpy(data + 192, axes, sizeof(axes));
+        const float pivot[] = {float(p.pivot.x()), float(p.pivot.y()), float(qDegreesToRadians(p.dstAngle)), 0.0f};
+        std::memcpy(data + 208, pivot, sizeof(pivot));
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
         m_offset += m_stride;

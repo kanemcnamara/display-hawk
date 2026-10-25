@@ -1,6 +1,7 @@
 ﻿#include "render/Patterns.h"
 
 #include <QPainter>
+#include <QPainterPath>
 #include <QtMath>
 
 namespace {
@@ -150,6 +151,9 @@ QImage panelMap(const Project &project, bool transparentBackground)
     QPainter p(&img);
 
     for (const LedWall &w : project.walls) {
+        // Drawn unrotated, through the wall's rotation.
+        p.setTransform(w.transform());
+        p.setRenderHint(QPainter::Antialiasing, w.rotated());
         const int fontPx = qMin(w.panelPxW, w.panelPxH) / 4;
         int number = 1; // only fitted cabinets are numbered
         for (int r = 0; r < w.rows; ++r) {
@@ -199,6 +203,7 @@ QImage panelMap(const Project &project, bool transparentBackground)
         p.setPen(Qt::white);
         p.drawText(nameRect, Qt::AlignLeft | Qt::AlignTop, label);
     }
+    p.resetTransform();
     return img;
 }
 
@@ -207,11 +212,16 @@ QImage panelMask(const Project &project)
     QImage img(project.compSize().expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
     img.fill(Qt::black);
     QPainter p(&img);
-    for (const LedWall &w : project.walls)
+    for (const LedWall &w : project.walls) {
+        // One path per wall, so a rotated wall's antialiased edge has no seams between cabinets.
+        QPainterPath path;
         for (int r = 0; r < w.rows; ++r)
             for (int c = 0; c < w.cols; ++c)
                 if (w.panelEnabled(c, r))
-                    p.fillRect(w.panelRect(c, r), Qt::white);
+                    path.addRect(w.panelRect(c, r));
+        p.setRenderHint(QPainter::Antialiasing, w.rotated());
+        p.fillPath(w.transform().map(path.simplified()), Qt::white);
+    }
     return img;
 }
 

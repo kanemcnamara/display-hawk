@@ -24,6 +24,9 @@ public:
         // Rotated source: when set, the source is src.topLeft() + s * srcU + t * srcV (normalized).
         bool srcAxes = false;
         QPointF srcU, srcV;
+        // Turns the destination quad clockwise by dstAngle degrees about pivot (target pixels).
+        double dstAngle = 0.0;
+        QPointF pivot;
         int rotation = 0;          // quarter turns clockwise
         bool flipH = false;
         bool flipV = false;

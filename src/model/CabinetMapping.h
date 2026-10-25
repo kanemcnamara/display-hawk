@@ -12,8 +12,8 @@ namespace CabinetMapping {
 // The wall's fitted cabinets in chain order (column, row).
 QVector<QPoint> chainOrder(const LedWall &wall, const CabinetLayout &layout);
 
-// The cabinet slices a layout produces. Per-cabinet settings (enabled, brightness, colour
-// correction) are carried over from `previous` slices of the same cabinets.
+// The cabinet slices a layout produces; they sample at the wall's angle. Per-cabinet settings
+// (enabled, brightness, colour correction) are carried over from `previous` slices of the same cabinets.
 QVector<Slice> generate(const Project &project, const Screen &screen, const CabinetLayout &layout,
                         const QVector<Slice> &previous = {});
 
