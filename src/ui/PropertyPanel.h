@@ -7,6 +7,7 @@
 #include <functional>
 
 class Document;
+class PanelGridEditor;
 class RenderEngine;
 class QCheckBox;
 class QComboBox;
@@ -62,6 +63,7 @@ private:
     QPushButton *m_compBg;
     QCheckBox *m_overlay;
     QDoubleSpinBox *m_overlayOpacity;
+    QCheckBox *m_maskToPanels;
 
     // Layer
     QLineEdit *m_layerName;
@@ -87,6 +89,8 @@ private:
     QDoubleSpinBox *m_panelMmW, *m_panelMmH;
     QPushButton *m_wallColor;
     QLabel *m_wallInfo;
+    PanelGridEditor *m_panelGrid;
+    QLabel *m_panelCount;
     QComboBox *m_wallScreen;
 
     // Screen
@@ -104,5 +108,6 @@ private:
     QComboBox *m_rotation;
     QCheckBox *m_flipH, *m_flipV;
     QDoubleSpinBox *m_brightness;
+    QDoubleSpinBox *m_gainR, *m_gainG, *m_gainB, *m_gamma, *m_blackLevel;
     QComboBox *m_sliceWall;
 };

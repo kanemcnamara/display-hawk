@@ -14,6 +14,13 @@ Media server for LED walls on **macOS and Windows** (C++17, Qt 6, Qt RHI). The o
 
 Slices that sample exactly a wall's area follow the wall when it is moved or resized.
 
+## LED tools
+
+- **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.
+- **Irregular walls:** in a wall's properties, click or drag on the panel grid to mark cabinets that are not fitted (stepped or odd-shaped walls). Panel maps cross them out and number only fitted cabinets; specs and port estimates count only fitted cabinets. *Black out areas without LED panels* (composition properties) multiplies the output by the real panel layout, so content never lands where there are no LEDs.
+- **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
+- **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
+
 ## Clip deck
 
 | Thing | What it is |

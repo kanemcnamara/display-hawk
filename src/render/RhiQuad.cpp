@@ -1,4 +1,4 @@
-#include "render/RhiQuad.h"
+﻿#include "render/RhiQuad.h"
 
 #include <QFile>
 #include <QImage>
@@ -7,7 +7,7 @@
 
 namespace {
 
-constexpr quint32 kUniformSize = 160; // must match the std140 block in quad.vert / quad.frag
+constexpr quint32 kUniformSize = 192; // must match the std140 block in quad.vert / quad.frag
 constexpr quint32 kMaxDrawsPerFrame = 1024;
 
 QShader loadShader(const QString &path)
@@ -183,6 +183,8 @@ void RhiQuad::recordPass(QRhiCommandBuffer *cb, QRhiRenderTarget *rt, const QCol
         const qint32 ints[] = {p.rotation & 3, p.flipH ? 1 : 0, p.flipV ? 1 : 0, p.texFlipY ? 1 : 0,
                                p.texture ? 1 : 0, inputMode, 0, 0};
         std::memcpy(data + 128, ints, sizeof(ints));
+        const float grade[] = {p.gain[0], p.gain[1], p.gain[2], 1.0f, p.gamma, p.blackLevel, p.colorCorrect ? 1.0f : 0.0f, 0.0f};
+        std::memcpy(data + 160, grade, sizeof(grade));
         u->updateDynamicBuffer(m_ubuf, m_offset, kUniformSize, data);
         offsets.append(m_offset);
         m_offset += m_stride;

@@ -4,6 +4,7 @@
 #include "ui/OutputWindow.h"
 
 #include <QJsonDocument>
+#include <cmath>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
 #include <rhi/qrhi_platform.h>
@@ -271,6 +272,8 @@ void RenderThread::run()
     m_layers.clear();
     delete m_overlayTex;
     m_overlayTex = nullptr;
+    delete m_maskTex;
+    m_maskTex = nullptr;
     m_yuv.release();
     m_quad.release();
     delete m_rhi;
@@ -558,6 +561,24 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
         qp.texFlipY = ct.useYuv && m_rhi->isYUpInFramebuffer(); // rendered, not uploaded
         qp.dst = scaledRect(ct.mediaSize.isEmpty() ? tex->pixelSize() : ct.mediaSize, target, clip.scale);
     } else {
+        if (clip.pattern == TestPattern::MovingBars) {
+            // A vertical bar sweeps across in 2 s and a horizontal bar down in 3 s, over black.
+            // Tearing, scan-line or sync faults on LED processors show up as broken or doubled bars.
+            const double t = m_clock.elapsed() / 1000.0;
+            const int barW = qMax(4, target.width() / 64);
+            const int barH = qMax(4, target.height() / 36);
+            qp.color = Qt::black;
+            qp.dst = target;
+            draws.append(qp);
+            qp.color = Qt::white;
+            qp.dst = QRectF(target.x() + std::fmod(t / 2.0, 1.0) * (target.width() - barW), target.y(), barW,
+                            target.height());
+            draws.append(qp);
+            qp.dst = QRectF(target.x(), target.y() + std::fmod(t / 3.0, 1.0) * (target.height() - barH),
+                            target.width(), barH);
+            draws.append(qp);
+            return;
+        }
         // Patterns are drawn for the target area; the panel map always covers the whole composition.
         const bool panelMap = clip.pattern == TestPattern::PanelMap;
         const QSize size = panelMap ? m_project.compSize() : target.size();
@@ -646,6 +667,22 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     }
 
     QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
+    if (p.maskToPanels && !p.walls.isEmpty()) {
+        // Multiply by white-where-there-are-panels: what the real wall can show, nothing else.
+        const QByteArray key = overlayKey();
+        if (key != m_maskKey || !m_maskTex) {
+            uploadImage(u, m_maskTex, Patterns::panelMask(p));
+            m_maskKey = key;
+        }
+        if (m_maskTex) {
+            RhiQuad::Params mask;
+            mask.target = compSize;
+            mask.dst = QRectF(QPointF(), compSize);
+            mask.texture = m_maskTex;
+            mask.blend = RhiQuad::Blend::Multiply;
+            compDraws.append(mask);
+        }
+    }
     if (p.panelOverlay && !p.walls.isEmpty()) {
         const QByteArray key = overlayKey();
         if (key != m_overlayKey || !m_overlayTex) {
@@ -730,6 +767,12 @@ QVector<RhiQuad::Params> RenderThread::screenDraws(const Screen &screen, const Q
         qp.texFlipY = m_rhi->isYUpInFramebuffer();
         qp.texture = m_comp.tex;
         qp.brightness = float(sl.brightness);
+        qp.colorCorrect = sl.hasColorCorrection();
+        qp.gain[0] = float(sl.gainR);
+        qp.gain[1] = float(sl.gainG);
+        qp.gain[2] = float(sl.gainB);
+        qp.gamma = float(sl.gamma);
+        qp.blackLevel = float(sl.blackLevel);
         draws.append(qp);
     }
     return draws;

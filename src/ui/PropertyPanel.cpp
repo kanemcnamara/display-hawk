@@ -1,7 +1,8 @@
-﻿#include "ui/PropertyPanel.h"
+#include "ui/PropertyPanel.h"
 
 #include "media/MediaSource.h"
 #include "render/RenderEngine.h"
+#include "ui/PanelGridEditor.h"
 #include "model/Document.h"
 
 #include <QCheckBox>
@@ -184,6 +185,9 @@ QWidget *PropertyPanel::buildCompositionPage()
     m_overlayOpacity = makeDouble(0, 100, 0, QStringLiteral(" %"));
     of->addRow(m_overlay);
     of->addRow(tr("Opacity"), m_overlayOpacity);
+    m_maskToPanels = new QCheckBox(tr("Black out areas without LED panels"));
+    m_maskToPanels->setToolTip(tr("Show only what the physical walls can display: gaps and cabinets marked as not fitted go black"));
+    of->addRow(m_maskToPanels);
     v->addWidget(overlay);
 
     auto *hint = new QLabel(tr("Content is played from the clip deck: select a layer or clip slot to edit it."));
@@ -224,6 +228,11 @@ QWidget *PropertyPanel::buildCompositionPage()
         p.panelOverlay = on;
         m_doc->notifyChanged();
     });
+    connect(m_maskToPanels, &QCheckBox::toggled, this, [this, &p](bool on) {
+        if (m_refreshing) return;
+        p.maskToPanels = on;
+        m_doc->notifyChanged();
+    });
     connect(m_overlayOpacity, &QDoubleSpinBox::valueChanged, this, [this, &p](double v) {
         if (m_refreshing) return;
         p.overlayOpacity = v / 100.0;
@@ -241,6 +250,7 @@ void PropertyPanel::refreshComposition()
     setButtonColor(m_compBg, p.background);
     m_overlay->setChecked(p.panelOverlay);
     setValue(m_overlayOpacity, qRound(p.overlayOpacity * 100.0));
+    m_maskToPanels->setChecked(p.maskToPanels);
 }
 
 // ---------------------------------------------------------------- Layer
@@ -342,7 +352,7 @@ QWidget *PropertyPanel::buildClipPage()
     auto *empty = new QGroupBox(tr("Empty clip slot"));
     auto *ef = new QFormLayout(empty);
     auto *newPattern = new QComboBox;
-    for (int i = 0; i <= int(TestPattern::Solid); ++i)
+    for (int i = 0; i < kTestPatternCount; ++i)
         newPattern->addItem(testPatternName(TestPattern(i)));
     auto *addPattern = new QPushButton(tr("Add"));
     auto *addMedia = new QPushButton(tr("Load media file..."));
@@ -357,7 +367,7 @@ QWidget *PropertyPanel::buildClipPage()
     m_source = new QComboBox;
     m_source->addItems({tr("Test pattern"), tr("Media file")});
     m_pattern = new QComboBox;
-    for (int i = 0; i <= int(TestPattern::Solid); ++i)
+    for (int i = 0; i < kTestPatternCount; ++i)
         m_pattern->addItem(testPatternName(TestPattern(i)));
     m_gridSpacing = makeSpin(4, 2048);
     m_solidColor = new QPushButton;
@@ -543,6 +553,22 @@ QWidget *PropertyPanel::buildWallPage()
     f->addRow(tr("Colour"), m_wallColor);
     v->addWidget(box);
 
+    auto *panelsBox = new QGroupBox(tr("Fitted panels"));
+    auto *pl = new QVBoxLayout(panelsBox);
+    m_panelGrid = new PanelGridEditor;
+    m_panelCount = new QLabel;
+    auto *allOn = new QPushButton(tr("All panels fitted"));
+    pl->addWidget(new QLabel(tr("Click or drag to mark cabinets that are not fitted (stepped or irregular walls).")));
+    pl->addWidget(m_panelGrid, 0, Qt::AlignLeft);
+    pl->addWidget(row({m_panelCount, allOn}));
+    v->addWidget(panelsBox);
+    connect(m_panelGrid, &PanelGridEditor::disabledChanged, this, [this](const QVector<QPoint> &off) {
+        editWall([&](LedWall &w) { w.disabledPanels = off; });
+    });
+    connect(allOn, &QPushButton::clicked, this, [this] {
+        editWall([](LedWall &w) { w.disabledPanels.clear(); });
+    });
+
     auto *infoBox = new QGroupBox(tr("Wall specs"));
     auto *il = new QVBoxLayout(infoBox);
     m_wallInfo = new QLabel;
@@ -645,6 +671,8 @@ void PropertyPanel::refreshWall()
     setValue(m_wallX, w->x);
     setValue(m_wallY, w->y);
     setButtonColor(m_wallColor, w->color);
+    m_panelGrid->setWall(w->cols, w->rows, w->disabledPanels, w->color);
+    m_panelCount->setText(tr("%1 of %2 fitted").arg(w->enabledPanelCount()).arg(w->cols * w->rows));
 
     int preset = 0;
     for (int i = 0; i < int(std::size(kPanelPresets)); ++i) {
@@ -667,12 +695,12 @@ void PropertyPanel::refreshWall()
            "<tr><td>Resolution</td><td><b>%1 x %2 px</b></td></tr>"
            "<tr><td>Pixel pitch</td><td>%3</td></tr>"
            "<tr><td>Physical size</td><td>%4 x %5 m (%6 m diagonal)</td></tr>"
-           "<tr><td>Area</td><td>%7 mÂ²</td></tr>"
+           "<tr><td>Area</td><td>%7 m²</td></tr>"
            "<tr><td>Aspect ratio</td><td>%8 : 1</td></tr>"
            "<tr><td>Panels</td><td>%9</td></tr>"
            "<tr><td>Total pixels</td><td>%10</td></tr>"
-           "<tr><td>Composition area</td><td>%11, %12 â†’ %13, %14</td></tr>"
-           "<tr><td>Est. 1G ports</td><td>%15 (â‰ˆ650k px/port @ 60 Hz)</td></tr>"
+           "<tr><td>Composition area</td><td>%11, %12 → %13, %14</td></tr>"
+           "<tr><td>Est. 1G ports</td><td>%15 (≈650k px/port @ 60 Hz)</td></tr>"
            "</table>")
             .arg(w->pixelWidth())
             .arg(w->pixelHeight())
@@ -682,7 +710,9 @@ void PropertyPanel::refreshWall()
             .arg(diag)
             .arg(w->widthM() * w->heightM(), 0, 'f', 2)
             .arg(aspect, 0, 'f', 3)
-            .arg(w->cols * w->rows)
+            .arg(w->enabledPanelCount() == w->cols * w->rows
+                     ? QString::number(w->cols * w->rows)
+                     : tr("%1 fitted of %2").arg(w->enabledPanelCount()).arg(w->cols * w->rows))
             .arg(QLocale().toString(w->totalPixels()))
             .arg(w->x)
             .arg(w->y)
@@ -886,7 +916,7 @@ QWidget *PropertyPanel::buildSlicePage()
     m_outW = makeSpin(1, 100000);
     m_outH = makeSpin(1, 100000);
     m_rotation = new QComboBox;
-    m_rotation->addItems({QStringLiteral("0Â°"), QStringLiteral("90Â° CW"), QStringLiteral("180Â°"), QStringLiteral("270Â° CW")});
+    m_rotation->addItems({QStringLiteral("0°"), QStringLiteral("90° CW"), QStringLiteral("180°"), QStringLiteral("270° CW")});
     m_flipH = new QCheckBox(tr("Flip horizontal"));
     m_flipV = new QCheckBox(tr("Flip vertical"));
     m_brightness = makeDouble(0, 200, 0, QStringLiteral(" %"));
@@ -901,7 +931,45 @@ QWidget *PropertyPanel::buildSlicePage()
     outf->addRow(oneToOne);
     outf->addRow(row({fitScreen, fillScreen}));
     v->addWidget(out);
+
+    auto *colour = new QGroupBox(tr("Colour correction"));
+    colour->setToolTip(tr("Match cabinets from different batches, or this wall to its neighbours"));
+    auto *cf = new QFormLayout(colour);
+    m_gainR = makeDouble(0, 200, 1, QStringLiteral(" %"));
+    m_gainG = makeDouble(0, 200, 1, QStringLiteral(" %"));
+    m_gainB = makeDouble(0, 200, 1, QStringLiteral(" %"));
+    m_gamma = makeDouble(0.2, 3.0, 2, QString());
+    m_gamma->setSingleStep(0.05);
+    m_gamma->setToolTip(tr("Exponent applied after the gains: above 1 darkens mid-tones, below 1 lifts them"));
+    m_blackLevel = makeDouble(0, 50, 1, QStringLiteral(" %"));
+    auto *resetColour = new QPushButton(tr("Reset"));
+    cf->addRow(tr("Red gain"), m_gainR);
+    cf->addRow(tr("Green gain"), m_gainG);
+    cf->addRow(tr("Blue gain"), m_gainB);
+    cf->addRow(tr("Gamma"), m_gamma);
+    cf->addRow(tr("Black level"), m_blackLevel);
+    cf->addRow(resetColour);
+    v->addWidget(colour);
     v->addStretch();
+
+    auto colourField = [this](QDoubleSpinBox *s, double Slice::*field, double scale) {
+        connect(s, &QDoubleSpinBox::valueChanged, this, [this, field, scale](double value) {
+            if (!m_refreshing)
+                editSlice([&](Slice &sl) { sl.*field = value / scale; });
+        });
+    };
+    colourField(m_gainR, &Slice::gainR, 100.0);
+    colourField(m_gainG, &Slice::gainG, 100.0);
+    colourField(m_gainB, &Slice::gainB, 100.0);
+    colourField(m_gamma, &Slice::gamma, 1.0);
+    colourField(m_blackLevel, &Slice::blackLevel, 100.0);
+    connect(resetColour, &QPushButton::clicked, this, [this] {
+        editSlice([](Slice &sl) {
+            sl.gainR = sl.gainG = sl.gainB = 1.0;
+            sl.gamma = 1.0;
+            sl.blackLevel = 0.0;
+        });
+    });
 
     connect(m_sliceName, &QLineEdit::textEdited, this, [this](const QString &t) {
         Slice *sl = m_doc->selectedSlice();
@@ -1021,6 +1089,11 @@ void PropertyPanel::refreshSlice()
     m_flipH->setChecked(s->flipH);
     m_flipV->setChecked(s->flipV);
     setValue(m_brightness, qRound(s->brightness * 100.0));
+    setValue(m_gainR, s->gainR * 100.0);
+    setValue(m_gainG, s->gainG * 100.0);
+    setValue(m_gainB, s->gainB * 100.0);
+    setValue(m_gamma, s->gamma);
+    setValue(m_blackLevel, s->blackLevel * 100.0);
 
     const Project &p = m_doc->project();
     const int prev = m_sliceWall->currentData().toInt();

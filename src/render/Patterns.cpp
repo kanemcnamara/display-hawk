@@ -124,6 +124,16 @@ QImage generate(const Project &project, const Clip &c, QSize size)
     case TestPattern::Gradient: return gradient(size);
     case TestPattern::Checker: return checker(size, qMax(1, c.gridSpacing));
     case TestPattern::PanelMap: return panelMap(project, false);
+    case TestPattern::MovingBars: {
+        // The bars themselves are drawn live by the renderer; this still frame is for thumbnails.
+        QImage img(size, QImage::Format_ARGB32_Premultiplied);
+        img.fill(Qt::black);
+        QPainter p(&img);
+        const int bar = qMax(4, size.width() / 64);
+        p.fillRect(QRect(size.width() / 3, 0, bar, size.height()), Qt::white);
+        p.fillRect(QRect(0, size.height() * 2 / 3, size.width(), qMax(4, size.height() / 36)), Qt::white);
+        return img;
+    }
     case TestPattern::Solid: {
         QImage img(size, QImage::Format_ARGB32_Premultiplied);
         img.fill(c.solidColor);
@@ -141,10 +151,21 @@ QImage panelMap(const Project &project, bool transparentBackground)
 
     for (const LedWall &w : project.walls) {
         const int fontPx = qMin(w.panelPxW, w.panelPxH) / 4;
-        int number = 1;
+        int number = 1; // only fitted cabinets are numbered
         for (int r = 0; r < w.rows; ++r) {
-            for (int c = 0; c < w.cols; ++c, ++number) {
-                const QRect pr(w.x + c * w.panelPxW, w.y + r * w.panelPxH, w.panelPxW, w.panelPxH);
+            for (int c = 0; c < w.cols; ++c) {
+                const QRect pr = w.panelRect(c, r);
+                if (!w.panelEnabled(c, r)) {
+                    // Not fitted: dark, crossed out.
+                    if (!transparentBackground)
+                        p.fillRect(pr, QColor(12, 12, 12));
+                    p.setPen(QPen(QColor(120, 120, 120, 200), 1, Qt::DashLine));
+                    p.drawRect(pr.adjusted(0, 0, -1, -1));
+                    p.drawLine(pr.topLeft(), pr.bottomRight());
+                    p.drawLine(pr.topRight(), pr.bottomLeft());
+                    continue;
+                }
+                ++number;
                 if (!transparentBackground) {
                     const QColor fill = (r + c) % 2 == 0 ? w.color.darker(160) : w.color.darker(260);
                     p.fillRect(pr, fill);
@@ -154,7 +175,7 @@ QImage panelMap(const Project &project, bool transparentBackground)
                 if (fontPx >= 6) {
                     const QRect top = pr.adjusted(0, 0, 0, -pr.height() / 3);
                     const QRect bottom = pr.adjusted(0, pr.height() * 2 / 3 - fontPx / 2, 0, 0);
-                    drawLabel(p, top, QString::number(number), fontPx);
+                    drawLabel(p, top, QString::number(number - 1), fontPx);
                     p.setFont(pixelFont(fontPx / 2, false));
                     p.setPen(QColor(230, 230, 230));
                     p.drawText(bottom, Qt::AlignHCenter | Qt::AlignTop,
@@ -178,6 +199,19 @@ QImage panelMap(const Project &project, bool transparentBackground)
         p.setPen(Qt::white);
         p.drawText(nameRect, Qt::AlignLeft | Qt::AlignTop, label);
     }
+    return img;
+}
+
+QImage panelMask(const Project &project)
+{
+    QImage img(project.compSize().expandedTo(QSize(1, 1)), QImage::Format_ARGB32_Premultiplied);
+    img.fill(Qt::black);
+    QPainter p(&img);
+    for (const LedWall &w : project.walls)
+        for (int r = 0; r < w.rows; ++r)
+            for (int c = 0; c < w.cols; ++c)
+                if (w.panelEnabled(c, r))
+                    p.fillRect(w.panelRect(c, r), Qt::white);
     return img;
 }
 

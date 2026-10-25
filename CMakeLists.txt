@@ -42,8 +42,12 @@ qt_add_executable(DisplayHawk
     src/ui/ClipDeck.cpp
     src/ui/IdentifyOverlay.h
     src/ui/IdentifyOverlay.cpp
+    src/ui/PanelGridEditor.h
+    src/ui/PanelGridEditor.cpp
     src/ui/OutputWindow.h
     src/ui/OutputWindow.cpp
+    src/ui/ReportExporter.h
+    src/ui/ReportExporter.cpp
     src/ui/PropertyPanel.h
     src/ui/PropertyPanel.cpp
 )

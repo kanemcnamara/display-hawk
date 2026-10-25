@@ -10,6 +10,8 @@ layout(std140, binding = 0) uniform Buf {
     vec4 params;    // target width, target height, opacity, brightness
     ivec4 flags;    // rotation (quarter turns CW), flipH, flipV, texFlipY
     ivec4 flags2;   // useTex
+    vec4 gain;      // per-channel gain (slice colour correction)
+    vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
 } ubuf;
 
 void main()

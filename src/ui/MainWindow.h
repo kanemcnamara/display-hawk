@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QMainWindow>
 #include <QPointer>
@@ -46,6 +46,7 @@ private:
     bool openPath(const QString &path);
     bool saveProject();
     bool saveProjectAs();
+    void exportReport();
     void rememberProject(const QString &path);
     static QString autosavePath();
 

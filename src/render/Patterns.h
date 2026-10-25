@@ -12,4 +12,7 @@ QImage generate(const Project &project, const Clip &clip, QSize size);
 // Full-composition image with every LED wall's panels coloured, outlined and numbered.
 QImage panelMap(const Project &project, bool transparentBackground);
 
+// White where an enabled LED panel is, black elsewhere (multiplied over the composition).
+QImage panelMask(const Project &project);
+
 } // namespace Patterns

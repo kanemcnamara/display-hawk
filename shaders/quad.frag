@@ -11,6 +11,8 @@ layout(std140, binding = 0) uniform Buf {
     vec4 params;  // target w, target h, opacity, brightness
     ivec4 flags;
     ivec4 flags2; // useTex, input mode (see below)
+    vec4 gain;      // per-channel gain (slice colour correction)
+    vec4 grade;     // x gamma exponent, y black level, z 1 = correction enabled
 } ubuf;
 
 layout(binding = 1) uniform sampler2D tex;
@@ -30,6 +32,12 @@ void main()
         // For a MIN (darken) blend, transparent areas must be white so they leave the destination alone.
         if (mode == 2)
             c.rgb += 1.0 - c.a;
+    }
+    if (ubuf.grade.z > 0.5) {
+        // LED colour correction: channel gains, then a gamma exponent, then lifted black level.
+        vec3 rgb = clamp(c.rgb * ubuf.gain.rgb, 0.0, 1.0);
+        rgb = pow(rgb, vec3(ubuf.grade.x));
+        c.rgb = ubuf.grade.y + (1.0 - ubuf.grade.y) * rgb;
     }
     fragColor = c;
 }

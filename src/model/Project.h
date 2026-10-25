@@ -1,13 +1,15 @@
-#pragma once
+﻿#pragma once
 
 #include <QColor>
 #include <QJsonObject>
+#include <QPoint>
 #include <QRect>
 #include <QString>
 #include <QVector>
 
 enum class ContentSource { TestPattern = 0, Media = 1 };
-enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid };
+enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid, MovingBars };
+constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
 enum class BlendMode { Normal = 0, Add, Screen, Multiply, Lighten, Darken };
 
@@ -28,14 +30,20 @@ struct LedWall {
     int x = 0; // top-left position in the composition (pixels)
     int y = 0;
     QColor color = QColor(0, 190, 255);
+    // Cabinets that are not fitted (stepped or irregular walls), as (column, row).
+    QVector<QPoint> disabledPanels;
 
+    bool panelEnabled(int col, int row) const { return !disabledPanels.contains(QPoint(col, row)); }
+    QRect panelRect(int col, int row) const { return QRect(x + col * panelPxW, y + row * panelPxH, panelPxW, panelPxH); }
+    int enabledPanelCount() const;
     int pixelWidth() const { return panelPxW * cols; }
     int pixelHeight() const { return panelPxH * rows; }
     QRect rect() const { return QRect(x, y, pixelWidth(), pixelHeight()); }
     double pitchMm() const { return panelPxW > 0 ? panelMmW / panelPxW : 0.0; }
     double widthM() const { return panelMmW * cols / 1000.0; }
     double heightM() const { return panelMmH * rows / 1000.0; }
-    qint64 totalPixels() const { return qint64(pixelWidth()) * pixelHeight(); }
+    // Pixels actually driven: enabled panels only.
+    qint64 totalPixels() const { return qint64(enabledPanelCount()) * panelPxW * panelPxH; }
 };
 
 // Copies a rectangle of the composition onto a rectangle of a screen.
@@ -48,6 +56,15 @@ struct Slice {
     bool flipH = false;
     bool flipV = false;
     double brightness = 1.0;
+    // LED colour correction, for matching cabinets or batches.
+    double gainR = 1.0, gainG = 1.0, gainB = 1.0;
+    double gamma = 1.0;      // exponent applied after the gains; > 1 darkens the mid-tones
+    double blackLevel = 0.0; // lifts black, 0..0.5
+
+    bool hasColorCorrection() const
+    {
+        return gainR != 1.0 || gainG != 1.0 || gainB != 1.0 || gamma != 1.0 || blackLevel != 0.0;
+    }
 };
 
 // A physical video output (graphics card output feeding an LED processor or projector).
@@ -99,6 +116,7 @@ struct Project {
     int compHeight = 1080;
     QColor background = Qt::black;
     bool panelOverlay = false;
+    bool maskToPanels = false; // black out everything that is not an enabled LED panel
     double overlayOpacity = 0.6;
     QVector<LedWall> walls;
     QVector<Screen> screens;

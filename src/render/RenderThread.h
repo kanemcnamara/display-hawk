@@ -142,6 +142,8 @@ private:
     qint64 m_lastGc = 0;
     QRhiTexture *m_overlayTex = nullptr;
     QByteArray m_overlayKey;
+    QRhiTexture *m_maskTex = nullptr;
+    QByteArray m_maskKey;
     QRhiReadbackResult m_readback[2];
     bool m_readbackPending[2] = {false, false};
     bool m_readbackDone[2] = {false, false};

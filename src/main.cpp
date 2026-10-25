@@ -1,6 +1,7 @@
 ﻿#include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include "ui/ReportExporter.h"
 
 #include <QApplication>
 #include <QDir>
@@ -200,7 +201,88 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     save(previews[0], "deck-after-crossfade");
     check(faded, "crossfade finishes on the new clip");
 
-    // The app's own window (not the desktop), for checking the UI layout.
+    // LED tools. Colour correction: with red and blue gain at 0 only green may reach the output.
+    {
+        Slice &sl = doc.project().screens[0].slices[0];
+        sl.gainR = 0.0;
+        sl.gainB = 0.0;
+        doc.notifyChanged();
+        auto onlyGreen = [&] {
+            const QImage &img = previews[1];
+            if (img.isNull())
+                return false;
+            int coloured = 0, greenish = 0;
+            for (int y = 0; y < img.height(); y += 3)
+                for (int x = 0; x < img.width(); x += 3) {
+                    const QColor c(img.pixel(x, y));
+                    if (c.green() > 40) {
+                        ++greenish;
+                        coloured += (c.red() > 12 || c.blue() > 12) ? 1 : 0;
+                    }
+                }
+            return greenish > 100 && coloured == 0;
+        };
+        const bool graded = waitFor(onlyGreen);
+        save(previews[1], "led-colour-correction");
+        check(graded, "slice colour correction (red/blue gain 0)");
+        sl.gainR = sl.gainB = 1.0;
+        doc.notifyChanged();
+    }
+    // Moving bars must move.
+    {
+        doc.setClip(0, 4, Clip::fromPattern(TestPattern::MovingBars));
+        doc.triggerClip(0, 4);
+        waitFor([&] { return litPercent(previews[0]) < 30 && litPercent(previews[0]) > 0; });
+        const QImage a = previews[0];
+        waitMs(500);
+        save(previews[0], "led-moving-bars");
+        check(!a.isNull() && a != previews[0], "moving bars pattern moves");
+    }
+    // Irregular walls: with masking on, a cabinet marked not fitted goes black.
+    {
+        LedWall &w = doc.project().walls[0];
+        const QRect panel = w.panelRect(2, 1);
+        const QRect neighbour = w.panelRect(3, 1);
+        auto panelPixel = [&](const QRect &r) {
+            const QImage &img = previews[0];
+            if (img.isNull())
+                return QColor();
+            const QPointF c = QRectF(r).center();
+            return QColor(img.pixel(int(c.x() * img.width() / doc.project().compWidth),
+                                    int(c.y() * img.height() / doc.project().compHeight)));
+        };
+        doc.triggerClip(0, 2); // colour bars: both cabinets are lit
+        const bool litBefore = waitFor([&] {
+            return qGray(panelPixel(panel).rgb()) > 100 && qGray(panelPixel(neighbour).rgb()) > 100;
+        });
+        w.disabledPanels = {QPoint(2, 1)};
+        doc.project().maskToPanels = true;
+        doc.notifyChanged();
+        const bool ok = litBefore && waitFor([&] {
+            return qGray(panelPixel(panel).rgb()) < 8 && qGray(panelPixel(neighbour).rgb()) > 100;
+        });
+        save(previews[0], "led-panel-mask");
+        check(ok, "panel mask blacks out a cabinet that is not fitted");
+        w.disabledPanels.clear();
+        doc.project().maskToPanels = false;
+        doc.notifyChanged();
+    }
+    // Setup report.
+    {
+        QString error;
+        const QStringList files =
+            ReportExporter::exportReport(doc.project(), outDir + QStringLiteral("/report"), QStringLiteral("selftest"), &error);
+        const QFileInfo pdf(outDir + QStringLiteral("/report/selftest-report.pdf"));
+        qInfo("selftest: report wrote %d files, PDF %lld bytes %s", int(files.size()), pdf.size(), qPrintable(error));
+        check(files.size() >= 4 && pdf.size() > 20000, "setup report export (PDF, PNGs, CSV)");
+    }
+
+    // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
+    // cabinet marked as not fitted so the panel grid editor shows both states.
+    doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
+    doc.notifyChanged();
+    doc.select(Selection::ofWall(0));
+    waitMs(300);
     window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));
     window.setLive(false);
     return ok ? 0 : 1;

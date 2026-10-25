@@ -1,4 +1,4 @@
-#include "ui/ClipDeck.h"
+﻿#include "ui/ClipDeck.h"
 
 #include "model/Document.h"
 #include "render/Patterns.h"
@@ -296,7 +296,7 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         QFont f = p.font();
         f.setPixelSize(22);
         p.setFont(f);
-        p.drawText(pm.rect().adjusted(0, -8, 0, -8), Qt::AlignCenter, QStringLiteral("▶"));
+        p.drawText(pm.rect().adjusted(0, -8, 0, -8), Qt::AlignCenter, QStringLiteral("â–¶"));
         f.setPixelSize(10);
         p.setFont(f);
         const QString ext = QFileInfo(clip.mediaPath).suffix().toUpper();
@@ -446,7 +446,7 @@ void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
         menu.addAction(tr("Trigger"), this, [this, layer, column] { m_doc->triggerClip(layer, column); });
     menu.addAction(tr("Load media..."), this, [this, layer, column] { browseInto(layer, column); });
     QMenu *patterns = menu.addMenu(tr("Test pattern"));
-    for (int i = 0; i <= int(TestPattern::Solid); ++i) {
+    for (int i = 0; i < kTestPatternCount; ++i) {
         patterns->addAction(testPatternName(TestPattern(i)), this, [this, layer, column, i] {
             m_doc->setClip(layer, column, Clip::fromPattern(TestPattern(i)));
         });

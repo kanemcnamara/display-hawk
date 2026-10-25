@@ -31,6 +31,11 @@ public:
         float brightness = 1.0f;
         QRect clip;                // scissor in target pixels (top-left origin); empty = none
         Blend blend = Blend::Straight;
+        // LED colour correction (slices): channel gains, gamma exponent, black level.
+        bool colorCorrect = false;
+        float gain[3] = {1.0f, 1.0f, 1.0f};
+        float gamma = 1.0f;
+        float blackLevel = 0.0f;
     };
 
     bool init(QRhi *rhi);

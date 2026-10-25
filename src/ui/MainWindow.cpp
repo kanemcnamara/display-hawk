@@ -7,12 +7,16 @@
 #include "ui/IdentifyOverlay.h"
 #include "ui/OutputWindow.h"
 #include "ui/PropertyPanel.h"
+#include "ui/ReportExporter.h"
 
 #include <QAction>
 #include <QApplication>
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDesktopServices>
+#include <QPushButton>
+#include <QUrl>
 #include <QDir>
 #include <QDockWidget>
 #include <QFileDialog>
@@ -200,6 +204,7 @@ void MainWindow::buildActions()
     QAction *openAct = file->addAction(tr("&Open..."), QKeySequence::Open, this, &MainWindow::openProject);
     QAction *saveAct = file->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::saveProject);
     file->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::saveProjectAs);
+    file->addAction(tr("Export setup &report..."), this, &MainWindow::exportReport);
     file->addSeparator();
     m_reopenLastAction = file->addAction(tr("Reopen last setup on launch"));
     m_reopenLastAction->setCheckable(true);
@@ -587,6 +592,36 @@ bool MainWindow::saveProjectAs()
     const QString start = m_doc->filePath().isEmpty() ? QStringLiteral("setup.dhawk") : m_doc->filePath();
     const QString path = QFileDialog::getSaveFileName(this, tr("Save setup"), start, tr("Display Hawk setup (*.dhawk)"));
     return !path.isEmpty() && saveTo(path);
+}
+
+void MainWindow::exportReport()
+{
+    const QString start = m_doc->filePath().isEmpty() ? QString() : QFileInfo(m_doc->filePath()).absolutePath();
+    const QString dir = QFileDialog::getExistingDirectory(this, tr("Export setup report to"), start);
+    if (dir.isEmpty())
+        return;
+    const QString base = m_doc->filePath().isEmpty() ? QStringLiteral("display-hawk")
+                                                     : QFileInfo(m_doc->filePath()).completeBaseName();
+    QString error;
+    const QStringList files = ReportExporter::exportReport(m_doc->project(), dir, base, &error);
+    if (files.isEmpty()) {
+        QMessageBox::warning(this, tr("Export failed"), error);
+        return;
+    }
+    QMessageBox box(QMessageBox::Information, tr("Setup report exported"),
+                    tr("Wrote %n file(s) to %1:\n\n%2", nullptr, int(files.size()))
+                        .arg(QDir::toNativeSeparators(dir),
+                             [&files] {
+                                 QStringList names;
+                                 for (const QString &f : files)
+                                     names << QFileInfo(f).fileName();
+                                 return names.join(QLatin1Char('\n'));
+                             }()),
+                    QMessageBox::Ok, this);
+    QPushButton *open = box.addButton(tr("Open folder"), QMessageBox::ActionRole);
+    box.exec();
+    if (box.clickedButton() == open)
+        QDesktopServices::openUrl(QUrl::fromLocalFile(dir));
 }
 
 void MainWindow::closeEvent(QCloseEvent *e)

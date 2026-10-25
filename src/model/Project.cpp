@@ -1,4 +1,4 @@
-#include "model/Project.h"
+﻿#include "model/Project.h"
 
 #include <QFileInfo>
 #include <QJsonArray>
@@ -13,6 +13,7 @@ QString testPatternName(TestPattern p)
     case TestPattern::Checker: return QStringLiteral("Checkerboard");
     case TestPattern::PanelMap: return QStringLiteral("LED Panel Map");
     case TestPattern::Solid: return QStringLiteral("Solid Colour");
+    case TestPattern::MovingBars: return QStringLiteral("Moving Bars (sync check)");
     }
     return {};
 }
@@ -71,6 +72,15 @@ Clip Clip::fromMedia(const QString &path)
     c.source = ContentSource::Media;
     c.mediaPath = path;
     return c;
+}
+
+int LedWall::enabledPanelCount() const
+{
+    int off = 0;
+    for (const QPoint &p : disabledPanels)
+        if (p.x() >= 0 && p.x() < cols && p.y() >= 0 && p.y() < rows)
+            ++off;
+    return cols * rows - off;
 }
 
 const Clip *Layer::activeClip() const
@@ -159,6 +169,7 @@ QJsonObject Project::toJson() const
                                       {"background", background.name()},
                                       {"panelOverlay", panelOverlay},
                                       {"overlayOpacity", overlayOpacity},
+                                      {"maskToPanels", maskToPanels},
                                       {"master", master},
                                       {"blackout", blackout}};
 
@@ -173,7 +184,13 @@ QJsonObject Project::toJson() const
                                    {"panelMmH", w.panelMmH},
                                    {"x", w.x},
                                    {"y", w.y},
-                                   {"color", w.color.name()}});
+                                   {"color", w.color.name()},
+                                   {"disabledPanels", [&w] {
+                                        QJsonArray a;
+                                        for (const QPoint &p : w.disabledPanels)
+                                            a.append(QJsonArray{p.x(), p.y()});
+                                        return a;
+                                    }()}});
     }
     root["walls"] = wallArr;
 
@@ -188,7 +205,12 @@ QJsonObject Project::toJson() const
                                         {"rotation", sl.rotation},
                                         {"flipH", sl.flipH},
                                         {"flipV", sl.flipV},
-                                        {"brightness", sl.brightness}});
+                                        {"brightness", sl.brightness},
+                                        {"gainR", sl.gainR},
+                                        {"gainG", sl.gainG},
+                                        {"gainB", sl.gainB},
+                                        {"gamma", sl.gamma},
+                                        {"blackLevel", sl.blackLevel}});
         }
         screenArr.append(QJsonObject{{"name", s.name},
                                      {"width", s.width},
@@ -228,6 +250,7 @@ Project Project::fromJson(const QJsonObject &root)
     p.background = QColor(comp["background"].toString("#000000"));
     p.panelOverlay = comp["panelOverlay"].toBool(false);
     p.overlayOpacity = comp["overlayOpacity"].toDouble(0.6);
+    p.maskToPanels = comp["maskToPanels"].toBool(false);
     p.master = comp["master"].toDouble(1.0);
     p.blackout = comp["blackout"].toBool(false);
 
@@ -244,6 +267,10 @@ Project Project::fromJson(const QJsonObject &root)
         w.x = o["x"].toInt();
         w.y = o["y"].toInt();
         w.color = QColor(o["color"].toString(w.color.name()));
+        for (const QJsonValue &pv : o["disabledPanels"].toArray()) {
+            const QJsonArray xy = pv.toArray();
+            w.disabledPanels.append(QPoint(xy.at(0).toInt(), xy.at(1).toInt()));
+        }
         p.walls.append(w);
     }
 
@@ -266,6 +293,11 @@ Project Project::fromJson(const QJsonObject &root)
             sl.flipH = so["flipH"].toBool(false);
             sl.flipV = so["flipV"].toBool(false);
             sl.brightness = so["brightness"].toDouble(1.0);
+            sl.gainR = so["gainR"].toDouble(1.0);
+            sl.gainG = so["gainG"].toDouble(1.0);
+            sl.gainB = so["gainB"].toDouble(1.0);
+            sl.gamma = qBound(0.1, so["gamma"].toDouble(1.0), 5.0);
+            sl.blackLevel = qBound(0.0, so["blackLevel"].toDouble(0.0), 0.5);
             s.slices.append(sl);
         }
         p.screens.append(s);
