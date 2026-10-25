@@ -15,7 +15,7 @@ namespace {
 id<MTLDevice> deviceOf(QRhi *rhi)
 {
     const auto *h = static_cast<const QRhiMetalNativeHandles *>(rhi->nativeHandles());
-    return h ? (__bridge id<MTLDevice>)h->dev : nil;
+    return h ? (id<MTLDevice>)h->dev : nil; // Qt declares these as Objective-C object pointers
 }
 
 QString keyFor(NSDictionary *description)
@@ -48,7 +48,7 @@ public:
         id<MTLTexture> t = (__bridge id<MTLTexture>)reinterpret_cast<void *>(texture->nativeTexture().object);
         if (h && h->commandBuffer && t) {
             [m_server publishFrameTexture:t
-                          onCommandBuffer:(__bridge id<MTLCommandBuffer>)h->commandBuffer
+                          onCommandBuffer:(id<MTLCommandBuffer>)h->commandBuffer
                               imageRegion:NSMakeRect(0, 0, t.width, t.height)
                                   flipped:NO];
         }
