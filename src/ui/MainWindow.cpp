@@ -1,5 +1,7 @@
 #include "ui/MainWindow.h"
 
+#include <QSet>
+
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "audio/AudioReactive.h"
@@ -49,6 +51,7 @@ namespace {
 constexpr int kKindRole = Qt::UserRole;
 constexpr int kARole = Qt::UserRole + 1;
 constexpr int kBRole = Qt::UserRole + 2;
+constexpr int kGroupRole = Qt::UserRole + 3; // cabinet group nodes: "screen:wall"
 constexpr int kAutosaveMs = 15000;
 
 const char *kSettingLastProject = "lastProject";
@@ -345,6 +348,11 @@ void MainWindow::rebuildTree()
 {
     m_syncingTree = true;
     const Project &p = m_doc->project();
+    // Cabinet groups stay as the user left them (collapsed by default).
+    QSet<QString> expandedGroups;
+    for (QTreeWidgetItemIterator it(m_tree); *it; ++it)
+        if ((*it)->isExpanded() && !(*it)->data(0, kGroupRole).toString().isEmpty())
+            expandedGroups.insert((*it)->data(0, kGroupRole).toString());
     m_tree->clear();
 
     auto *comp = makeItem(nullptr, tr("Composition"), QStringLiteral("%1 x %2").arg(p.compWidth).arg(p.compHeight),
@@ -360,21 +368,41 @@ void MainWindow::rebuildTree()
         it->setForeground(0, w.color);
     }
 
+    QVector<QTreeWidgetItem *> collapsed;
     auto *screens = makeItem(nullptr, tr("Screens"), QString::number(p.screens.size()), Selection::None);
     m_tree->addTopLevelItem(screens);
     for (int s = 0; s < p.screens.size(); ++s) {
         const Screen &sc = p.screens[s];
         auto *si = makeItem(screens, sc.name, QStringLiteral("%1 x %2").arg(sc.width).arg(sc.height),
                             Selection::Screen, s);
+        QHash<int, QTreeWidgetItem *> groups; // wall -> its cabinet slices' node
         for (int i = 0; i < sc.slices.size(); ++i) {
             const Slice &sl = sc.slices[i];
-            auto *it = makeItem(si, sl.name, QStringLiteral("%1 x %2").arg(sl.output.width()).arg(sl.output.height()),
+            QTreeWidgetItem *parent = si;
+            if (sl.isCabinet()) {
+                QTreeWidgetItem *&g = groups[sl.wall];
+                if (!g) {
+                    const QString wallName = sl.wall < p.walls.size() ? p.walls[sl.wall].name : QString();
+                    g = makeItem(si, tr("%1 cabinets").arg(wallName), QString(), Selection::Screen, s);
+                    const QString key = QStringLiteral("%1:%2").arg(s).arg(sl.wall);
+                    g->setData(0, kGroupRole, key);
+                    if (!expandedGroups.contains(key))
+                        collapsed << g;
+                }
+                parent = g;
+            }
+            const QString label = sl.isCabinet() && sl.port > 0 ? tr("%1  (port %2)").arg(sl.name).arg(sl.port) : sl.name;
+            auto *it = makeItem(parent, label, QStringLiteral("%1 x %2").arg(sl.output.width()).arg(sl.output.height()),
                                 Selection::Slice, s, i);
             if (!sl.enabled)
                 it->setForeground(0, QColor(130, 130, 130));
         }
+        for (auto g = groups.cbegin(); g != groups.cend(); ++g)
+            g.value()->setText(1, QString::number(g.value()->childCount()));
     }
     m_tree->expandAll();
+    for (QTreeWidgetItem *g : std::as_const(collapsed))
+        g->setExpanded(false);
     m_syncingTree = false;
     syncTreeSelection();
 }
@@ -385,7 +413,8 @@ void MainWindow::syncTreeSelection()
     const Selection sel = m_doc->selection();
     QTreeWidgetItemIterator it(m_tree);
     while (*it) {
-        if (selectionOf(*it) == sel) {
+        // Group nodes stand for their screen; the screen's own row wins.
+        if (selectionOf(*it) == sel && (*it)->data(0, kGroupRole).toString().isEmpty()) {
             m_tree->setCurrentItem(*it);
             break;
         }
