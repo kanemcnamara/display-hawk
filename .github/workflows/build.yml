@@ -1,0 +1,82 @@
+﻿name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2022
+            arch: win64_msvc2022_64
+          - os: macos-14
+            arch: clang_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: 6.8.3
+          arch: ${{ matrix.arch }}
+          modules: qtmultimedia qtshadertools
+          cache: true
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+
+      - name: Install Ninja
+        run: pip install ninja
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Deploy (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item build/DisplayHawk.exe dist/
+          windeployqt --no-translations dist/DisplayHawk.exe
+
+      - name: Deploy (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir dist && cp -R build/DisplayHawk.app dist/
+          macdeployqt dist/DisplayHawk.app
+
+      # CI runners have no real GPU (WARP on Windows, a paravirtual device on macOS), so the
+      # rendering self-test is informative rather than a gate.
+      - name: Self-test (Windows)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $p = Start-Process dist/DisplayHawk.exe -ArgumentList '--selftest', "$PWD/selftest" -PassThru
+          if (-not $p.WaitForExit(60000)) { $p.Kill(); exit 1 }
+          Get-Content "$env:LOCALAPPDATA/Display Hawk/Display Hawk/displayhawk.log"
+          exit $p.ExitCode
+
+      - name: Self-test (macOS)
+        if: runner.os == 'macOS'
+        continue-on-error: true
+        run: |
+          ./dist/DisplayHawk.app/Contents/MacOS/DisplayHawk --selftest "$PWD/selftest" &
+          pid=$!; (sleep 60; kill $pid 2>/dev/null) &
+          code=0; wait $pid || code=$?
+          cat "$HOME/Library/Application Support/Display Hawk/Display Hawk/displayhawk.log" || true
+          exit $code
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DisplayHawk-${{ runner.os }}
+          path: |
+            dist/
+            selftest/
+          if-no-files-found: ignore
