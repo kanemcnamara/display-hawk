@@ -172,6 +172,34 @@ struct DmxPatch {
     int channelCount() const { return 3 + 3 * layers; }
 };
 
+// Audio-reactive links: an analysed audio input signal driving something in the show.
+enum class AudioSignal { Level = 0, Bass, Mid, Treble, Beat };
+enum class AudioTarget {
+    LayerOpacity = 0, // modulates the layer's opacity (multiplier, the fader stays put)
+    Master,           // modulates the master
+    NextColumn,       // on each beat: trigger the next column that has clips
+    NextClip,         // on each beat: the layer plays its next clip
+};
+constexpr int kAudioSignalCount = int(AudioSignal::Beat) + 1;
+constexpr int kAudioTargetCount = int(AudioTarget::NextClip) + 1;
+QString audioSignalName(AudioSignal s);
+QString audioTargetName(AudioTarget t);
+inline bool audioTargetIsBeat(AudioTarget t) { return t == AudioTarget::NextColumn || t == AudioTarget::NextClip; }
+inline bool audioTargetUsesLayer(AudioTarget t) { return t == AudioTarget::LayerOpacity || t == AudioTarget::NextClip; }
+
+struct AudioLink {
+    AudioSignal signal = AudioSignal::Bass;
+    AudioTarget target = AudioTarget::LayerOpacity;
+    int layer = 0;       // 0-based
+    double amount = 1.0; // 0..1: how deep the modulation goes (ignored for beat targets)
+};
+
+struct AudioReactiveSettings {
+    bool enabled = false;
+    double sensitivity = 1.0; // input gain before analysis
+    QVector<AudioLink> links;
+};
+
 struct Project {
     int compWidth = 1920;
     int compHeight = 1080;
@@ -187,6 +215,7 @@ struct Project {
     double master = 1.0; // playback state
     QVector<ControlMapping> controls; // MIDI mappings for this show
     DmxPatch dmx;
+    AudioReactiveSettings audioReactive;
     bool blackout = false; // playback state
     double audioMaster = 1.0; // playback state
     bool audioMuted = false;  // playback state

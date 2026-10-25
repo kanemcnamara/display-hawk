@@ -35,6 +35,7 @@ public:
     void setPreview(int view, const PreviewRequest &request);
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
+    void setModulation(double master, const QVector<double> &layerOpacity);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -104,6 +105,10 @@ private:
     bool m_ndiDirty = false;
     QVector<QPair<int, QString>> m_sharedShare;
     bool m_shareDirty = false;
+    double m_sharedMasterMod = 1.0;
+    QVector<double> m_sharedLayerMod;
+    double m_masterMod = 1.0;      // render-thread copies
+    QVector<double> m_layerMod;
 
     QSemaphore m_initDone;
     bool m_initOk = false;

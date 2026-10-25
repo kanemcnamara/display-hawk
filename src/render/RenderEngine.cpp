@@ -306,6 +306,12 @@ void RenderEngine::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
         m_thread->setShareOutputs(outputs);
 }
 
+void RenderEngine::setModulation(double master, const QVector<double> &layerOpacity)
+{
+    if (m_thread)
+        m_thread->setModulation(master, layerOpacity);
+}
+
 void RenderEngine::pushProject()
 {
     if (m_thread)

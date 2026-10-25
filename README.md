@@ -29,6 +29,15 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 - HAP movies with a soundtrack play it through an audio-only decoder started alongside the HAP reader.
 - **Audio → Output device** picks the sound card (remembered on this machine). OSC: `/dh/layer/<l>/volume`, `/dh/audio/master`, `/dh/audio/mute`; the same actions are available for MIDI mappings.
 
+## Audio reactive
+
+**Audio → Audio reactive…** (Ctrl/Cmd+Shift+A) listens to a microphone or line-in and analyses it ~47 times a second: overall **level**, **bass** (20–250 Hz), **mid** (250 Hz–2 kHz), **treble** (2–12 kHz) and **beats** (bass onsets). Levels adapt to the loudness automatically; *Sensitivity* adds gain for very quiet inputs. Live meters and a beat lamp show what it hears.
+
+Links (saved with the setup) connect a signal to the show:
+
+- **Layer opacity / Master**: pulse between (1 − amount) and the fader value. The modulation is applied at render time, so faders do not move, nothing lands in undo, and switching audio reactive off returns exactly to the faders. *Beat* used here gives a sharp flash that decays.
+- **Next column / Layer next clip (on beat)**: each beat triggers the next column, or the layer's next clip, that has something in it.
+
 ## LED tools
 
 - **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.

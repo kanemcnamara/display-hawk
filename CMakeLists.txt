@@ -24,6 +24,10 @@ qt_add_executable(DisplayHawk
     src/render/RenderThread.cpp
     src/render/YuvConverter.h
     src/render/YuvConverter.cpp
+    src/audio/AudioAnalyzer.h
+    src/audio/AudioAnalyzer.cpp
+    src/audio/AudioReactive.h
+    src/audio/AudioReactive.cpp
     src/control/Osc.h
     src/control/Osc.cpp
     src/control/ArtNet.h
@@ -50,6 +54,8 @@ qt_add_executable(DisplayHawk
     src/ui/MainWindow.cpp
     src/ui/CanvasView.h
     src/ui/CanvasView.cpp
+    src/ui/AudioReactiveDialog.h
+    src/ui/AudioReactiveDialog.cpp
     src/ui/ControlDialog.h
     src/ui/ControlDialog.cpp
     src/ui/ClipDeck.h

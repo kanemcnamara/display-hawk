@@ -4,6 +4,8 @@
 #include <QPointer>
 
 class CanvasView;
+class AudioReactive;
+class AudioReactiveDialog;
 class ControlDialog;
 class ControlRouter;
 class Document;
@@ -27,7 +29,9 @@ public:
     void startup(const QStringList &args);
     void setLive(bool live);
     ControlRouter *controlRouter() const { return m_router; }
+    AudioReactive *audioReactive() const { return m_audioReactive; }
     void showControls();
+    void showAudioReactive();
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -63,6 +67,8 @@ private:
     QTreeWidget *m_tree;
     ControlRouter *m_router;
     ControlDialog *m_controlDialog = nullptr;
+    AudioReactive *m_audioReactive;
+    AudioReactiveDialog *m_audioReactiveDialog = nullptr;
     QTimer *m_autosaveTimer;
     QLabel *m_cursorLabel;
     QLabel *m_fpsLabel;

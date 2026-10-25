@@ -66,6 +66,10 @@ public:
     // Screens shared with other apps on this machine (Spout / Syphon), screen index -> name.
     void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
 
+    // Live modulation on top of the faders (audio-reactive): master and per-layer opacity
+    // multipliers. (1, {}) means none.
+    void setModulation(double master, const QVector<double> &layerOpacity);
+
 signals:
     void mediaStateChanged();
     void previewReady(int view, const QImage &image, const QRectF &region, bool outputMode, int screen);

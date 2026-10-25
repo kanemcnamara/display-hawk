@@ -42,6 +42,29 @@ QString blendModeName(BlendMode m)
     return {};
 }
 
+QString audioSignalName(AudioSignal s)
+{
+    switch (s) {
+    case AudioSignal::Level: return QStringLiteral("Level");
+    case AudioSignal::Bass: return QStringLiteral("Bass");
+    case AudioSignal::Mid: return QStringLiteral("Mid");
+    case AudioSignal::Treble: return QStringLiteral("Treble");
+    case AudioSignal::Beat: return QStringLiteral("Beat");
+    }
+    return {};
+}
+
+QString audioTargetName(AudioTarget t)
+{
+    switch (t) {
+    case AudioTarget::LayerOpacity: return QStringLiteral("Layer opacity");
+    case AudioTarget::Master: return QStringLiteral("Master");
+    case AudioTarget::NextColumn: return QStringLiteral("Next column (on beat)");
+    case AudioTarget::NextClip: return QStringLiteral("Layer next clip (on beat)");
+    }
+    return {};
+}
+
 QString controlActionName(ControlAction a)
 {
     switch (a) {
@@ -346,6 +369,12 @@ QJsonObject Project::toJson() const
                                       {"midiNumber", m.midiNumber}});
     }
     root["controls"] = controlArr;
+    QJsonArray linkArr;
+    for (const AudioLink &l : audioReactive.links)
+        linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer}, {"amount", l.amount}});
+    root["audioReactive"] = QJsonObject{{"enabled", audioReactive.enabled},
+                                        {"sensitivity", audioReactive.sensitivity},
+                                        {"links", linkArr}};
     root["dmx"] = QJsonObject{{"enabled", dmx.enabled},
                               {"protocol", dmx.protocol == DmxProtocol::Sacn ? "sacn" : "artnet"},
                               {"universe", dmx.universe},
@@ -469,6 +498,19 @@ Project Project::fromJson(const QJsonObject &root)
         m.midiChannel = qBound(0, o["midiChannel"].toInt(), 15);
         m.midiNumber = qBound(0, o["midiNumber"].toInt(), 127);
         p.controls.append(m);
+    }
+
+    const QJsonObject ar = root["audioReactive"].toObject();
+    p.audioReactive.enabled = ar["enabled"].toBool(false);
+    p.audioReactive.sensitivity = qBound(0.1, ar["sensitivity"].toDouble(1.0), 10.0);
+    for (const QJsonValue &v : ar["links"].toArray()) {
+        const QJsonObject o = v.toObject();
+        AudioLink l;
+        l.signal = AudioSignal(qBound(0, o["signal"].toInt(), kAudioSignalCount - 1));
+        l.target = AudioTarget(qBound(0, o["target"].toInt(), kAudioTargetCount - 1));
+        l.layer = qMax(0, o["layer"].toInt());
+        l.amount = qBound(0.0, o["amount"].toDouble(1.0), 1.0);
+        p.audioReactive.links.append(l);
     }
 
     const QJsonObject dmx = root["dmx"].toObject();

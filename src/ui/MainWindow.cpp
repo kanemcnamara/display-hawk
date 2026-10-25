@@ -2,7 +2,9 @@
 
 #include "model/Document.h"
 #include "render/RenderEngine.h"
+#include "audio/AudioReactive.h"
 #include "control/ControlRouter.h"
+#include "ui/AudioReactiveDialog.h"
 #include "ui/CanvasView.h"
 #include "ui/ControlDialog.h"
 #include "ui/ClipDeck.h"
@@ -132,6 +134,7 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     connect(m_props, &PropertyPanel::identifyRequested, this, &MainWindow::identifyDisplays);
 
     m_router = new ControlRouter(doc, this);
+    m_audioReactive = new AudioReactive(doc, engine, this);
     connect(m_router, &ControlRouter::liveRequested, this, [this](int state) { setLive(state < 0 ? !m_live : state == 1); });
 
     auto *deck = new ClipDeck(doc);
@@ -286,6 +289,8 @@ void MainWindow::buildActions()
     audio->addAction(tr("Mute all"), QKeySequence(tr("Ctrl+Shift+M")), this, [this] {
         m_doc->setAudioMuted(!m_doc->project().audioMuted);
     });
+    audio->addSeparator();
+    audio->addAction(tr("Audio reactive..."), QKeySequence(tr("Ctrl+Shift+A")), this, &MainWindow::showAudioReactive);
 
     QMenu *control = menuBar()->addMenu(tr("&Control"));
     control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
@@ -653,6 +658,14 @@ bool MainWindow::saveProjectAs()
     const QString start = m_doc->filePath().isEmpty() ? QStringLiteral("setup.dhawk") : m_doc->filePath();
     const QString path = QFileDialog::getSaveFileName(this, tr("Save setup"), start, tr("Display Hawk setup (*.dhawk)"));
     return !path.isEmpty() && saveTo(path);
+}
+
+void MainWindow::showAudioReactive()
+{
+    if (!m_audioReactiveDialog)
+        m_audioReactiveDialog = new AudioReactiveDialog(m_doc, m_audioReactive, this);
+    m_audioReactiveDialog->show();
+    m_audioReactiveDialog->raise();
 }
 
 void MainWindow::showControls()

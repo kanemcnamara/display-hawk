@@ -1,3 +1,6 @@
+#include "audio/AudioAnalyzer.h"
+#include "audio/AudioReactive.h"
+#include "ui/AudioReactiveDialog.h"
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
 #include "control/Sacn.h"
@@ -27,6 +30,7 @@
 #include <QTimer>
 #include <QUdpSocket>
 #include <QtEndian>
+#include <QtMath>
 #include <QStandardPaths>
 #include <QTime>
 #include <QPalette>
@@ -79,6 +83,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
                        const QString &outDir)
 {
     QDir().mkpath(outDir);
+    qputenv("DISPLAYHAWK_NO_AUDIO_INPUT", "1");
     bool ok = true;
     auto check = [&ok](bool cond, const char *what) {
         qInfo("selftest: %s %s", cond ? "PASS" : "FAIL", what);
@@ -604,6 +609,85 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         } else {
             qInfo("selftest: SKIP capture device (none connected)");
         }
+    }
+
+    // Audio reactive. First the analyser on synthetic audio, then the show integration with
+    // injected levels (no live input: DISPLAYHAWK_NO_AUDIO_INPUT is set for the self-test).
+    {
+        constexpr int rate = 48000;
+        AudioAnalyzer analyzer;
+        auto tone = [&](double hz, double seconds, double amp) {
+            QVector<float> s(int(rate * seconds));
+            for (int i = 0; i < s.size(); ++i)
+                s[i] = float(amp * std::sin(2.0 * M_PI * hz * i / rate));
+            analyzer.process(s.constData(), int(s.size()), rate);
+            return analyzer.levels();
+        };
+        const AudioLevels bassTone = tone(60, 2.0, 0.5);
+        const AudioLevels trebleTone = tone(5000, 2.0, 0.5);
+        qInfo("selftest: 60 Hz -> bass %.2f treble %.2f; 5 kHz -> bass %.2f treble %.2f", bassTone.bass,
+              bassTone.treble, trebleTone.bass, trebleTone.treble);
+        check(bassTone.bass > 0.6 && bassTone.treble < 0.25 && trebleTone.treble > 0.6 && trebleTone.bass < 0.3,
+              "audio analysis separates bass and treble");
+        // Kick drums at 120 BPM for 4 s: 60 Hz bursts decaying over ~120 ms, over faint noise.
+        int beats = 0;
+        QMetaObject::Connection counter =
+            QObject::connect(&analyzer, &AudioAnalyzer::levelsChanged, [&beats](const AudioLevels &l) { beats += l.beat; });
+        QVector<float> kicks(rate * 4);
+        quint32 noise = 12345;
+        for (int i = 0; i < kicks.size(); ++i) {
+            const double t = double(i % (rate / 2)) / rate; // time since the last kick
+            noise = noise * 1664525u + 1013904223u;
+            kicks[i] = float(0.8 * std::exp(-t / 0.04) * std::sin(2.0 * M_PI * 60.0 * t) + 0.01 * (int(noise >> 16) % 200 - 100) / 100.0);
+        }
+        analyzer.process(kicks.constData(), int(kicks.size()), rate);
+        QObject::disconnect(counter);
+        qInfo("selftest: %d beats detected in 8 kicks", beats);
+        check(beats >= 7 && beats <= 9, "beat detection on a 120 BPM kick pattern");
+        tone(60, 0.0, 0.0);
+        QVector<float> silence(rate * 2, 0.0f);
+        analyzer.process(silence.constData(), int(silence.size()), rate);
+        check(analyzer.levels().level < 0.05 && analyzer.levels().bass < 0.05, "silence reads as zero");
+
+        // Show integration: bass drives layer 1's opacity; the fader stays at 100%.
+        AudioReactive *reactive = window.audioReactive();
+        const Project &p = doc.project();
+        doc.project().layers[0].transitionMs = 0;
+        doc.setLayerPlayback(0, 1.0, false, false);
+        doc.clearLayer(1);
+        doc.triggerClip(0, 2); // colour bars
+        doc.project().audioReactive.enabled = true;
+        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 1.0},
+                                             AudioLink{AudioSignal::Beat, AudioTarget::NextColumn, 0, 1.0}};
+        doc.notifyChanged();
+        reactive->apply(AudioLevels{0.0, 0.0, 0.0, 0.0, false});
+        const bool dark = waitFor([&] { return litPercent(previews[0]) < 3; }, 3000);
+        reactive->apply(AudioLevels{1.0, 1.0, 0.0, 0.0, false});
+        const bool bright = waitFor([&] { return litPercent(previews[0]) > 50; }, 3000);
+        check(dark && bright && p.layers[0].opacity == 1.0, "bass modulates layer opacity without moving the fader");
+        const int before = p.layers[0].activeColumn;
+        reactive->apply(AudioLevels{1.0, 1.0, 0.0, 0.0, true});
+        check(p.layers[0].activeColumn != before && p.layers[0].activeColumn >= 0, "a beat steps to the next column");
+        reactive->apply(AudioLevels{0.0, 0.0, 0.0, 0.0, false}); // modulated to black...
+        waitFor([&] { return litPercent(previews[0]) < 3; }, 3000);
+        doc.project().audioReactive.enabled = false; // ...and switching off restores the faders exactly
+        doc.notifyChanged();
+        check(waitFor([&] { return litPercent(previews[0]) > 20; }, 3000), "turning audio reactive off restores the faders");
+        // The dialog with two links and the meters fed by a bass-heavy tone, for checking its layout.
+        doc.project().audioReactive.links = {AudioLink{AudioSignal::Bass, AudioTarget::LayerOpacity, 0, 0.8},
+                                             AudioLink{AudioSignal::Beat, AudioTarget::NextClip, 1, 1.0}};
+        doc.notifyChanged(true);
+        window.showAudioReactive();
+        tone(80, 0.5, 0.6);
+        if (auto *d = window.findChild<AudioReactiveDialog *>()) {
+            if (auto *meters = d->findChild<AudioMeters *>())
+                meters->setLevels(AudioLevels{0.7, 0.9, 0.4, 0.15, true});
+            waitMs(200);
+            d->grab().save(QStringLiteral("%1/audio-reactive-window.png").arg(outDir));
+            d->hide();
+        }
+        doc.project().audioReactive.links.clear();
+        doc.notifyChanged(true);
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

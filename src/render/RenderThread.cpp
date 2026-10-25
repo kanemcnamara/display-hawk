@@ -151,6 +151,13 @@ void RenderThread::renderNdiOutputs(QRhiCommandBuffer *cb)
     }
 }
 
+void RenderThread::setModulation(double master, const QVector<double> &layerOpacity)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedMasterMod = master;
+    m_sharedLayerMod = layerOpacity;
+}
+
 void RenderThread::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
 {
     QMutexLocker lock(&m_mutex);
@@ -427,6 +434,8 @@ void RenderThread::syncState()
     m_sharedMedia.clear();
     m_preview[0] = m_sharedPreview[0];
     m_preview[1] = m_sharedPreview[1];
+    m_masterMod = m_sharedMasterMod;
+    m_layerMod = m_sharedLayerMod;
     const bool ndiChanged = m_ndiDirty;
     if (m_ndiDirty) {
         m_ndiWanted = m_sharedNdi;
@@ -801,7 +810,10 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
             }
         }
 
-        if (layer.bypass || (anySolo && !layer.solo) || layer.opacity <= 0.0)
+        // Audio-reactive modulation scales the fader value; the fader itself is untouched.
+        const int layerIndex = int(&layer - p.layers.constData());
+        const double opacity = layer.opacity * (layerIndex < m_layerMod.size() ? m_layerMod[layerIndex] : 1.0);
+        if (layer.bypass || (anySolo && !layer.solo) || opacity <= 0.0)
             continue;
         if (st.current.isEmpty() && st.previous.isEmpty())
             continue;
@@ -822,7 +834,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         lp.dst = QRectF(QPointF(), compSize);
         lp.texture = st.target.tex;
         lp.texFlipY = m_rhi->isYUpInFramebuffer();
-        lp.opacity = float(layer.opacity);
+        lp.opacity = float(opacity);
         lp.blend = RhiQuad::fromLayer(layer.blend);
         compDraws.append(lp);
     }
@@ -861,7 +873,7 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
     }
 
     // Master fader and blackout dim everything, including the background.
-    const double master = p.blackout ? 0.0 : p.master;
+    const double master = p.blackout ? 0.0 : qBound(0.0, p.master * m_masterMod, 1.0);
     if (master < 1.0) {
         RhiQuad::Params dim;
         dim.target = compSize;
