@@ -28,6 +28,7 @@ public:
 signals:
     // Right-click "MIDI learn" on a clip or column: ControlAction, layer and column (0-based).
     void midiLearnRequested(int action, int layer, int column);
+    void convertToHapRequested(const QStringList &paths);
 
 public:
     static constexpr int kHeaderH = 24;
@@ -69,6 +70,7 @@ public:
 
 signals:
     void midiLearnRequested(int action, int layer, int column);
+    void convertToHapRequested(const QStringList &paths);
 
 protected:
     void paintEvent(QPaintEvent *e) override;

@@ -40,6 +40,7 @@ private:
     bool m_recording = false;
     bool m_ready = true; // the encoder can take another frame
     int m_frames = 0;
+    int m_offered = 0; // frames the renderer delivered (the rest were dropped: encoder busy)
     int m_fps = 30;
     QString m_path;
 };

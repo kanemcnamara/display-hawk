@@ -49,6 +49,10 @@ public:
     void setFolder(const QString &path);
     QString folder() const;
     static QStringList mediaFilters();
+    static bool isMovie(const QString &path); // a video file (not a still image)
+
+signals:
+    void convertToHapRequested(const QStringList &paths);
 
 private:
     void addToDeck(const QString &path);

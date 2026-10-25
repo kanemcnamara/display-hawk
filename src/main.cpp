@@ -15,6 +15,14 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include "ui/HapConvertDialog.h"
+#include <cmath>
+#include <QElapsedTimer>
+#include <QThreadPool>
+#include "media/Snappy.h"
+#include "media/MovReader.h"
+#include "media/HapEncoder.h"
+#include "media/HapConverter.h"
 #include <QMouseEvent>
 #include "ui/CanvasView.h"
 #include "ui/OutputSetupWindow.h"
@@ -1922,11 +1930,156 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         player.setSource(QUrl::fromLocalFile(file));
         const bool playable = waitFor([&] { return player.duration() > 1000; }, 5000);
         check(started && frames >= 20 && playable,
-              qPrintable(QStringLiteral("recording writes a playable video (%1 frames, %2 ms, %3 bytes)%4")
+              qPrintable(QStringLiteral("recording writes a playable video (%1 frames, %2 ms, %3 bytes, rendering at %5 fps)%4")
                              .arg(frames).arg(player.duration()).arg(QFileInfo(file).size())
-                             .arg(error.isEmpty() ? QString() : QStringLiteral(": ") + error)));
+                             .arg(error.isEmpty() ? QString() : QStringLiteral(": ") + error).arg(fps)));
         doc.select(Selection::composition());
         doc.clearLayer(0);
+    }
+
+    // HAP conversion: Snappy round trips, encoder quality per format, then a real movie (the
+    // recording above) converted, read back and played as a clip.
+    {
+        bool snappyOk = true;
+        QByteArray runs(200000, 'a');
+        for (int k = 0; k < runs.size(); k += 7)
+            runs[k] = char('a' + (k / 7) % 5);
+        QByteArray noise(100000, Qt::Uninitialized);
+        quint32 seed = 12345;
+        for (char &c : noise) {
+            seed = seed * 1664525u + 1013904223u;
+            c = char(seed >> 24);
+        }
+        for (const QByteArray &data : {runs, noise, QByteArray("abcabcabcabcabcabc"), QByteArray(), QByteArray(70, 'x')}) {
+            QByteArray back;
+            const QByteArray packed = snappyCompress(data.constData(), data.size());
+            snappyOk = snappyOk && snappyUncompress(packed.constData(), packed.size(), back) && back == data;
+        }
+        const qsizetype runsPacked = snappyCompress(runs.constData(), runs.size()).size();
+        check(snappyOk && runsPacked < runs.size() / 4, "Snappy compressor round-trips (runs, noise, overlaps, empty)");
+
+        // A picture with gradients, saturated bars, fine detail and an alpha ramp; odd-sized.
+        QImage src(250, 142, QImage::Format_RGBA8888);
+        for (int y = 0; y < src.height(); ++y)
+            for (int x = 0; x < src.width(); ++x) {
+                QColor c;
+                if (y < 48)
+                    c = QColor::fromHsv((x * 359) / src.width(), 255, 255);
+                else if (y < 96)
+                    c = QColor(x * 255 / src.width(), y * 2, 255 - x);
+                else
+                    c = ((x / 2 + y / 2) % 2) ? QColor(230, 230, 230) : QColor(20, 40, 60);
+                c.setAlpha(x * 255 / (src.width() - 1));
+                src.setPixelColor(x, y, c);
+            }
+        auto psnr = [](const QImage &a, const QImage &b, bool alpha) {
+            double se = 0;
+            qint64 n = 0;
+            for (int y = 0; y < a.height(); ++y)
+                for (int x = 0; x < a.width(); ++x) {
+                    const QRgb p = a.pixel(x, y), q = b.pixel(x, y);
+                    const int d[4] = {qRed(p) - qRed(q), qGreen(p) - qGreen(q), qBlue(p) - qBlue(q), qAlpha(p) - qAlpha(q)};
+                    for (int k = 0; k < (alpha ? 4 : 3); ++k, ++n)
+                        se += d[k] * d[k];
+                }
+            return se > 0 ? 10.0 * std::log10(255.0 * 255.0 / (se / n)) : 99.0;
+        };
+        QThreadPool pool;
+        double db[3] = {};
+        bool roundTrip = true;
+        const QImage opaque = src.convertToFormat(QImage::Format_RGB32).convertToFormat(QImage::Format_RGBA8888);
+        for (int k = 0; k < 3; ++k) {
+            const Hap::Format f = Hap::Format(k);
+            const QImage &in = f == Hap::Format::HapAlpha ? src : opaque;
+            const QByteArray texture = Hap::compressTexture(in, f, &pool);
+            for (int chunks : {1, 4}) {
+                HapFrame frame;
+                QString error;
+                roundTrip = roundTrip && decodeHapFrame(Hap::makeFrame(texture, f, chunks, &pool), in.size(), frame, &error);
+            }
+            HapFrame frame;
+            decodeHapFrame(Hap::makeFrame(texture, f, 4, &pool), in.size(), frame);
+            const QImage out = Hap::textureToImage(frame);
+            roundTrip = roundTrip && out.size() == in.size();
+            db[k] = out.isNull() ? 0.0 : psnr(in, out, f == Hap::Format::HapAlpha);
+            save(out, f == Hap::Format::Hap ? "hap-encode-hap" : f == Hap::Format::HapQ ? "hap-encode-hapq" : "hap-encode-alpha");
+        }
+        save(src, "hap-encode-source");
+        check(roundTrip && db[0] > 30.0 && db[2] > 30.0 && db[1] > db[0],
+              qPrintable(QStringLiteral("HAP encoder: Hap %1 dB, Hap Q %2 dB, Hap Alpha %3 dB (with alpha)")
+                             .arg(db[0], 0, 'f', 1).arg(db[1], 0, 'f', 1).arg(db[2], 0, 'f', 1)));
+
+        // A real movie: the recording made above.
+        const QString movie = QDir::temp().filePath(QStringLiteral("displayhawk-recording-test.mp4"));
+        const QString target = QDir::temp().filePath(QStringLiteral("displayhawk-hap-test.mov"));
+        QFile::remove(target);
+        HapConverter converter;
+        bool done = false, converted = false;
+        QString message;
+        QObject::connect(&converter, &HapConverter::finished, [&](bool ok, const QString &m) {
+            done = true;
+            converted = ok;
+            message = m;
+        });
+        QElapsedTimer took;
+        took.start();
+        converter.start(movie, target, {Hap::Format::HapQ, true});
+        waitFor([&] { return done; }, 60000);
+        MovReader reader;
+        const bool opened = converted && reader.open(target);
+        QMediaPlayer probe;
+        probe.setSource(QUrl::fromLocalFile(movie));
+        waitFor([&] { return probe.mediaStatus() == QMediaPlayer::LoadedMedia; }, 5000);
+        const int expected = qRound(probe.duration() / 1000.0 * reader.frameRate());
+        HapFrame middle;
+        const bool decodes = opened && decodeHapFrame(reader.readFrame(reader.frameCount() / 2), reader.size(), middle);
+        const QImage middleImage = Hap::textureToImage(middle);
+        save(middleImage, "hap-converted-frame");
+        const bool framesOk = opened && reader.codec() == "HapY" && qAbs(reader.frameCount() - expected) <= 2;
+        // ...and it plays as a clip, through the HAP player.
+        const int col = doc.project().columns;
+        doc.addColumn();
+        doc.setClip(0, col, Clip::fromMedia(target));
+        doc.project().layers[1].effects.clear();
+        doc.clearLayer(1);
+        doc.triggerClip(0, col);
+        const bool plays = waitFor([&] { return litPercent(previews[OutputMonitor::kView]) > 20; }, 8000);
+        save(previews[OutputMonitor::kView], "hap-converted-playing");
+        check(converted && framesOk && decodes && litPercent(middleImage) > 20 && plays,
+              qPrintable(QStringLiteral("HAP converter: movie -> Hap Q .mov (%1, %2 of %3 frames, %4 ms), plays as a clip")
+                             .arg(message).arg(reader.frameCount()).arg(expected).arg(took.elapsed())));
+        doc.clearLayer(0);
+        doc.setClip(0, col, Clip());
+
+        // The queue window, converting through the dialog as a user would.
+        window.showHapConverter({movie});
+        const bool queued = waitFor([&] { return window.hapConverter()->pending() == 0; }, 60000);
+        window.hapConverter()->grab().save(QStringLiteral("%1/hap-converter-window.png").arg(outDir));
+        window.hapConverter()->hide();
+        check(queued, "HAP converter window runs its queue");
+        for (const QString &f : QDir::temp().entryList({QStringLiteral("displayhawk-recording-test (*).mov")}))
+            QFile::remove(QDir::temp().filePath(f));
+
+        // With sound, when a test movie with audio is given.
+        const QString soundMovie = qEnvironmentVariable("DISPLAYHAWK_TEST_SOUND");
+        if (!soundMovie.isEmpty()) {
+            const QString soundTarget = QDir::temp().filePath(QStringLiteral("displayhawk-hap-sound-test.mov"));
+            QFile::remove(soundTarget);
+            done = false;
+            converter.start(soundMovie, soundTarget, {Hap::Format::Hap, true});
+            waitFor([&] { return done; }, 120000);
+            QMediaPlayer back;
+            back.setSource(QUrl::fromLocalFile(soundTarget));
+            waitFor([&] { return back.mediaStatus() == QMediaPlayer::LoadedMedia || back.mediaStatus() == QMediaPlayer::InvalidMedia; }, 5000);
+            QMediaPlayer orig;
+            orig.setSource(QUrl::fromLocalFile(soundMovie));
+            waitFor([&] { return orig.mediaStatus() == QMediaPlayer::LoadedMedia; }, 5000);
+            check(converted && back.hasAudio() && back.hasVideo() && qAbs(back.duration() - orig.duration()) < 200,
+                  qPrintable(QStringLiteral("HAP converter keeps the sound (%1 ms vs %2 ms): %3")
+                                 .arg(back.duration()).arg(orig.duration()).arg(message)));
+        } else {
+            qInfo("selftest: SKIP HAP conversion with sound (set DISPLAYHAWK_TEST_SOUND)");
+        }
     }
 
     // Keyboard mappings, effect presets and setup templates.

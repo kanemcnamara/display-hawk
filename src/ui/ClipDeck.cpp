@@ -1,4 +1,6 @@
 #include "ui/ClipDeck.h"
+#include "media/MovReader.h"
+#include "ui/MediaBrowser.h"
 #include "render/Generators.h"
 #include "render/TextRenderer.h"
 #include <QLineEdit>
@@ -296,6 +298,7 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidg
     m_rowLayout->addStretch();
     m_grid = new ClipGrid(doc, engine);
     connect(m_grid, &ClipGrid::midiLearnRequested, this, &ClipDeck::midiLearnRequested);
+    connect(m_grid, &ClipGrid::convertToHapRequested, this, &ClipDeck::convertToHapRequested);
     h->addWidget(left, 0, Qt::AlignTop);
     h->addWidget(m_grid, 0, Qt::AlignTop);
     h->addStretch();
@@ -820,6 +823,11 @@ void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
         menu.addAction(tr("MIDI learn: trigger this clip"), this, [this, layer, column] {
             emit midiLearnRequested(int(ControlAction::TriggerClip), layer, column);
         });
+        if (clip.source == ContentSource::Media && MediaBrowser::isMovie(clip.mediaPath) && !MovReader::isHap(clip.mediaPath)) {
+            const QString path = clip.mediaPath;
+            menu.addAction(tr("Convert to HAP..."), this, [this, path] { emit convertToHapRequested({path}); })
+                ->setToolTip(tr("Plays from the GPU; the clip switches to the HAP file when it is done"));
+        }
         menu.addSeparator();
         menu.addAction(tr("Duplicate"), m_doc, &Document::duplicateSelection);
         menu.addAction(tr("Clear slot"), this, [this, layer, column] { m_doc->setClip(layer, column, Clip()); });

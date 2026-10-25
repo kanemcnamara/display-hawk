@@ -43,6 +43,7 @@ bool OutputRecorder::start(const QString &path, int fps, QString *error)
     connect(m_recorder, &QMediaRecorder::recorderStateChanged, this, &OutputRecorder::stateChanged);
     m_fps = fps;
     m_frames = 0;
+    m_offered = 0;
     m_ready = true;
     m_path = path;
     m_recorder->record();
@@ -75,7 +76,8 @@ void OutputRecorder::stop()
     m_input = nullptr;
     m_session = nullptr;
     if (!m_path.isEmpty())
-        qInfo("Recording stopped: %d frames in %s", m_frames, qPrintable(m_path));
+        qInfo("Recording stopped: %d frames in %s (%d delivered, %d dropped while the encoder was busy)", m_frames,
+              qPrintable(m_path), m_offered, m_offered - m_frames);
     emit stateChanged();
 }
 
@@ -83,6 +85,7 @@ void OutputRecorder::onFrame(const QImage &image)
 {
     if (!m_recording || !m_input || image.isNull())
         return;
+    ++m_offered;
     if (!m_ready) // the encoder is behind: drop this frame rather than queue up
         return;
     QVideoFrame frame(image.convertToFormat(QImage::Format_RGBA8888));

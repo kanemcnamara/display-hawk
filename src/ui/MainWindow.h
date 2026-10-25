@@ -4,6 +4,7 @@
 #include <QPointer>
 
 class OutputMonitor;
+class HapConvertDialog;
 class OutputSetupWindow;
 class AudioReactive;
 class LfoDialog;
@@ -58,6 +59,8 @@ public:
     void showOutputSetup();
     OutputSetupWindow *outputSetup() const { return m_setup; }
     OutputMonitor *outputMonitor() const { return m_monitor; }
+    HapConvertDialog *hapConverter() const { return m_hapDialog; }
+    void showHapConverter(const QStringList &files = {});
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -83,6 +86,8 @@ private:
     RenderEngine *m_engine;
     OutputSetupWindow *m_setup;
     OutputMonitor *m_monitor;
+    HapConvertDialog *m_hapDialog = nullptr;
+    QLabel *m_hapStatus;
     PropertyPanel *m_props;
     QAction *m_setupAction;
     QByteArray m_defaultState;

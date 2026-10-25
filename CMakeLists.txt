@@ -77,7 +77,15 @@ qt_add_executable(DisplayHawk
     src/media/MediaSource.h
     src/media/MediaSource.cpp
     src/media/Snappy.h
+    src/media/HapEncoder.h
+    src/media/MovWriter.h
+    src/media/HapConverter.h
+    src/ui/HapConvertDialog.h
     src/media/Snappy.cpp
+    src/media/HapEncoder.cpp
+    src/media/MovWriter.cpp
+    src/media/HapConverter.cpp
+    src/ui/HapConvertDialog.cpp
     src/media/HapDecoder.h
     src/media/HapDecoder.cpp
     src/media/MovReader.h

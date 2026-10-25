@@ -1,5 +1,6 @@
 #include "ui/MainWindow.h"
 #include "ui/OutputMonitor.h"
+#include "ui/HapConvertDialog.h"
 #include "ui/OutputSetupWindow.h"
 
 #include <QSet>
@@ -143,6 +144,7 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
         m_controlDialog->learnNew(action, layer, column);
     });
     setCentralWidget(deck);
+    connect(deck, &ClipDeck::convertToHapRequested, this, [this](const QStringList &files) { showHapConverter(files); });
     m_clipPreview = new ClipPreviewPanel(doc, engine);
     auto *previewDock = new QDockWidget(tr("Preview"));
     previewDock->setObjectName(QStringLiteral("preview"));
@@ -153,7 +155,9 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     monitorDock->setWidget(m_monitor);
     auto *mediaDock = new QDockWidget(tr("Media"));
     mediaDock->setObjectName(QStringLiteral("media"));
-    mediaDock->setWidget(new MediaBrowser(m_doc));
+    auto *browser = new MediaBrowser(m_doc);
+    connect(browser, &MediaBrowser::convertToHapRequested, this, [this](const QStringList &files) { showHapConverter(files); });
+    mediaDock->setWidget(browser);
     // Like Resolume: the deck on top, then properties, monitors and the browser side by side.
     addDockWidget(Qt::BottomDockWidgetArea, propDock);
     splitDockWidget(propDock, monitorDock, Qt::Horizontal);
@@ -166,6 +170,8 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     m_fpsLabel = new QLabel;
     statusBar()->addWidget(m_cursorLabel, 1);
     statusBar()->addPermanentWidget(m_fpsLabel);
+    m_hapStatus = new QLabel;
+    statusBar()->addPermanentWidget(m_hapStatus);
     connect(m_engine, &RenderEngine::statsUpdated, this, [this](int fps, const QSize &comp) {
         m_fpsLabel->setText(tr("%1 fps  |  %2 x %3  |  %4  |  %5")
                                 .arg(fps)
@@ -217,6 +223,7 @@ void MainWindow::buildActions()
     QAction *saveAct = file->addAction(tr("&Save"), QKeySequence::Save, this, &MainWindow::saveProject);
     file->addAction(tr("Save &As..."), QKeySequence::SaveAs, this, &MainWindow::saveProjectAs);
     file->addAction(tr("Export setup &report..."), this, &MainWindow::exportReport);
+    file->addAction(tr("Convert to &HAP..."), this, [this] { showHapConverter(); });
     file->addSeparator();
     QMenu *templates = file->addMenu(tr("New from &template"));
     connect(templates, &QMenu::aboutToShow, this, [this, templates] {
@@ -449,6 +456,17 @@ void MainWindow::buildActions()
         if (auto *live = qobject_cast<QToolButton *>(btn->widgetForAction(m_liveAction)))
             live->setStyleSheet(liveStyle);
     }
+}
+
+void MainWindow::showHapConverter(const QStringList &files)
+{
+    if (!m_hapDialog) { // made when first needed: nothing of it runs until then
+        m_hapDialog = new HapConvertDialog(m_doc, this);
+        connect(m_hapDialog, &HapConvertDialog::statusChanged, m_hapStatus, &QLabel::setText);
+    }
+    m_hapDialog->show();
+    m_hapDialog->raise();
+    m_hapDialog->addFiles(files);
 }
 
 void MainWindow::showOutputSetup()

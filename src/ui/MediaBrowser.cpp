@@ -8,6 +8,7 @@
 #include <QIdentityProxyModel>
 #include <QImageReader>
 #include <QListView>
+#include <QMenu>
 #include <QMediaPlayer>
 #include <QPainter>
 #include <QSettings>
@@ -153,6 +154,15 @@ void Thumbnailer::finishVideo(const QImage &image)
     QTimer::singleShot(0, this, &Thumbnailer::nextVideo);
 }
 
+bool MediaBrowser::isMovie(const QString &path)
+{
+    static const QStringList movies{QStringLiteral("mp4"), QStringLiteral("mov"), QStringLiteral("mkv"),
+                                    QStringLiteral("avi"), QStringLiteral("webm"), QStringLiteral("wmv"),
+                                    QStringLiteral("m4v"), QStringLiteral("mpg"), QStringLiteral("mpeg"),
+                                    QStringLiteral("mxf")};
+    return movies.contains(QFileInfo(path).suffix().toLower());
+}
+
 QStringList MediaBrowser::mediaFilters()
 {
     QStringList filters;
@@ -208,6 +218,28 @@ MediaBrowser::MediaBrowser(Document *doc, QWidget *parent)
     });
     connect(m_list, &QListView::doubleClicked, this, [this](const QModelIndex &i) {
         addToDeck(m_files->filePath(m_thumbs->mapToSource(i)));
+    });
+    m_list->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_list, &QListView::customContextMenuRequested, this, [this](const QPoint &pos) {
+        QStringList selected, movies;
+        for (const QModelIndex &i : m_list->selectionModel()->selectedIndexes()) {
+            const QString path = m_files->filePath(m_thumbs->mapToSource(i));
+            selected << path;
+            if (isMovie(path))
+                movies << path;
+        }
+        if (selected.isEmpty())
+            return;
+        QMenu menu(this);
+        menu.addAction(tr("Add to the selected layer"), this, [this, selected] {
+            for (const QString &path : selected)
+                addToDeck(path);
+        });
+        QAction *convert = menu.addAction(movies.size() > 1 ? tr("Convert %1 movies to HAP...").arg(movies.size())
+                                                            : tr("Convert to HAP..."),
+                                          this, [this, movies] { emit convertToHapRequested(movies); });
+        convert->setEnabled(!movies.isEmpty());
+        menu.exec(m_list->viewport()->mapToGlobal(pos));
     });
 
     const QString start = QSettings().value(QStringLiteral("browser/folder"),
