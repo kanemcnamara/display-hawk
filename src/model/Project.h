@@ -30,6 +30,11 @@ QString playModeName(PlayMode m);
 QString triggerModeName(TriggerMode m);
 QString transitionStyleName(TransitionStyle t);
 QString autopilotName(Autopilot a);
+// Tempo: where the beat comes from, and whether clip triggers wait for the next beat or bar.
+enum class TempoSource { Internal = 0, MidiClock, AudioBeats };
+enum class TriggerQuantize { Off = 0, Beat, Bar };
+QString tempoSourceName(TempoSource s);
+QString triggerQuantizeName(TriggerQuantize q);
 
 QString testPatternName(TestPattern p);
 QString scaleModeName(ScaleMode m);
@@ -207,6 +212,7 @@ struct Clip {
     double rotation = 0.0;
     double opacity = 1.0;
     QVector<EffectInstance> effects; // applied to the clip before the layer mixes it in
+    int beatSync = 0; // > 0: the movie (in to out) is stretched to last this many beats
     double volume = 1.0; // the clip's own audio level
     QColor solidColor = Qt::white;
     int gridSpacing = 64;
@@ -264,8 +270,10 @@ enum class ControlAction {
     AudioMaster,    // continuous
     AudioMute,      // toggle
     EffectParam,    // continuous (layer, column = effect index, param); layer -1 = composition
+    TapTempo,       // trigger
+    TempoResync,    // trigger: now is the first beat of a bar
 };
-constexpr int kControlActionCount = int(ControlAction::EffectParam) + 1;
+constexpr int kControlActionCount = int(ControlAction::TempoResync) + 1;
 QString controlActionName(ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
@@ -327,6 +335,22 @@ struct AudioLink {
     double amount = 1.0; // 0..1: how deep the modulation goes (ignored for beat targets)
 };
 
+// A tempo-synced low-frequency oscillator driving something, like an audio link but from a wave.
+enum class LfoShape { Sine = 0, Triangle, SawUp, SawDown, Square, Random };
+constexpr int kLfoShapeCount = int(LfoShape::Random) + 1;
+QString lfoShapeName(LfoShape s);
+struct Lfo {
+    bool enabled = true;
+    AudioTarget target = AudioTarget::LayerOpacity; // LayerOpacity, Master or EffectParam
+    int layer = 0;   // -1 = composition (effect parameters)
+    int effect = 0;
+    int param = 0;
+    LfoShape shape = LfoShape::Sine;
+    double beats = 4.0;  // one cycle lasts this many beats
+    double amount = 1.0; // 0..1
+    double phase = 0.0;  // 0..1 of a cycle
+};
+
 struct AudioReactiveSettings {
     bool enabled = false;
     double sensitivity = 1.0; // input gain before analysis
@@ -350,6 +374,10 @@ struct Project {
     QVector<EffectInstance> compEffects; // applied to the whole composition, before the master
     DmxPatch dmx;
     AudioReactiveSettings audioReactive;
+    QVector<Lfo> lfos;
+    double bpm = 120.0; // playback state, like the master: tapping does not make undo steps
+    TempoSource tempoSource = TempoSource::Internal;
+    TriggerQuantize quantize = TriggerQuantize::Off;
     bool blackout = false; // playback state
     double audioMaster = 1.0; // playback state
     bool audioMuted = false;  // playback state

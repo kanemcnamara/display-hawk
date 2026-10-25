@@ -65,6 +65,8 @@ signals:
     void learnStateChanged();
     void liveRequested(int state);       // -1 toggle, 0 off, 1 on
     void oscStateChanged();
+    void tapTempoRequested();
+    void tempoResyncRequested();
 
 private:
     enum class Mode { Press, Value };

@@ -3,6 +3,7 @@
 #include "ui/AudioReactiveDialog.h"
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
+#include "control/TempoClock.h"
 #include "control/Sacn.h"
 #include "media/MediaSource.h"
 #include "media/Ndi.h"
@@ -1359,6 +1360,98 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
             }
         } else {
             qInfo("selftest: SKIP movie playback controls (set DISPLAYHAWK_TEST_HAP_PLAYBACK to a HAP movie)");
+        }
+        doc.clearLayer(0);
+    }
+
+    // Tempo: tap, MIDI clock and audio beats (synthetic timestamps), quantized triggers, LFOs.
+    {
+        Project &p = doc.project();
+        TempoClock *clock = window.tempoClock();
+        const qint64 t0 = TempoClock::nowNs();
+        const qint64 ms = 1'000'000;
+        p.tempoSource = TempoSource::Internal;
+        doc.notifyChanged();
+        for (int i = 0; i < 4; ++i)
+            clock->tap(t0 + i * 500 * ms);
+        check(qAbs(p.bpm - 120.0) < 0.5, qPrintable(QStringLiteral("tap tempo (%1 BPM from 500 ms taps)").arg(p.bpm, 0, 'f', 1)));
+
+        p.tempoSource = TempoSource::MidiClock;
+        doc.notifyChanged();
+        const qint64 tick = qint64(60e9 / (130.0 * 24));
+        clock->midiRealtime(0xFA, t0);
+        for (int i = 0; i <= 48; ++i)
+            clock->midiRealtime(0xF8, t0 + i * tick);
+        check(qAbs(p.bpm - 130.0) < 0.5, qPrintable(QStringLiteral("MIDI clock tempo (%1 BPM)").arg(p.bpm, 0, 'f', 1)));
+
+        p.tempoSource = TempoSource::AudioBeats;
+        doc.notifyChanged();
+        for (int i = 0; i < 8; ++i)
+            clock->audioBeat(t0 + 10'000 * ms + i * 500 * ms);
+        check(qAbs(p.bpm - 120.0) < 2.0, qPrintable(QStringLiteral("tempo follows audio beats (%1 BPM)").arg(p.bpm, 0, 'f', 1)));
+
+        // Quantized to the bar: a trigger waits for the next bar start.
+        p.tempoSource = TempoSource::Internal;
+        doc.setBpm(120.0);
+        p.quantize = TriggerQuantize::Bar;
+        doc.notifyChanged();
+        const int col = p.columns;
+        doc.addColumn();
+        doc.setClip(0, col, Clip::fromPattern(TestPattern::ColorBars));
+        p.layers[0].transitionMs = 0;
+        doc.clearLayer(0);
+        clock->resync();
+        waitMs(700); // part way through the bar
+        double startedAt = -1.0;
+        const QMetaObject::Connection c = QObject::connect(&doc, &Document::clipTriggered, &app, [&] { startedAt = clock->beats(); });
+        doc.triggerClip(0, col);
+        const bool waited = p.layers[0].activeColumn == -1;
+        const bool started = waitFor([&] { return p.layers[0].activeColumn == col; }, 2500);
+        QObject::disconnect(c);
+        const double intoBar = startedAt - 4.0 * qFloor(startedAt / 4.0 + 0.5);
+        check(waited && started && qAbs(intoBar) < 0.1,
+              qPrintable(QStringLiteral("quantized trigger starts on the bar (%1 beats off)").arg(intoBar, 0, 'f', 3)));
+        p.quantize = TriggerQuantize::Off;
+        doc.notifyChanged();
+
+        // LFO: a square wave on the master over 2 beats (1 s at 120 BPM) blinks the output.
+        Lfo lfo;
+        lfo.target = AudioTarget::Master;
+        lfo.shape = LfoShape::Square;
+        lfo.beats = 2.0;
+        p.lfos = {lfo};
+        doc.notifyChanged(true);
+        bool dark = false, bright = false;
+        for (int i = 0; i < 50 && !(dark && bright); ++i) {
+            waitMs(60);
+            const int lit = litPercent(previews[0]);
+            dark = dark || lit < 3;
+            bright = bright || lit > 40;
+        }
+        check(dark && bright, "LFO on the master follows the tempo");
+        p.lfos.clear();
+        doc.notifyChanged(true);
+        check(waitFor([&] { return litPercent(previews[0]) > 40; }, 2000), "removing the LFO restores the master");
+
+        // Beat sync: a 2 s movie stretched to 8 beats at 120 BPM plays at half speed.
+        const QString hap = qEnvironmentVariable("DISPLAYHAWK_TEST_HAP_PLAYBACK");
+        if (!hap.isEmpty()) {
+            Clip movie = Clip::fromMedia(hap);
+            movie.beatSync = 8;
+            movie.playMode = PlayMode::OnceHold;
+            doc.setClip(0, col, movie);
+            doc.triggerClip(0, col);
+            const QString id = p.layers[0].clips[col].id;
+            waitFor([&] { const MediaSource *m = engine.mediaFor(id); return m && m->durationSeconds() > 0; }, 5000);
+            MediaSource *m = engine.mediaFor(id);
+            if (m) {
+                waitMs(200); // the speed is set once the length is known
+                m->restart();
+                waitMs(1000);
+                const double movieSeconds = m->position() * m->durationSeconds();
+                check(movieSeconds > 0.35 && movieSeconds < 0.65,
+                      qPrintable(QStringLiteral("beat sync stretches the movie (%1 s of movie in 1 s)").arg(movieSeconds, 0, 'f', 2)));
+            }
         }
         doc.clearLayer(0);
     }

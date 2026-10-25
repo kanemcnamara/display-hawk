@@ -489,6 +489,10 @@ QWidget *PropertyPanel::buildClipPage()
     m_positionText->setMinimumWidth(110);
     pf->addRow(tr("At the end"), m_playMode);
     pf->addRow(tr("Speed"), row({m_speed, m_reverse}));
+    m_beatSync = makeSpin(0, 1024, tr(" beats"));
+    m_beatSync->setSpecialValueText(tr("Off"));
+    m_beatSync->setToolTip(tr("Stretch the movie (in to out) to last this many beats at the current tempo"));
+    pf->addRow(tr("Beat sync"), m_beatSync);
     pf->addRow(tr("In / out"), row({m_inPoint, m_outPoint}));
     pf->addRow(tr("Position"), row({m_position, m_positionText}));
     m_clipStack->addWidget(box);
@@ -535,6 +539,10 @@ QWidget *PropertyPanel::buildClipPage()
         });
     };
     clipNumber(m_speed, [](Clip &c, double v) { c.speed = v; });
+    connect(m_beatSync, &QSpinBox::valueChanged, this, [this](int b) {
+        if (!m_refreshing)
+            editClip([&](Clip &c) { c.beatSync = b; });
+    });
     clipNumber(m_inPoint, [](Clip &c, double v) {
         c.inPoint = v / 100.0;
         c.outPoint = qMax(c.outPoint, c.inPoint);
@@ -676,6 +684,7 @@ void PropertyPanel::refreshClip()
     m_trigger->setCurrentIndex(int(c->trigger));
     m_playMode->setCurrentIndex(int(c->playMode));
     setValue(m_speed, c->speed);
+    setValue(m_beatSync, c->beatSync);
     m_reverse->setChecked(c->reverse);
     setValue(m_inPoint, c->inPoint * 100.0);
     setValue(m_outPoint, c->outPoint * 100.0);
@@ -723,7 +732,7 @@ void PropertyPanel::refreshClip()
     m_solidColor->setEnabled(!media && c->pattern == TestPattern::Solid);
     m_scale->setEnabled(media);
     const bool movie = c->source == ContentSource::Media;
-    for (QWidget *w : {static_cast<QWidget *>(m_playMode), static_cast<QWidget *>(m_speed),
+    for (QWidget *w : {static_cast<QWidget *>(m_playMode), static_cast<QWidget *>(m_speed), static_cast<QWidget *>(m_beatSync),
                        static_cast<QWidget *>(m_reverse), static_cast<QWidget *>(m_inPoint),
                        static_cast<QWidget *>(m_outPoint), static_cast<QWidget *>(m_position)})
         w->setEnabled(movie);

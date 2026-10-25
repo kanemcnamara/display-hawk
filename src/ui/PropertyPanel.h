@@ -89,6 +89,7 @@ private:
     QLabel *m_mediaStatus;
     QComboBox *m_playMode, *m_trigger;
     QDoubleSpinBox *m_speed, *m_inPoint, *m_outPoint;
+    QSpinBox *m_beatSync;
     QCheckBox *m_reverse;
     QSlider *m_position;
     QLabel *m_positionText;

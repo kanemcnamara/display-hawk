@@ -231,6 +231,39 @@ QString autopilotName(Autopilot a)
     return {};
 }
 
+QString tempoSourceName(TempoSource s)
+{
+    switch (s) {
+    case TempoSource::Internal: return QStringLiteral("Internal (tap)");
+    case TempoSource::MidiClock: return QStringLiteral("MIDI clock");
+    case TempoSource::AudioBeats: return QStringLiteral("Audio beats");
+    }
+    return {};
+}
+
+QString triggerQuantizeName(TriggerQuantize q)
+{
+    switch (q) {
+    case TriggerQuantize::Off: return QStringLiteral("Trigger now");
+    case TriggerQuantize::Beat: return QStringLiteral("On the next beat");
+    case TriggerQuantize::Bar: return QStringLiteral("On the next bar");
+    }
+    return {};
+}
+
+QString lfoShapeName(LfoShape s)
+{
+    switch (s) {
+    case LfoShape::Sine: return QStringLiteral("Sine");
+    case LfoShape::Triangle: return QStringLiteral("Triangle");
+    case LfoShape::SawUp: return QStringLiteral("Saw up");
+    case LfoShape::SawDown: return QStringLiteral("Saw down");
+    case LfoShape::Square: return QStringLiteral("Square");
+    case LfoShape::Random: return QStringLiteral("Random (stepped)");
+    }
+    return {};
+}
+
 QString cabinetArrangeName(CabinetArrange a)
 {
     switch (a) {
@@ -280,6 +313,8 @@ QString controlActionName(ControlAction a)
     case ControlAction::AudioMaster: return QStringLiteral("Audio master");
     case ControlAction::AudioMute: return QStringLiteral("Audio mute");
     case ControlAction::EffectParam: return QStringLiteral("Effect parameter");
+    case ControlAction::TapTempo: return QStringLiteral("Tap tempo");
+    case ControlAction::TempoResync: return QStringLiteral("Tempo resync (bar start)");
     }
     return {};
 }
@@ -492,6 +527,7 @@ static QJsonObject clipToJson(const Clip &c)
                        {"trigger", int(c.trigger)},
                        {"transform", QJsonArray{c.posX, c.posY, c.scaleBy, c.rotation, c.opacity}},
                        {"effects", effectsToJson(c.effects)},
+                       {"beatSync", c.beatSync},
                        {"volume", c.volume},
                        {"solidColor", c.solidColor.name()},
                        {"gridSpacing", c.gridSpacing}};
@@ -526,6 +562,7 @@ static Clip clipFromJson(const QJsonObject &o)
         c.opacity = qBound(0.0, t[4].toDouble(1.0), 1.0);
     }
     c.effects = effectsFromJson(o["effects"].toArray());
+    c.beatSync = qBound(0, o["beatSync"].toInt(0), 1024);
     c.volume = qBound(0.0, o["volume"].toDouble(1.0), 2.0);
     c.solidColor = QColor(o["solidColor"].toString("#ffffff"));
     c.gridSpacing = qMax(4, o["gridSpacing"].toInt(64));
@@ -680,6 +717,13 @@ QJsonObject Project::toJson() const
     }
     root["controls"] = controlArr;
     root["compEffects"] = effectsToJson(compEffects);
+    root["tempo"] = QJsonObject{{"bpm", bpm}, {"source", int(tempoSource)}, {"quantize", int(quantize)}};
+    QJsonArray lfoArr;
+    for (const Lfo &l : lfos)
+        lfoArr.append(QJsonObject{{"enabled", l.enabled}, {"target", int(l.target)}, {"layer", l.layer},
+                                  {"effect", l.effect}, {"param", l.param}, {"shape", int(l.shape)},
+                                  {"beats", l.beats}, {"amount", l.amount}, {"phase", l.phase}});
+    root["lfos"] = lfoArr;
     QJsonArray linkArr;
     for (const AudioLink &l : audioReactive.links)
         linkArr.append(QJsonObject{{"signal", int(l.signal)}, {"target", int(l.target)}, {"layer", l.layer},
@@ -863,6 +907,24 @@ Project Project::fromJson(const QJsonObject &root)
         p.layers.append(l);
     }
     p.compEffects = effectsFromJson(root["compEffects"].toArray());
+    const QJsonObject tempo = root["tempo"].toObject();
+    p.bpm = qBound(20.0, tempo["bpm"].toDouble(120.0), 300.0);
+    p.tempoSource = TempoSource(qBound(0, tempo["source"].toInt(0), 2));
+    p.quantize = TriggerQuantize(qBound(0, tempo["quantize"].toInt(0), 2));
+    for (const QJsonValue &v : root["lfos"].toArray()) {
+        const QJsonObject o = v.toObject();
+        Lfo l;
+        l.enabled = o["enabled"].toBool(true);
+        l.target = AudioTarget(qBound(0, o["target"].toInt(0), kAudioTargetCount - 1));
+        l.layer = qMax(-1, o["layer"].toInt(0));
+        l.effect = qMax(0, o["effect"].toInt(0));
+        l.param = qMax(0, o["param"].toInt(0));
+        l.shape = LfoShape(qBound(0, o["shape"].toInt(0), kLfoShapeCount - 1));
+        l.beats = qBound(0.0625, o["beats"].toDouble(4.0), 256.0);
+        l.amount = qBound(0.0, o["amount"].toDouble(1.0), 1.0);
+        l.phase = qBound(0.0, o["phase"].toDouble(0.0), 1.0);
+        p.lfos.append(l);
+    }
     for (const QJsonValue &v : root["controls"].toArray()) {
         const QJsonObject o = v.toObject();
         ControlMapping m;

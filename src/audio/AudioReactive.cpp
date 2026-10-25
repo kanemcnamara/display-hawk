@@ -1,6 +1,7 @@
 #include "audio/AudioReactive.h"
 
 #include "model/Document.h"
+#include "control/ModulationHub.h"
 #include "render/Effects.h"
 #include "render/RenderEngine.h"
 
@@ -47,7 +48,8 @@ void AudioReactive::sync()
 {
     const AudioReactiveSettings &ar = m_doc->project().audioReactive;
     m_analyzer->setSensitivity(ar.sensitivity);
-    const bool wanted = ar.enabled;
+    // Listening is needed for the links, and for the tempo when it follows the audio's beats.
+    const bool wanted = ar.enabled || m_doc->project().tempoSource == TempoSource::AudioBeats;
     if (wanted && !m_analyzer->isRunning()) {
         restartInput();
     } else if (!wanted && m_analyzer->isRunning()) {
@@ -55,15 +57,33 @@ void AudioReactive::sync()
         m_status = tr("Off");
         emit statusChanged();
     }
-    if (!wanted && m_modulating) {
-        m_engine->setModulation(1.0, {}, {}); // back to exactly the faders
+    if (!ar.enabled && m_modulating) {
+        send(1.0, {}, {}); // back to exactly the faders
         m_modulating = false;
     }
+}
+
+void AudioReactive::send(double master, const QVector<double> &layers, const QVector<EffectParamMod> &offsets)
+{
+    if (m_hub) {
+        m_hub->setAudio(master, layers, offsets);
+        return;
+    }
+    // Without a hub, offsets become absolute values here.
+    QVector<EffectParamMod> absolute = offsets;
+    const Project &p = m_doc->project();
+    for (EffectParamMod &m : absolute) {
+        const QVector<EffectInstance> &chain = m.layer < 0 ? p.compEffects : p.layers[m.layer].effects;
+        m.value += effectParam(chain[m.effect], m.param);
+    }
+    m_engine->setModulation(master, layers, absolute);
 }
 
 void AudioReactive::apply(const AudioLevels &levels)
 {
     const Project &p = m_doc->project();
+    if (levels.beat)
+        emit beatDetected(); // the tempo can follow the music even without audio-reactive links
     if (!p.audioReactive.enabled)
         return;
     m_beatPulse = levels.beat ? 1.0 : m_beatPulse * 0.82;
@@ -104,18 +124,10 @@ void AudioReactive::apply(const AudioLevels &levels)
             const EffectDef *def = effectDef(e.type);
             if (!def || link.param < 0 || link.param >= def->params.size())
                 continue;
+            // An offset on top of the set value (the hub adds offsets and keeps the result in range).
             const double base = effectParam(e, link.param);
             const double push = link.amount * value(link.signal) * (def->params[link.param].max - base);
-            const int layer = link.layer < 0 ? -1 : link.layer;
-            bool merged = false;
-            for (EffectParamMod &m : effects) {
-                if (m.layer == layer && m.effect == link.effect && m.param == link.param) {
-                    m.value = qMin(m.value + push, def->params[link.param].max);
-                    merged = true;
-                }
-            }
-            if (!merged)
-                effects.append({layer, link.effect, link.param, base + push});
+            effects.append({link.layer < 0 ? -1 : link.layer, link.effect, link.param, push});
             continue;
         }
         const double factor = 1.0 - link.amount + link.amount * value(link.signal);
@@ -124,7 +136,7 @@ void AudioReactive::apply(const AudioLevels &levels)
         else if (link.layer >= 0 && link.layer < layers.size())
             layers[link.layer] *= factor;
     }
-    m_engine->setModulation(master, layers, effects);
+    send(master, layers, effects);
     m_modulating = true;
 
     // Beat triggers: step to the next column / clip that has something in it.

@@ -56,6 +56,19 @@ The LED panel effects follow the real cabinet layout of every wall, including ca
 
 Each parameter can be driven live: OSC `/dh/layer/<l>/effect/<e>/<p>` or `/dh/comp/effect/<e>/<p>` (effects and parameters count from 1; 0..1 spans the parameter's range), MIDI (right-click a parameter → *Learn MIDI control*), or audio reactive. Live control changes the value without adding undo steps.
 
+## Tempo and LFOs
+
+The clip deck's top bar holds the show's tempo:
+
+- **BPM**, **TAP** (tap on the beat; each tap also lands on a beat), **Sync** (now is the first beat of a bar), and four beat lamps.
+- **Tempo source**: *Internal (tap)*, *MIDI clock* (24 ppqn from any MIDI input; Start resyncs the bar) or *Audio beats* (the audio-reactive beat detector, folded into 75 to 180 BPM).
+- **Quantize**: clip and column triggers start *on the next beat* or *on the next bar*.
+- OSC `/dh/tempo/tap`, `/dh/tempo/resync`, `/dh/tempo/bpm <bpm>`; *Tap tempo* and *Tempo resync* can be learned as MIDI controls.
+
+A movie clip's **Beat sync** stretches it (in to out) to a number of beats at the current tempo.
+
+**Control → LFOs…** (Ctrl/Cmd+L) adds tempo-locked waves (sine, triangle, saw up/down, square, stepped random) with a cycle of 1/4 beat to 16 bars, an amount and a phase. On the master or a layer's opacity they dip the fader by up to the amount; on any effect parameter they swing it around its set value by up to half its range. LFOs and audio-reactive links combine, and neither moves faders or adds undo steps.
+
 ## LED tools
 
 - **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.

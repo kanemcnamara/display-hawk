@@ -1,5 +1,7 @@
 #include "control/Midi.h"
 
+#include <chrono>
+
 #include <QMetaObject>
 
 #if defined(Q_OS_WIN)
@@ -31,7 +33,13 @@ void dispatch(MidiInput *owner, const QString &device, const quint8 *bytes, int 
 {
     for (int i = 0; i < length;) {
         quint8 b = bytes[i];
-        if (b >= 0xF0) { // system messages: not used for control
+        if (b >= 0xF8) { // real-time (clock, start, stop) may arrive anywhere, even mid-message
+            const qint64 ns = MidiInput::nowNs();
+            QMetaObject::invokeMethod(owner, [owner, b, ns] { emit owner->realtime(b, ns); }, Qt::QueuedConnection);
+            ++i;
+            continue;
+        }
+        if (b >= 0xF0) { // other system messages: not used
             ++i;
             continue;
         }
@@ -53,6 +61,11 @@ void dispatch(MidiInput *owner, const QString &device, const quint8 *bytes, int 
 }
 
 } // namespace
+
+qint64 MidiInput::nowNs()
+{
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
 
 #if defined(Q_OS_WIN)
 

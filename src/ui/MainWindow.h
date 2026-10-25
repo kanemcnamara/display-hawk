@@ -5,6 +5,9 @@
 
 class CanvasView;
 class AudioReactive;
+class LfoDialog;
+class ModulationHub;
+class TempoClock;
 class AudioReactiveDialog;
 class ControlDialog;
 class ControlRouter;
@@ -30,8 +33,11 @@ public:
     void setLive(bool live);
     ControlRouter *controlRouter() const { return m_router; }
     AudioReactive *audioReactive() const { return m_audioReactive; }
+    TempoClock *tempoClock() const { return m_tempo; }
+    ModulationHub *modulationHub() const { return m_modulation; }
     void showControls();
     void showAudioReactive();
+    void showLfos();
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -68,7 +74,10 @@ private:
     ControlRouter *m_router;
     ControlDialog *m_controlDialog = nullptr;
     AudioReactive *m_audioReactive;
+    TempoClock *m_tempo;
+    ModulationHub *m_modulation;
     AudioReactiveDialog *m_audioReactiveDialog = nullptr;
+    LfoDialog *m_lfoDialog = nullptr;
     QTimer *m_autosaveTimer;
     QLabel *m_cursorLabel;
     QLabel *m_fpsLabel;

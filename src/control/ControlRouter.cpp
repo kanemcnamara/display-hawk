@@ -138,6 +138,12 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
         apply(ControlAction::AudioMaster, 0, 0, value, Mode::Value);
     else if (p[1] == QLatin1String("audio") && p.value(2) == QLatin1String("mute"))
         apply(ControlAction::AudioMute, 0, 0, value, toggleMode);
+    else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("tap") && value != 0.0)
+        apply(ControlAction::TapTempo, 0, 0, 1.0, Mode::Press);
+    else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("resync") && value != 0.0)
+        apply(ControlAction::TempoResync, 0, 0, 1.0, Mode::Press);
+    else if (p[1] == QLatin1String("tempo") && p.value(2) == QLatin1String("bpm") && hasArg)
+        m_doc->setBpm(value); // in BPM, not 0..1
     else if (p[1] == QLatin1String("comp") && p.value(2) == QLatin1String("effect") && p.size() >= 5 && hasArg)
         apply(ControlAction::EffectParam, -1, index(3), value, Mode::Value, index(4));
     else if (p[1] == QLatin1String("column") && p.value(3) == QLatin1String("trigger") && value != 0.0)
@@ -268,6 +274,12 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
             const Layer &l = p.layers[layer];
             m_doc->setLayerPlayback(layer, l.opacity, l.bypass, mode == Mode::Press ? !l.solo : on);
         }
+        break;
+    case ControlAction::TapTempo:
+        emit tapTempoRequested();
+        break;
+    case ControlAction::TempoResync:
+        emit tempoResyncRequested();
         break;
     case ControlAction::EffectParam: {
         // 0..1 from the controller spans the parameter's range; choices step through.

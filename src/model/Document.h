@@ -4,6 +4,8 @@
 
 #include <QObject>
 
+#include <functional>
+
 class QTimer;
 
 struct Selection {
@@ -100,6 +102,10 @@ public:
     void setLayerVolume(int layer, double volume);
     void setAudioMaster(double volume);
     void setAudioMuted(bool muted);
+    void setBpm(double bpm); // playback state: no undo step
+    // Quantized triggering: returns how long until the next beat (beats = 1) or bar (4); set by
+    // the tempo clock. Without one, quantizing is off.
+    void setQuantizer(const std::function<int(int beats)> &msUntil) { m_quantizer = msUntil; }
     // Live control of an effect parameter (OSC/MIDI): no undo step per message. layer -1 = composition.
     void setEffectParam(int layer, int effect, int param, double value);
 
@@ -141,6 +147,9 @@ private:
 
     Project m_project;
     Selection m_selection;
+    std::function<int(int)> m_quantizer;
+    void startClip(int layer, int column);
+    void startColumn(int column);
     int m_maskScreen = -1;
     int m_mask = -1;
     QString m_filePath;

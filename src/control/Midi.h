@@ -35,8 +35,12 @@ public:
 
 signals:
     void message(const MidiMessage &message);
+    // System real-time bytes (0xF8 clock, 0xFA start, 0xFB continue, 0xFC stop) with the time they
+    // arrived, in nanoseconds on the steady clock (taken on the driver thread, before queueing).
+    void realtime(quint8 byte, qint64 ns);
 
 public:
+    static qint64 nowNs(); // the steady clock the timestamps above use
     struct Backend;
 
 private:

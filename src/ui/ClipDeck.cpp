@@ -1,4 +1,7 @@
 #include "ui/ClipDeck.h"
+#include <QDoubleSpinBox>
+#include <QComboBox>
+#include "control/TempoClock.h"
 #include <QTimer>
 #include "render/RenderEngine.h"
 #include "media/MediaSource.h"
@@ -125,7 +128,40 @@ private:
 
 // ---------------------------------------------------------------- ClipDeck
 
-ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, QWidget *parent)
+namespace {
+
+// Four lamps, one per beat of the bar; the current beat is lit (the first one brighter).
+class BeatLamps : public QWidget
+{
+public:
+    explicit BeatLamps(int *beat, QWidget *parent = nullptr)
+        : QWidget(parent)
+        , m_beat(beat)
+    {
+        setFixedSize(4 * 14 + 4, 20);
+        setToolTip(QObject::tr("The beat: click to resync (the next beat is the start of a bar)"));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        for (int i = 0; i < 4; ++i) {
+            const bool on = *m_beat == i;
+            p.setPen(Qt::NoPen);
+            p.setBrush(on ? (i == 0 ? QColor(255, 80, 60) : QColor(255, 190, 60)) : QColor(60, 60, 66));
+            p.drawEllipse(QRectF(2 + i * 14, 4, 11, 11));
+        }
+    }
+
+private:
+    int *m_beat;
+};
+
+} // namespace
+
+ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidget *parent)
     : QWidget(parent)
     , m_doc(doc)
 {
@@ -144,7 +180,54 @@ ClipDeck::ClipDeck(Document *doc, RenderEngine *engine, QWidget *parent)
     m_blackout->setStyleSheet(QStringLiteral("QPushButton:checked { background: #c62828; color: white; font-weight: bold; }"));
     top->addWidget(addLayer);
     top->addWidget(addColumn);
+    top->addSpacing(16);
+
+    // Tempo: BPM, tap, resync, beat lamps, where the beat comes from, trigger quantizing.
+    m_bpm = new QDoubleSpinBox;
+    m_bpm->setRange(20, 300);
+    m_bpm->setDecimals(1);
+    m_bpm->setSuffix(tr(" BPM"));
+    m_bpm->setToolTip(tr("Tempo for beat-synced clips, LFOs and quantized triggers"));
+    auto *tap = new QPushButton(tr("TAP"));
+    tap->setToolTip(tr("Tap on the beat to set the tempo (OSC /dh/tempo/tap, or map a MIDI control)"));
+    tap->setAutoRepeat(false);
+    auto *resync = new QPushButton(tr("Sync"));
+    resync->setToolTip(tr("Now is the first beat of a bar"));
+    m_beatLamps = new BeatLamps(&m_beatInBar);
+    m_tempoSource = new QComboBox;
+    for (int i = 0; i < 3; ++i)
+        m_tempoSource->addItem(tempoSourceName(TempoSource(i)));
+    m_tempoSource->setToolTip(tr("Where the tempo comes from"));
+    m_quantize = new QComboBox;
+    for (int i = 0; i < 3; ++i)
+        m_quantize->addItem(triggerQuantizeName(TriggerQuantize(i)));
+    m_quantize->setToolTip(tr("Clip and column triggers wait for the next beat or bar"));
+    top->addWidget(m_bpm);
+    top->addWidget(tap);
+    top->addWidget(resync);
+    top->addWidget(m_beatLamps);
+    top->addWidget(m_tempoSource);
+    top->addWidget(m_quantize);
     top->addStretch();
+    // Tap fires on press, not release: taps land where the finger does.
+    connect(tap, &QPushButton::pressed, tempo, [tempo] { tempo->tap(); });
+    connect(resync, &QPushButton::clicked, tempo, [tempo] { tempo->resync(); });
+    connect(tempo, &TempoClock::beat, this, [this](int beat) {
+        m_beatInBar = beat;
+        m_beatLamps->update();
+    });
+    connect(m_bpm, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        if (!m_refreshing)
+            m_doc->setBpm(v);
+    });
+    connect(m_tempoSource, &QComboBox::activated, this, [this](int i) {
+        m_doc->project().tempoSource = TempoSource(i);
+        m_doc->notifyChanged();
+    });
+    connect(m_quantize, &QComboBox::activated, this, [this](int i) {
+        m_doc->project().quantize = TriggerQuantize(i);
+        m_doc->notifyChanged();
+    });
     m_audioMaster = new QSlider(Qt::Horizontal);
     m_audioMaster->setRange(0, 100);
     m_audioMaster->setFixedWidth(140);
@@ -238,6 +321,11 @@ void ClipDeck::refresh()
     m_blackout->setChecked(p.blackout);
     m_audioMaster->setValue(qRound(p.audioMaster * 100.0));
     m_audioMute->setChecked(p.audioMuted);
+    if (!m_bpm->hasFocus() && qAbs(m_bpm->value() - p.bpm) > 0.049)
+        m_bpm->setValue(p.bpm);
+    m_bpm->setEnabled(p.tempoSource == TempoSource::Internal);
+    m_tempoSource->setCurrentIndex(int(p.tempoSource));
+    m_quantize->setCurrentIndex(int(p.quantize));
     m_refreshing = false;
     for (QWidget *w : std::as_const(m_rows))
         static_cast<LayerRow *>(w)->refresh();

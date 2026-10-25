@@ -4,7 +4,10 @@
 
 #include <QObject>
 
+#include "render/RenderEngine.h"
+
 class Document;
+class ModulationHub;
 class RenderEngine;
 
 // Drives the show from an analysed audio input according to the project's audio-reactive links:
@@ -23,8 +26,12 @@ public:
 
     // Applies one frame of levels (from the analyser, or injected by tests).
     void apply(const AudioLevels &levels);
+    // Modulation goes through the hub (mixed with LFOs) when set, else straight to the renderer.
+    void setHub(ModulationHub *hub) { m_hub = hub; }
 
 signals:
+    void beatDetected(); // each detected beat (drives the tempo when following audio)
+
     void statusChanged();
 
 private:
@@ -38,4 +45,6 @@ private:
     QString m_status;
     double m_beatPulse = 0.0; // "Beat" as a signal: jumps to 1 on a beat, decays quickly
     bool m_modulating = false;
+    ModulationHub *m_hub = nullptr;
+    void send(double master, const QVector<double> &layers, const QVector<EffectParamMod> &offsets);
 };

@@ -109,6 +109,8 @@ void RenderEngine::syncMedia()
                     m_thread->setClipImage(id, img);
             }, Qt::DirectConnection);
             connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
+            // Beat sync needs the movie's length, known once it has loaded.
+            connect(m, &MediaSource::stateChanged, this, [this] { QTimer::singleShot(0, this, &RenderEngine::syncMedia); });
             connect(m, &MediaSource::looped, this, [this, id] { emit clipFinished(id, false); });
             connect(m, &MediaSource::ended, this, [this, id] { emit clipFinished(id, true); });
             for (const QAudioDevice &d : QMediaDevices::audioOutputs())
@@ -122,6 +124,9 @@ void RenderEngine::syncMedia()
         }
         PlaybackParams params;
         params.speed = clip->speed;
+        const double length = m->durationSeconds() * qMax(0.0, clip->outPoint - clip->inPoint);
+        if (clip->beatSync > 0 && length > 0.0) // in to out lasts exactly beatSync beats
+            params.speed *= length / (clip->beatSync * 60.0 / qMax(1.0, m_doc->project().bpm));
         params.reverse = clip->reverse;
         params.mode = clip->playMode;
         params.in = clip->inPoint;

@@ -44,6 +44,10 @@ qt_add_executable(DisplayHawk
     src/control/Midi.cpp
     src/control/ControlRouter.h
     src/control/AutopilotController.h
+    src/control/TempoClock.h
+    src/control/TempoClock.cpp
+    src/control/ModulationHub.h
+    src/control/ModulationHub.cpp
     src/control/AutopilotController.cpp
     src/control/ControlRouter.cpp
     src/media/MediaSource.h
@@ -66,6 +70,8 @@ qt_add_executable(DisplayHawk
     src/ui/AudioReactiveDialog.cpp
     src/ui/CabinetLayoutEditor.h
     src/ui/CabinetLayoutEditor.cpp
+    src/ui/LfoDialog.h
+    src/ui/LfoDialog.cpp
     src/ui/MaskEditor.h
     src/ui/MaskEditor.cpp
     src/ui/EffectChainEditor.h

@@ -7,6 +7,10 @@
 #include "audio/AudioReactive.h"
 #include "control/AutopilotController.h"
 #include "control/ControlRouter.h"
+#include "control/Midi.h"
+#include "control/ModulationHub.h"
+#include "control/TempoClock.h"
+#include "ui/LfoDialog.h"
 #include "ui/AudioReactiveDialog.h"
 #include "ui/CanvasView.h"
 #include "ui/ControlDialog.h"
@@ -143,10 +147,19 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
 
     m_router = new ControlRouter(doc, this);
     m_audioReactive = new AudioReactive(doc, engine, this);
+    // Tempo: tapped, or followed from MIDI clock or the audio's beats; LFOs and audio links are
+    // mixed by the modulation hub.
+    m_tempo = new TempoClock(doc, this);
+    m_modulation = new ModulationHub(doc, engine, m_tempo, this);
+    m_audioReactive->setHub(m_modulation);
+    connect(m_router->midi(), &MidiInput::realtime, m_tempo, &TempoClock::midiRealtime);
+    connect(m_audioReactive, &AudioReactive::beatDetected, m_tempo, [this] { m_tempo->audioBeat(); });
+    connect(m_router, &ControlRouter::tapTempoRequested, m_tempo, [this] { m_tempo->tap(); });
+    connect(m_router, &ControlRouter::tempoResyncRequested, m_tempo, [this] { m_tempo->resync(); });
     new AutopilotController(doc, engine, this); // clip ends: autopilot and "play once and clear"
     connect(m_router, &ControlRouter::liveRequested, this, [this](int state) { setLive(state < 0 ? !m_live : state == 1); });
 
-    auto *deck = new ClipDeck(doc, engine);
+    auto *deck = new ClipDeck(doc, engine, m_tempo);
     connect(deck, &ClipDeck::midiLearnRequested, this, [this](int action, int layer, int column) {
         showControls();
         m_controlDialog->learnNew(action, layer, column);
@@ -308,6 +321,7 @@ void MainWindow::buildActions()
 
     QMenu *control = menuBar()->addMenu(tr("&Control"));
     control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
+    control->addAction(tr("LFOs..."), QKeySequence(tr("Ctrl+L")), this, &MainWindow::showLfos);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Reset input view"), this, [this] { m_inputView->resetView(); });
@@ -706,6 +720,14 @@ void MainWindow::showAudioReactive()
         m_audioReactiveDialog = new AudioReactiveDialog(m_doc, m_audioReactive, this);
     m_audioReactiveDialog->show();
     m_audioReactiveDialog->raise();
+}
+
+void MainWindow::showLfos()
+{
+    if (!m_lfoDialog)
+        m_lfoDialog = new LfoDialog(m_doc, this);
+    m_lfoDialog->show();
+    m_lfoDialog->raise();
 }
 
 void MainWindow::showControls()

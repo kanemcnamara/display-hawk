@@ -78,6 +78,7 @@ void Document::copyPlayback(const Project &from, Project &to)
     to.blackout = from.blackout;
     to.audioMaster = from.audioMaster;
     to.audioMuted = from.audioMuted;
+    to.bpm = from.bpm;
     for (Layer &l : to.layers) {
         for (const Layer &f : from.layers) {
             if (f.id != l.id)
@@ -281,12 +282,48 @@ void Document::triggerClip(int layer, int column)
         clearLayer(layer); // a toggle clip that is playing stops
         return;
     }
+    // Quantized: wait for the next beat or bar (the clip is identified by id, in case it moves).
+    if (m_project.quantize != TriggerQuantize::Off && m_quantizer) {
+        const int ms = m_quantizer(m_project.quantize == TriggerQuantize::Bar ? 4 : 1);
+        if (ms > 5) {
+            const QString id = l.clips[column].id;
+            QTimer::singleShot(ms, Qt::PreciseTimer, this, [this, layer, id] {
+                if (layer >= m_project.layers.size())
+                    return;
+                const QVector<::Clip> &clips = m_project.layers[layer].clips;
+                for (int c = 0; c < clips.size(); ++c)
+                    if (clips[c].id == id)
+                        startClip(layer, c);
+            });
+            return;
+        }
+    }
+    startClip(layer, column);
+}
+
+void Document::startClip(int layer, int column)
+{
+    Layer &l = m_project.layers[layer];
     l.activeColumn = column;
     notifyPlaybackChanged();
     emit clipTriggered(l.clips[column].id);
 }
 
 void Document::triggerColumn(int column)
+{
+    if (column < 0 || column >= m_project.columns)
+        return;
+    if (m_project.quantize != TriggerQuantize::Off && m_quantizer) {
+        const int ms = m_quantizer(m_project.quantize == TriggerQuantize::Bar ? 4 : 1);
+        if (ms > 5) {
+            QTimer::singleShot(ms, Qt::PreciseTimer, this, [this, column] { startColumn(column); });
+            return;
+        }
+    }
+    startColumn(column);
+}
+
+void Document::startColumn(int column)
 {
     if (column < 0 || column >= m_project.columns)
         return;
@@ -317,6 +354,15 @@ void Document::clearLayer(int layer)
     if (layer < 0 || layer >= m_project.layers.size())
         return;
     m_project.layers[layer].activeColumn = -1;
+    notifyPlaybackChanged();
+}
+
+void Document::setBpm(double bpm)
+{
+    bpm = qBound(20.0, bpm, 300.0);
+    if (qAbs(bpm - m_project.bpm) < 1e-6)
+        return;
+    m_project.bpm = bpm;
     notifyPlaybackChanged();
 }
 

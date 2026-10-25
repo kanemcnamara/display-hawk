@@ -7,6 +7,9 @@
 class ClipGrid;
 class Document;
 class RenderEngine;
+class TempoClock;
+class QComboBox;
+class QDoubleSpinBox;
 class QPushButton;
 class QSlider;
 class QVBoxLayout;
@@ -19,7 +22,7 @@ class ClipDeck : public QWidget
 {
     Q_OBJECT
 public:
-    ClipDeck(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
+    ClipDeck(Document *doc, RenderEngine *engine, TempoClock *tempo, QWidget *parent = nullptr);
 
 signals:
     // Right-click "MIDI learn" on a clip or column: ControlAction, layer and column (0-based).
@@ -39,6 +42,10 @@ private:
     QPushButton *m_blackout;
     QSlider *m_audioMaster;
     QPushButton *m_audioMute;
+    QDoubleSpinBox *m_bpm;
+    QComboBox *m_tempoSource, *m_quantize;
+    QWidget *m_beatLamps;
+    int m_beatInBar = -1;
     QVBoxLayout *m_rowLayout;
     QVector<QWidget *> m_rows;
     ClipGrid *m_grid;
