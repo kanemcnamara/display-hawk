@@ -1,11 +1,11 @@
-﻿cmake_minimum_required(VERSION 3.21)
+cmake_minimum_required(VERSION 3.21)
 project(DisplayHawk VERSION 0.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # QRhi (Qt's Metal / Direct3D / Vulkan / OpenGL abstraction) needs Qt 6.6+ and the GuiPrivate target.
-find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Multimedia ShaderTools)
+find_package(Qt6 6.6 REQUIRED COMPONENTS Core Gui Widgets Multimedia Network ShaderTools)
 qt_standard_project_setup()
 
 qt_add_executable(DisplayHawk
@@ -24,6 +24,12 @@ qt_add_executable(DisplayHawk
     src/render/RenderThread.cpp
     src/render/YuvConverter.h
     src/render/YuvConverter.cpp
+    src/control/Osc.h
+    src/control/Osc.cpp
+    src/control/Midi.h
+    src/control/Midi.cpp
+    src/control/ControlRouter.h
+    src/control/ControlRouter.cpp
     src/media/MediaSource.h
     src/media/MediaSource.cpp
     src/media/Snappy.h
@@ -38,6 +44,8 @@ qt_add_executable(DisplayHawk
     src/ui/MainWindow.cpp
     src/ui/CanvasView.h
     src/ui/CanvasView.cpp
+    src/ui/ControlDialog.h
+    src/ui/ControlDialog.cpp
     src/ui/ClipDeck.h
     src/ui/ClipDeck.cpp
     src/ui/IdentifyOverlay.h
@@ -91,5 +99,12 @@ qt_add_shaders(DisplayHawk "shaders"
 target_include_directories(DisplayHawk PRIVATE src)
 
 target_link_libraries(DisplayHawk PRIVATE
-    Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia
+    Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia Qt6::Network
 )
+
+# MIDI input uses the OS API directly.
+if(WIN32)
+    target_link_libraries(DisplayHawk PRIVATE winmm)
+elseif(APPLE)
+    target_link_libraries(DisplayHawk PRIVATE "-framework CoreMIDI" "-framework CoreFoundation")
+endif()

@@ -1,4 +1,5 @@
-﻿#include "model/Document.h"
+#include "control/ControlRouter.h"
+#include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
 #include "ui/ReportExporter.h"
@@ -8,12 +9,15 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QDialog>
 #include <QEventLoop>
 #include <functional>
 #include <QIcon>
 #include <QJsonObject>
 #include <QMutex>
 #include <QTimer>
+#include <QUdpSocket>
+#include <QtEndian>
 #include <QStandardPaths>
 #include <QTime>
 #include <QPalette>
@@ -280,12 +284,83 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         check(files.size() >= 4 && pdf.size() > 20000, "setup report export (PDF, PNGs, CSV)");
     }
 
+    // OSC: real UDP packets to the app on localhost.
+    {
+        ControlRouter *router = window.controlRouter();
+        QString error;
+        const bool listening = router->setOsc(true, 0, &error, false, true); // free local port, not remembered
+        check(listening, "OSC listener starts");
+        QUdpSocket sender;
+        auto send = [&](const QString &address, const QVariantList &args = {}) {
+            sender.writeDatagram(Osc::encode({address, args}), QHostAddress::LocalHost, quint16(router->oscPort()));
+        };
+        const Project &p = doc.project();
+        send(QStringLiteral("/dh/master"), {0.25});
+        send(QStringLiteral("/dh/column/2/trigger"), {1});
+        send(QStringLiteral("/dh/layer/1/opacity"), {0.5});
+        check(waitFor([&] { return qAbs(p.master - 0.25) < 0.01 && p.layers[0].activeColumn == 1
+                                   && qAbs(p.layers[0].opacity - 0.5) < 0.01; }, 3000),
+              "OSC master, column trigger and layer opacity");
+        send(QStringLiteral("/dh/blackout")); // no argument: toggle on
+        const bool toggledOn = waitFor([&] { return p.blackout; }, 3000);
+        send(QStringLiteral("/dh/blackout"), {false}); // explicit off (T/F argument)
+        check(toggledOn && waitFor([&] { return !p.blackout; }, 3000), "OSC blackout toggle and explicit off");
+        // A bundle with two messages.
+        QByteArray bundle("#bundle\0", 8);
+        bundle += QByteArray(8, '\0');
+        for (const OscMessage &m : {OscMessage{QStringLiteral("/dh/master"), {1.0}},
+                                    OscMessage{QStringLiteral("/dh/layer/1/opacity"), {1.0}}}) {
+            const QByteArray enc = Osc::encode(m);
+            char size[4];
+            qToBigEndian(qint32(enc.size()), size);
+            bundle += QByteArray(size, 4) + enc;
+        }
+        sender.writeDatagram(bundle, QHostAddress::LocalHost, quint16(router->oscPort()));
+        check(waitFor([&] { return p.master > 0.99 && p.layers[0].opacity > 0.99; }, 3000), "OSC bundle");
+        window.showControls(); // the OSC & MIDI window with the mappings learned below
+        router->setOsc(false, 0, nullptr, false);
+    }
+    // MIDI: learn, then notes toggle and CCs drive faders/triggers (synthetic messages).
+    {
+        ControlRouter *router = window.controlRouter();
+        QVector<ControlMapping> &controls = doc.project().controls;
+        auto learn = [&](ControlAction action, int layer, int column, const MidiMessage &m) {
+            ControlMapping c;
+            c.action = action;
+            c.layer = layer;
+            c.column = column;
+            controls.append(c);
+            router->startLearn(int(controls.size()) - 1);
+            router->handleMidi(m);
+            return controls.last().midiSet;
+        };
+        const MidiMessage note60{0x90, 60, 100, QStringLiteral("test")}; // note on, channel 1
+        const MidiMessage cc7{0xB2, 7, 64, QStringLiteral("test")};      // CC 7 = 64 on channel 3
+        const bool learnedAll = learn(ControlAction::LayerBypass, 0, 0, note60)
+                                && learn(ControlAction::Master, 0, 0, cc7)
+                                && learn(ControlAction::TriggerClip, 0, 2, MidiMessage{0xB0, 20, 0, QStringLiteral("test")});
+        check(learnedAll && controls[controls.size() - 2].midiIsCC && controls[controls.size() - 2].midiChannel == 2,
+              "MIDI learn assigns note and CC controls");
+        router->handleMidi(note60);
+        const bool bypassOn = doc.project().layers[0].bypass;
+        router->handleMidi(note60);
+        check(bypassOn && !doc.project().layers[0].bypass, "MIDI note toggles layer bypass");
+        router->handleMidi(cc7);
+        check(qAbs(doc.project().master - 64 / 127.0) < 0.001, "MIDI CC drives the master fader");
+        doc.triggerColumn(0);
+        router->handleMidi(MidiMessage{0xB0, 20, 127, QStringLiteral("test")});
+        check(doc.project().layers[0].activeColumn == 2, "MIDI CC triggers a clip");
+        doc.setMaster(1.0);
+    }
+
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a
     // cabinet marked as not fitted so the panel grid editor shows both states.
     doc.project().walls[0].disabledPanels = {QPoint(9, 0)};
     doc.notifyChanged();
     doc.select(Selection::ofWall(0));
     waitMs(300);
+    if (auto *dialog = window.findChild<QDialog *>())
+        dialog->grab().save(QStringLiteral("%1/osc-midi-window.png").arg(outDir));
     window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));
     window.setLive(false);
     return ok ? 0 : 1;

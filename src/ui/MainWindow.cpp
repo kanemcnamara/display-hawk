@@ -1,8 +1,10 @@
-﻿#include "ui/MainWindow.h"
+#include "ui/MainWindow.h"
 
 #include "model/Document.h"
 #include "render/RenderEngine.h"
+#include "control/ControlRouter.h"
 #include "ui/CanvasView.h"
+#include "ui/ControlDialog.h"
 #include "ui/ClipDeck.h"
 #include "ui/IdentifyOverlay.h"
 #include "ui/OutputWindow.h"
@@ -126,9 +128,17 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     addDockWidget(Qt::RightDockWidgetArea, propDock);
     connect(m_props, &PropertyPanel::identifyRequested, this, &MainWindow::identifyDisplays);
 
+    m_router = new ControlRouter(doc, this);
+    connect(m_router, &ControlRouter::liveRequested, this, [this](int state) { setLive(state < 0 ? !m_live : state == 1); });
+
+    auto *deck = new ClipDeck(doc);
+    connect(deck, &ClipDeck::midiLearnRequested, this, [this](int action, int layer, int column) {
+        showControls();
+        m_controlDialog->learnNew(action, layer, column);
+    });
     auto *deckDock = new QDockWidget(tr("Clip Deck"));
     deckDock->setObjectName(QStringLiteral("deck"));
-    deckDock->setWidget(new ClipDeck(doc));
+    deckDock->setWidget(deck);
     addDockWidget(Qt::BottomDockWidgetArea, deckDock);
     resizeDocks({deckDock}, {280}, Qt::Vertical);
 
@@ -252,6 +262,9 @@ void MainWindow::buildActions()
                                         "and recover from a crash without asking."));
     m_liveOnLaunchAction->setChecked(settings.value(kSettingLiveOnLaunch, false).toBool());
     connect(m_liveOnLaunchAction, &QAction::toggled, this, [](bool on) { QSettings().setValue(kSettingLiveOnLaunch, on); });
+
+    QMenu *control = menuBar()->addMenu(tr("&Control"));
+    control->addAction(tr("OSC && MIDI..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Reset input view"), this, [this] { m_inputView->resetView(); });
@@ -592,6 +605,15 @@ bool MainWindow::saveProjectAs()
     const QString start = m_doc->filePath().isEmpty() ? QStringLiteral("setup.dhawk") : m_doc->filePath();
     const QString path = QFileDialog::getSaveFileName(this, tr("Save setup"), start, tr("Display Hawk setup (*.dhawk)"));
     return !path.isEmpty() && saveTo(path);
+}
+
+void MainWindow::showControls()
+{
+    if (!m_controlDialog)
+        m_controlDialog = new ControlDialog(m_doc, m_router, this);
+    m_controlDialog->show();
+    m_controlDialog->raise();
+    m_controlDialog->activateWindow();
 }
 
 void MainWindow::exportReport()

@@ -21,6 +21,26 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 - **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
 - **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
 
+## Remote control: OSC and MIDI
+
+**Control → OSC & MIDI…** (Ctrl/Cmd+M).
+
+- **OSC** over UDP (off by default; default port 7400). Layers and columns count from 1, layer 1 is the bottom layer:
+
+  | Address | Argument |
+  | --- | --- |
+  | `/dh/master` | 0..1 |
+  | `/dh/blackout`, `/dh/live` | 0/1, or none to toggle |
+  | `/dh/column/<c>/trigger` | (0 is ignored, so button releases do nothing) |
+  | `/dh/layer/<l>/clip/<c>/trigger` | |
+  | `/dh/layer/<l>/opacity` | 0..1 |
+  | `/dh/layer/<l>/bypass`, `/dh/layer/<l>/solo` | 0/1, or none to toggle |
+  | `/dh/layer/<l>/clear` | |
+
+  Bundles and int/float/bool/double arguments are accepted, so TouchOSC, QLab, Companion, lighting desks or a few lines of Python all work.
+- **MIDI** from every connected controller (WinMM on Windows, CoreMIDI on macOS; choose devices in the dialog). Mappings are saved with the setup: add one and press **Learn**, then press a key or move a knob, or right-click a clip / column number in the Clip Deck → *MIDI learn*. Notes trigger and flip toggles; CCs drive faders, set toggles (≥ 64 = on) and trigger once as they pass halfway.
+- The dialog's monitor shows every incoming OSC and MIDI message.
+
 ## Clip deck
 
 | Thing | What it is |

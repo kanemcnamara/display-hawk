@@ -1,0 +1,43 @@
+#pragma once
+
+#include <QDialog>
+
+class ControlRouter;
+class Document;
+class QCheckBox;
+class QComboBox;
+class QLabel;
+class QListWidget;
+class QPlainTextEdit;
+class QSpinBox;
+class QTableWidget;
+
+// OSC and MIDI setup: OSC port, MIDI devices, MIDI mappings with learn, and a live monitor.
+class ControlDialog : public QDialog
+{
+    Q_OBJECT
+public:
+    ControlDialog(Document *doc, ControlRouter *router, QWidget *parent = nullptr);
+
+    // Adds a mapping for `action` (layer/column 0-based) and starts learning it.
+    void learnNew(int action, int layer, int column);
+
+private:
+    void refreshOsc();
+    void refreshDevices();
+    void refreshMappings();
+    void addMapping(int action, int layer, int column);
+
+    Document *m_doc;
+    ControlRouter *m_router;
+    QCheckBox *m_oscEnabled;
+    QSpinBox *m_oscPort;
+    QLabel *m_oscStatus;
+    QListWidget *m_devices;
+    QTableWidget *m_mappings;
+    QComboBox *m_newAction;
+    QSpinBox *m_newLayer;
+    QSpinBox *m_newColumn;
+    QPlainTextEdit *m_monitor;
+    bool m_refreshing = false;
+};

@@ -1,4 +1,4 @@
-﻿#include "ui/ClipDeck.h"
+#include "ui/ClipDeck.h"
 
 #include "model/Document.h"
 #include "render/Patterns.h"
@@ -153,6 +153,7 @@ ClipDeck::ClipDeck(Document *doc, QWidget *parent)
     m_rowLayout->setSpacing(0);
     m_rowLayout->addStretch();
     m_grid = new ClipGrid(doc);
+    connect(m_grid, &ClipGrid::midiLearnRequested, this, &ClipDeck::midiLearnRequested);
     h->addWidget(left, 0, Qt::AlignTop);
     h->addWidget(m_grid, 0, Qt::AlignTop);
     h->addStretch();
@@ -435,6 +436,16 @@ void ClipGrid::browseInto(int layer, int column)
 void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
 {
     const auto cell = cellAt(e->pos());
+    if (cell.first == -2) { // column header
+        const int column = cell.second;
+        QMenu menu(this);
+        menu.addAction(tr("Trigger column %1").arg(column + 1), this, [this, column] { m_doc->triggerColumn(column); });
+        menu.addAction(tr("MIDI learn: trigger column %1").arg(column + 1), this, [this, column] {
+            emit midiLearnRequested(int(ControlAction::TriggerColumn), 0, column);
+        });
+        menu.exec(e->globalPos());
+        return;
+    }
     if (cell.first < 0)
         return;
     const int layer = cell.first, column = cell.second;
@@ -452,6 +463,9 @@ void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
         });
     }
     if (!clip.isEmpty()) {
+        menu.addAction(tr("MIDI learn: trigger this clip"), this, [this, layer, column] {
+            emit midiLearnRequested(int(ControlAction::TriggerClip), layer, column);
+        });
         menu.addSeparator();
         menu.addAction(tr("Duplicate"), m_doc, &Document::duplicateSelection);
         menu.addAction(tr("Clear slot"), this, [this, layer, column] { m_doc->setClip(layer, column, Clip()); });

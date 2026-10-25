@@ -42,6 +42,50 @@ QString blendModeName(BlendMode m)
     return {};
 }
 
+QString controlActionName(ControlAction a)
+{
+    switch (a) {
+    case ControlAction::Master: return QStringLiteral("Master fader");
+    case ControlAction::Blackout: return QStringLiteral("Blackout");
+    case ControlAction::OutputsLive: return QStringLiteral("Outputs live");
+    case ControlAction::TriggerColumn: return QStringLiteral("Trigger column");
+    case ControlAction::TriggerClip: return QStringLiteral("Trigger clip");
+    case ControlAction::LayerOpacity: return QStringLiteral("Layer opacity");
+    case ControlAction::LayerBypass: return QStringLiteral("Layer bypass");
+    case ControlAction::LayerSolo: return QStringLiteral("Layer solo");
+    case ControlAction::ClearLayer: return QStringLiteral("Stop layer");
+    }
+    return {};
+}
+
+bool controlActionUsesLayer(ControlAction a)
+{
+    return a == ControlAction::TriggerClip || a == ControlAction::LayerOpacity || a == ControlAction::LayerBypass
+           || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer;
+}
+
+bool controlActionUsesColumn(ControlAction a)
+{
+    return a == ControlAction::TriggerColumn || a == ControlAction::TriggerClip;
+}
+
+QString ControlMapping::targetText() const
+{
+    QStringList parts;
+    if (controlActionUsesLayer(action))
+        parts << QStringLiteral("layer %1").arg(layer + 1);
+    if (controlActionUsesColumn(action))
+        parts << QStringLiteral("column %1").arg(column + 1);
+    return parts.join(QStringLiteral(", "));
+}
+
+QString ControlMapping::midiText() const
+{
+    if (!midiSet)
+        return QStringLiteral("not learned");
+    return QStringLiteral("%1 %2, ch %3").arg(midiIsCC ? QStringLiteral("CC") : QStringLiteral("Note")).arg(midiNumber).arg(midiChannel + 1);
+}
+
 QString newId()
 {
     return QUuid::createUuid().toString(QUuid::WithoutBraces);
@@ -238,6 +282,18 @@ QJsonObject Project::toJson() const
                                     {"clips", clipArr}});
     }
     root["deck"] = QJsonObject{{"columns", columns}, {"layers", layerArr}};
+
+    QJsonArray controlArr;
+    for (const ControlMapping &m : controls) {
+        controlArr.append(QJsonObject{{"action", int(m.action)},
+                                      {"layer", m.layer},
+                                      {"column", m.column},
+                                      {"midiSet", m.midiSet},
+                                      {"midiCC", m.midiIsCC},
+                                      {"midiChannel", m.midiChannel},
+                                      {"midiNumber", m.midiNumber}});
+    }
+    root["controls"] = controlArr;
     return root;
 }
 
@@ -342,6 +398,19 @@ Project Project::fromJson(const QJsonObject &root)
         l.activeColumn = 0;
         p.layers.append(l);
     }
+    for (const QJsonValue &v : root["controls"].toArray()) {
+        const QJsonObject o = v.toObject();
+        ControlMapping m;
+        m.action = ControlAction(qBound(0, o["action"].toInt(), kControlActionCount - 1));
+        m.layer = qMax(0, o["layer"].toInt());
+        m.column = qMax(0, o["column"].toInt());
+        m.midiSet = o["midiSet"].toBool(false);
+        m.midiIsCC = o["midiCC"].toBool(false);
+        m.midiChannel = qBound(0, o["midiChannel"].toInt(), 15);
+        m.midiNumber = qBound(0, o["midiNumber"].toInt(), 127);
+        p.controls.append(m);
+    }
+
     if (p.layers.isEmpty())
         p.layers.append(Layer());
     p.normalizeDeck();

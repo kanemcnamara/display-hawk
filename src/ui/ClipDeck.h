@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QHash>
 #include <QPixmap>
@@ -20,6 +20,11 @@ class ClipDeck : public QWidget
 public:
     explicit ClipDeck(Document *doc, QWidget *parent = nullptr);
 
+signals:
+    // Right-click "MIDI learn" on a clip or column: ControlAction, layer and column (0-based).
+    void midiLearnRequested(int action, int layer, int column);
+
+public:
     static constexpr int kHeaderH = 24;
     static constexpr int kRowH = 86;
     static constexpr int kCellW = 128;
@@ -44,6 +49,9 @@ class ClipGrid : public QWidget
 public:
     explicit ClipGrid(Document *doc, QWidget *parent = nullptr);
     void updateSize();
+
+signals:
+    void midiLearnRequested(int action, int layer, int column);
 
 protected:
     void paintEvent(QPaintEvent *e) override;

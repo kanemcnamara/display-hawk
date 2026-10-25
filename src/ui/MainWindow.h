@@ -1,9 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include <QMainWindow>
 #include <QPointer>
 
 class CanvasView;
+class ControlDialog;
+class ControlRouter;
 class Document;
 class OutputWindow;
 class PropertyPanel;
@@ -24,6 +26,8 @@ public:
     // Crash recovery, reopening the last setup and go-live-on-launch. Call once after show().
     void startup(const QStringList &args);
     void setLive(bool live);
+    ControlRouter *controlRouter() const { return m_router; }
+    void showControls();
 
 protected:
     void closeEvent(QCloseEvent *e) override;
@@ -57,6 +61,8 @@ private:
     QComboBox *m_outputScreen;
     PropertyPanel *m_props;
     QTreeWidget *m_tree;
+    ControlRouter *m_router;
+    ControlDialog *m_controlDialog = nullptr;
     QTimer *m_autosaveTimer;
     QLabel *m_cursorLabel;
     QLabel *m_fpsLabel;

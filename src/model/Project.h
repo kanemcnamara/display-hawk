@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <QColor>
 #include <QJsonObject>
@@ -111,6 +111,37 @@ struct Layer {
     const Clip *activeClip() const;
 };
 
+// Something a controller can do. Layer and column are 0-based indices (layer 0 = bottom).
+enum class ControlAction {
+    Master = 0,     // continuous
+    Blackout,       // toggle
+    OutputsLive,    // toggle
+    TriggerColumn,  // trigger (column)
+    TriggerClip,    // trigger (layer, column)
+    LayerOpacity,   // continuous (layer)
+    LayerBypass,    // toggle (layer)
+    LayerSolo,      // toggle (layer)
+    ClearLayer,     // trigger (layer)
+};
+constexpr int kControlActionCount = int(ControlAction::ClearLayer) + 1;
+QString controlActionName(ControlAction a);
+bool controlActionUsesLayer(ControlAction a);
+bool controlActionUsesColumn(ControlAction a);
+
+// A MIDI control (note or CC on a channel) mapped to an action. Learned from the controller.
+struct ControlMapping {
+    ControlAction action = ControlAction::TriggerColumn;
+    int layer = 0;
+    int column = 0;
+    bool midiSet = false;
+    bool midiIsCC = false; // false = note
+    int midiChannel = 0;   // 0..15
+    int midiNumber = 0;    // note or controller number
+
+    QString targetText() const;
+    QString midiText() const;
+};
+
 struct Project {
     int compWidth = 1920;
     int compHeight = 1080;
@@ -124,6 +155,7 @@ struct Project {
     int columns = 8;
     QVector<Layer> layers;
     double master = 1.0; // playback state
+    QVector<ControlMapping> controls; // MIDI mappings for this show
     bool blackout = false; // playback state
 
     QSize compSize() const { return QSize(compWidth, compHeight); }
