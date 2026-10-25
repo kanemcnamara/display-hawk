@@ -142,11 +142,14 @@ struct ControlMapping {
     QString midiText() const;
 };
 
-// Where Display Hawk sits in a lighting desk's DMX patch (Art-Net). Channels from `address`:
-// 1 master, 2 blackout, 3 column trigger, then per layer (bottom first): clip, opacity, bypass.
+enum class DmxProtocol { ArtNet = 0, Sacn = 1 };
+
+// Where Display Hawk sits in a lighting desk's DMX patch (Art-Net or sACN). Channels from
+// `address`: 1 master, 2 blackout, 3 column trigger, then per layer (bottom first): clip, opacity, bypass.
 struct DmxPatch {
     bool enabled = false;
-    int universe = 0; // Art-Net Port-Address, 0..32767
+    DmxProtocol protocol = DmxProtocol::ArtNet;
+    int universe = 0; // Art-Net Port-Address 0..32767, or sACN universe 1..63999
     int address = 1;  // first channel, 1..512
     int layers = 4;   // how many layers the desk controls
 

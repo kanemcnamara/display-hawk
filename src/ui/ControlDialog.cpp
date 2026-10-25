@@ -2,6 +2,7 @@
 
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
+#include "control/Sacn.h"
 #include "model/Document.h"
 
 #include <QCheckBox>
@@ -28,7 +29,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     , m_doc(doc)
     , m_router(router)
 {
-    setWindowTitle(tr("OSC, MIDI & Art-Net"));
+    setWindowTitle(tr("OSC, MIDI & DMX"));
     resize(900, 720);
 
     // OSC
@@ -109,7 +110,10 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     auto *al = new QVBoxLayout(artnet);
     auto *patchBox = new QGroupBox(tr("DMX patch (saved with the setup)"));
     auto *pf = new QFormLayout(patchBox);
-    m_dmxEnabled = new QCheckBox(tr("Receive Art-Net (UDP 6454)"));
+    m_dmxEnabled = new QCheckBox(tr("Receive DMX from a lighting desk"));
+    m_dmxProtocol = new QComboBox;
+    m_dmxProtocol->addItem(tr("Art-Net (UDP 6454)"), int(DmxProtocol::ArtNet));
+    m_dmxProtocol->addItem(tr("sACN / E1.31 (UDP 5568, multicast)"), int(DmxProtocol::Sacn));
     m_dmxUniverse = new QSpinBox;
     m_dmxUniverse->setRange(0, 32767);
     m_dmxUniverseText = new QLabel;
@@ -123,7 +127,8 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     uniRow->addWidget(m_dmxUniverse);
     uniRow->addWidget(m_dmxUniverseText, 1);
     pf->addRow(m_dmxEnabled);
-    pf->addRow(tr("Universe (Port-Address)"), uniRow);
+    pf->addRow(tr("Protocol"), m_dmxProtocol);
+    pf->addRow(tr("Universe"), uniRow);
     pf->addRow(tr("Start address"), m_dmxAddress);
     pf->addRow(tr("Layers controlled"), m_dmxLayers);
     pf->addRow(m_dmxStatus);
@@ -153,7 +158,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     m_tabs = new QTabWidget;
     m_tabs->addTab(oscPage, tr("OSC"));
     m_tabs->addTab(midiPage, tr("MIDI"));
-    m_tabs->addTab(artnet, tr("Art-Net / DMX"));
+    m_tabs->addTab(artnet, tr("DMX (Art-Net / sACN)"));
 
     auto *split = new QSplitter(Qt::Vertical);
     split->addWidget(m_tabs);
@@ -167,13 +172,21 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
             return;
         DmxPatch &p = m_doc->project().dmx;
         p.enabled = m_dmxEnabled->isChecked();
-        p.universe = m_dmxUniverse->value();
+        const DmxProtocol protocol = DmxProtocol(m_dmxProtocol->currentData().toInt());
+        if (protocol != p.protocol) {
+            p.protocol = protocol;
+            // sACN universes start at 1, Art-Net Port-Addresses at 0.
+            p.universe = protocol == DmxProtocol::Sacn ? qMax(1, m_dmxUniverse->value()) : m_dmxUniverse->value();
+        } else {
+            p.universe = m_dmxUniverse->value();
+        }
         p.address = m_dmxAddress->value();
         p.layers = m_dmxLayers->value();
         m_doc->notifyChanged();
         refreshDmx();
     };
     connect(m_dmxEnabled, &QCheckBox::toggled, this, patchEdit);
+    connect(m_dmxProtocol, &QComboBox::activated, this, patchEdit);
     connect(m_dmxUniverse, &QSpinBox::valueChanged, this, patchEdit);
     connect(m_dmxAddress, &QSpinBox::valueChanged, this, patchEdit);
     connect(m_dmxLayers, &QSpinBox::valueChanged, this, patchEdit);
@@ -259,6 +272,9 @@ void ControlDialog::refreshDmx()
     const DmxPatch &p = m_doc->project().dmx;
     m_refreshing = true;
     m_dmxEnabled->setChecked(p.enabled);
+    m_dmxProtocol->setCurrentIndex(m_dmxProtocol->findData(int(p.protocol)));
+    const bool sacn = p.protocol == DmxProtocol::Sacn;
+    m_dmxUniverse->setRange(sacn ? 1 : 0, sacn ? 63999 : 32767);
     if (m_dmxUniverse->value() != p.universe)
         m_dmxUniverse->setValue(p.universe);
     if (m_dmxAddress->value() != p.address)
@@ -266,7 +282,8 @@ void ControlDialog::refreshDmx()
     if (m_dmxLayers->value() != p.layers)
         m_dmxLayers->setValue(p.layers);
     m_refreshing = false;
-    m_dmxUniverseText->setText(tr("net.subnet.universe %1").arg(ArtNet::universeText(p.universe)));
+    m_dmxUniverseText->setText(sacn ? tr("multicast group %1").arg(Sacn::multicastGroup(p.universe).toString())
+                                    : tr("net.subnet.universe %1").arg(ArtNet::universeText(p.universe)));
 
     const QStringList names = ControlRouter::dmxChannelNames(p);
     if (m_dmxChannels->rowCount() != names.size()) {

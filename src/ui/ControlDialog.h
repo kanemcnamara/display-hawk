@@ -44,6 +44,7 @@ private:
     QPlainTextEdit *m_monitor;
     QTabWidget *m_tabs;
     QCheckBox *m_dmxEnabled;
+    QComboBox *m_dmxProtocol;
     QSpinBox *m_dmxUniverse, *m_dmxAddress, *m_dmxLayers;
     QLabel *m_dmxUniverseText;
     QLabel *m_dmxStatus;

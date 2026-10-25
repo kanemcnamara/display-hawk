@@ -295,6 +295,7 @@ QJsonObject Project::toJson() const
     }
     root["controls"] = controlArr;
     root["dmx"] = QJsonObject{{"enabled", dmx.enabled},
+                              {"protocol", dmx.protocol == DmxProtocol::Sacn ? "sacn" : "artnet"},
                               {"universe", dmx.universe},
                               {"address", dmx.address},
                               {"layers", dmx.layers}};
@@ -417,7 +418,9 @@ Project Project::fromJson(const QJsonObject &root)
 
     const QJsonObject dmx = root["dmx"].toObject();
     p.dmx.enabled = dmx["enabled"].toBool(false);
-    p.dmx.universe = qBound(0, dmx["universe"].toInt(0), 32767);
+    p.dmx.protocol = dmx["protocol"].toString() == QLatin1String("sacn") ? DmxProtocol::Sacn : DmxProtocol::ArtNet;
+    p.dmx.universe = p.dmx.protocol == DmxProtocol::Sacn ? qBound(1, dmx["universe"].toInt(1), 63999)
+                                                         : qBound(0, dmx["universe"].toInt(0), 32767);
     p.dmx.address = qBound(1, dmx["address"].toInt(1), 512);
     p.dmx.layers = qBound(1, dmx["layers"].toInt(4), 32);
 

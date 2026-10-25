@@ -1,5 +1,6 @@
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
+#include "control/Sacn.h"
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
@@ -360,7 +361,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     {
         ControlRouter *router = window.controlRouter();
         router->setArtNetLocalOnly(true);
-        doc.project().dmx = DmxPatch{true, 3, 10, 2};
+        doc.project().dmx = DmxPatch{true, DmxProtocol::ArtNet, 3, 10, 2};
         doc.notifyChanged();
         check(router->artNetListening(), "Art-Net listener starts");
         QUdpSocket desk;
@@ -399,6 +400,41 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.project().dmx.enabled = false;
         doc.notifyChanged();
         check(!router->artNetListening(), "Art-Net listener stops with the patch");
+
+        // sACN: same personality, universe 7, priorities and stream termination.
+        doc.project().dmx = DmxPatch{true, DmxProtocol::Sacn, 7, 1, 1};
+        doc.notifyChanged();
+        check(router->sacnListening() && !router->artNetListening(), "sACN listener replaces Art-Net");
+        QUdpSocket console;
+        int seq = 1;
+        auto sendSacn = [&](const QVector<int> &personality, int priority, const QString &name, bool terminated = false) {
+            QByteArray data(512, '\0');
+            for (int i = 0; i < personality.size(); ++i)
+                data[i] = char(personality[i]);
+            console.writeDatagram(Sacn::build(7, data, priority, seq++, name, terminated), QHostAddress::LocalHost,
+                                  Sacn::kPort);
+        };
+        doc.triggerColumn(0);
+        sendSacn({200, 0, 0, 1, 255, 0}, 100, QStringLiteral("main desk"));     // first packet: faders only
+        check(waitFor([&] { return qAbs(p.master - 200 / 255.0) < 0.01; }, 3000) && p.layers[0].activeColumn == 0,
+              "sACN first packet sets the master");
+        sendSacn({200, 0, 0, 3, 255, 0}, 100, QStringLiteral("main desk"));     // clip 1 -> 3
+        check(waitFor([&] { return p.layers[0].activeColumn == 2; }, 3000), "sACN clip select");
+        sendSacn({10, 0, 0, 3, 255, 0}, 50, QStringLiteral("backup desk"));     // lower priority: ignored
+        waitMs(300);
+        const bool backupIgnored = qAbs(p.master - 200 / 255.0) < 0.01;
+        sendSacn({200, 0, 0, 3, 255, 0}, 100, QStringLiteral("main desk"), true); // main stops
+        sendSacn({10, 0, 0, 3, 255, 0}, 50, QStringLiteral("backup desk"));     // backup takes over
+        check(backupIgnored && waitFor([&] { return qAbs(p.master - 10 / 255.0) < 0.01; }, 3000),
+              "sACN priority: higher wins, backup takes over when the main source terminates");
+        QByteArray preview = Sacn::build(7, QByteArray(512, char(255)), 200, seq++, QStringLiteral("visualiser"));
+        preview[112] = char(0x80);
+        console.writeDatagram(preview, QHostAddress::LocalHost, Sacn::kPort);
+        waitMs(300);
+        check(qAbs(p.master - 10 / 255.0) < 0.01, "sACN ignores preview data");
+        doc.setMaster(1.0);
+        doc.project().dmx.enabled = false;
+        doc.notifyChanged();
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

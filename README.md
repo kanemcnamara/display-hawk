@@ -21,9 +21,9 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 - **Moving Bars** test pattern: a vertical and a horizontal bar sweeping over black, for spotting tearing, scan and sync faults on LED processors.
 - **File → Export setup report…** writes, for the LED technician: a PDF (wall specs with pitch, physical size and estimated 1G ports, screens, the panel map, and one page per screen showing what its processor receives with a slice coordinate table), the panel map and each screen's processor view as PNGs, and all slice mappings as CSV.
 
-## Remote control: OSC, MIDI and Art-Net
+## Remote control: OSC, MIDI and DMX
 
-**Control → OSC, MIDI & Art-Net…** (Ctrl/Cmd+M).
+**Control → OSC, MIDI & DMX…** (Ctrl/Cmd+M).
 
 - **OSC** over UDP (off by default; default port 7400). Layers and columns count from 1, layer 1 is the bottom layer:
 
@@ -39,7 +39,7 @@ Slices that sample exactly a wall's area follow the wall when it is moved or res
 
   Bundles and int/float/bool/double arguments are accepted, so TouchOSC, QLab, Companion, lighting desks or a few lines of Python all work.
 - **MIDI** from every connected controller (WinMM on Windows, CoreMIDI on macOS; choose devices in the dialog). Mappings are saved with the setup: add one and press **Learn**, then press a key or move a knob, or right-click a clip / column number in the Clip Deck → *MIDI learn*. Notes trigger and flip toggles; CCs drive faders, set toggles (≥ 64 = on) and trigger once as they pass halfway.
-- **Art-Net (DMX)** from a lighting desk (UDP 6454; the patch is saved with the setup). Display Hawk answers ArtPoll, so it shows up in the desk's node list. From the start address:
+- **DMX** from a lighting desk over **Art-Net** (UDP 6454; Display Hawk answers ArtPoll, so it shows up in the desk's node list) or **sACN / E1.31** (UDP 5568, joins the universe's multicast group; the highest-priority source wins, a terminated stream hands over to a backup at once, preview data is ignored). The patch is saved with the setup. From the start address:
 
   | Channel | Function |
   | --- | --- |

@@ -264,7 +264,7 @@ void MainWindow::buildActions()
     connect(m_liveOnLaunchAction, &QAction::toggled, this, [](bool on) { QSettings().setValue(kSettingLiveOnLaunch, on); });
 
     QMenu *control = menuBar()->addMenu(tr("&Control"));
-    control->addAction(tr("OSC, MIDI && Art-Net..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
+    control->addAction(tr("OSC, MIDI && DMX..."), QKeySequence(tr("Ctrl+M")), this, &MainWindow::showControls);
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(tr("Reset input view"), this, [this] { m_inputView->resetView(); });

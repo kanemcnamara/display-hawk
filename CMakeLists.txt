@@ -28,6 +28,8 @@ qt_add_executable(DisplayHawk
     src/control/Osc.cpp
     src/control/ArtNet.h
     src/control/ArtNet.cpp
+    src/control/Sacn.h
+    src/control/Sacn.cpp
     src/control/Midi.h
     src/control/Midi.cpp
     src/control/ControlRouter.h

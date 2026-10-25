@@ -46,12 +46,14 @@ public:
     void handleOsc(const OscMessage &message, const QString &from = QString());
     void handleMidi(const MidiMessage &message);
 
-    // Art-Net DMX input: listens on UDP 6454 while the project's DMX patch is enabled.
+    // DMX input (Art-Net on UDP 6454 or sACN on UDP 5568) while the project's DMX patch is enabled.
     bool artNetListening() const { return m_artnet != nullptr; }
+    bool sacnListening() const { return m_sacn != nullptr; }
     QString artNetStatus() const;
     QByteArray lastDmx() const { return m_dmxPrev; } // the patched universe, as last received
-    void setArtNetLocalOnly(bool localOnly);         // tests: 127.0.0.1 only
+    void setArtNetLocalOnly(bool localOnly);         // tests: 127.0.0.1 only (Art-Net and sACN)
     void handleArtNet(const QByteArray &packet, const QHostAddress &from);
+    void handleSacn(const QByteArray &packet, const QHostAddress &from);
 
     static QString oscReference();
     static QStringList dmxChannelNames(const DmxPatch &patch);
@@ -69,6 +71,8 @@ private:
     void readDatagrams();
     void syncArtNet();
     void readArtNet();
+    void readSacn();
+    void closeDmxInputs();
     void handleDmx(int universe, const QByteArray &data, const QString &from);
 
     Document *m_doc;
@@ -78,6 +82,10 @@ private:
     QHash<int, int> m_lastCC; // (channel << 8 | controller) -> last value, for trigger edges
 
     QUdpSocket *m_artnet = nullptr;
+    QUdpSocket *m_sacn = nullptr;
+    int m_sacnGroup = -1;         // universe whose multicast group is joined
+    int m_sacnPriority = -1;      // highest priority heard recently for our universe
+    QElapsedTimer m_sacnPriorityClock;
     bool m_artnetLocalOnly = false;
     QByteArray m_dmxPrev;       // previous values of the patched universe (change detection)
     quint64 m_dmxPatchKey = 0;  // patch the previous values belong to

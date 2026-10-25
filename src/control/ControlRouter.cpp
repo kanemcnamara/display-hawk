@@ -1,6 +1,7 @@
 #include "control/ControlRouter.h"
 
 #include "control/ArtNet.h"
+#include "control/Sacn.h"
 #include "model/Document.h"
 
 #include <QNetworkDatagram>
@@ -245,24 +246,65 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
 void ControlRouter::setArtNetLocalOnly(bool localOnly)
 {
     m_artnetLocalOnly = localOnly;
+    closeDmxInputs();
+    syncArtNet();
+}
+
+void ControlRouter::closeDmxInputs()
+{
+    if (!m_artnet && !m_sacn)
+        return;
     delete m_artnet;
     m_artnet = nullptr;
-    syncArtNet();
+    delete m_sacn;
+    m_sacn = nullptr;
+    m_sacnGroup = -1;
+    m_dmxPrev.clear();
+    qInfo("DMX input off");
+    emit oscStateChanged();
 }
 
 void ControlRouter::syncArtNet()
 {
-    const bool wanted = m_doc->project().dmx.enabled;
-    if (wanted == (m_artnet != nullptr))
-        return;
-    if (!wanted) {
-        delete m_artnet;
-        m_artnet = nullptr;
-        m_dmxPrev.clear();
-        qInfo("Art-Net input off");
-        emit oscStateChanged();
+    const DmxPatch &patch = m_doc->project().dmx;
+    const bool artnet = patch.enabled && patch.protocol == DmxProtocol::ArtNet;
+    const bool sacn = patch.enabled && patch.protocol == DmxProtocol::Sacn;
+    if ((m_artnet && !artnet) || (m_sacn && !sacn))
+        closeDmxInputs();
+
+    if (sacn) {
+        if (!m_sacn) {
+            m_sacn = new QUdpSocket(this);
+            if (!m_sacn->bind(m_artnetLocalOnly ? QHostAddress::LocalHost : QHostAddress::AnyIPv4, Sacn::kPort,
+                              QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint)) {
+                const QString err = m_sacn->errorString();
+                qWarning("sACN: cannot listen on UDP %d: %s", Sacn::kPort, qPrintable(err));
+                emit activity(QStringLiteral("sACN: cannot listen on UDP %1: %2").arg(Sacn::kPort).arg(err));
+                delete m_sacn;
+                m_sacn = nullptr;
+                emit oscStateChanged();
+                return;
+            }
+            connect(m_sacn, &QUdpSocket::readyRead, this, &ControlRouter::readSacn);
+            qInfo("sACN listening on UDP %d", Sacn::kPort);
+            emit oscStateChanged();
+        }
+        // Join the universe's multicast group on every interface (unicast works regardless).
+        if (m_sacnGroup != patch.universe && !m_artnetLocalOnly) {
+            for (const QNetworkInterface &iface : QNetworkInterface::allInterfaces()) {
+                if (!(iface.flags() & QNetworkInterface::CanMulticast) || !(iface.flags() & QNetworkInterface::IsUp))
+                    continue;
+                if (m_sacnGroup > 0)
+                    m_sacn->leaveMulticastGroup(Sacn::multicastGroup(m_sacnGroup), iface);
+                m_sacn->joinMulticastGroup(Sacn::multicastGroup(patch.universe), iface);
+            }
+            m_sacnGroup = patch.universe;
+        }
         return;
     }
+
+    if (!artnet || m_artnet)
+        return;
     m_artnet = new QUdpSocket(this);
     // Shared, so other Art-Net software on this machine can listen too.
     if (!m_artnet->bind(m_artnetLocalOnly ? QHostAddress::LocalHost : QHostAddress::AnyIPv4, ArtNet::kPort,
@@ -309,6 +351,34 @@ void ControlRouter::handleArtNet(const QByteArray &packet, const QHostAddress &f
     ArtNet::Dmx dmx;
     if (op == ArtNet::kOpDmx && ArtNet::parseDmx(packet, dmx))
         handleDmx(dmx.universe, dmx.data, from.toString());
+}
+
+void ControlRouter::readSacn()
+{
+    while (m_sacn && m_sacn->hasPendingDatagrams()) {
+        const QNetworkDatagram d = m_sacn->receiveDatagram();
+        handleSacn(d.data(), d.senderAddress());
+    }
+}
+
+void ControlRouter::handleSacn(const QByteArray &datagram, const QHostAddress &from)
+{
+    Sacn::Packet p;
+    if (!Sacn::parse(datagram, p) || p.preview || p.universe != m_doc->project().dmx.universe)
+        return;
+    // Several sources can send one universe; the highest priority heard in the last 3 s wins.
+    if (!m_sacnPriorityClock.isValid() || m_sacnPriorityClock.elapsed() > 3000)
+        m_sacnPriority = -1;
+    if (p.priority < m_sacnPriority)
+        return;
+    if (p.terminated) {
+        m_sacnPriority = -1; // let a lower-priority backup take over straight away
+        return;
+    }
+    m_sacnPriority = p.priority;
+    m_sacnPriorityClock.start();
+    handleDmx(p.universe, p.data,
+              QStringLiteral("%1 \"%2\" priority %3").arg(from.toString(), p.sourceName).arg(p.priority));
 }
 
 void ControlRouter::handleDmx(int universe, const QByteArray &data, const QString &from)
@@ -366,7 +436,10 @@ void ControlRouter::handleDmx(int universe, const QByteArray &data, const QStrin
     }
     if (!changes.isEmpty())
         emit activity(QStringLiteral("DMX %1 from %2%3: %4")
-                          .arg(ArtNet::universeText(universe), from,
+                          .arg(m_doc->project().dmx.protocol == DmxProtocol::Sacn
+                                   ? QStringLiteral("sACN universe %1").arg(universe)
+                                   : QStringLiteral("Art-Net ") + ArtNet::universeText(universe),
+                               from,
                                baseline ? QStringLiteral(" (first packet: faders only)") : QString(),
                                changes.join(QStringLiteral(", "))));
     m_dmxPrev = data;
@@ -375,15 +448,18 @@ void ControlRouter::handleDmx(int universe, const QByteArray &data, const QStrin
 QString ControlRouter::artNetStatus() const
 {
     const DmxPatch &patch = m_doc->project().dmx;
+    const bool sacn = patch.protocol == DmxProtocol::Sacn;
+    const int port = sacn ? Sacn::kPort : ArtNet::kPort;
+    const QString universe = sacn ? QString::number(patch.universe) : ArtNet::universeText(patch.universe);
     if (!patch.enabled)
-        return tr("Art-Net input is off.");
-    if (!m_artnet)
-        return tr("Not listening (UDP %1 unavailable).").arg(ArtNet::kPort);
+        return tr("DMX input is off.");
+    if (!(sacn ? m_sacn : m_artnet))
+        return tr("Not listening (UDP %1 unavailable).").arg(port);
     if (!m_dmxClock.isValid())
-        return tr("Listening on UDP %1, waiting for universe %2.").arg(ArtNet::kPort).arg(ArtNet::universeText(patch.universe));
+        return tr("Listening on UDP %1, waiting for universe %2.").arg(port).arg(universe);
     const qint64 age = m_dmxClock.elapsed();
     return tr("Receiving universe %1 from %2 (%3 packets, last %4 ms ago).")
-        .arg(ArtNet::universeText(patch.universe), m_dmxFrom)
+        .arg(universe, m_dmxFrom)
         .arg(m_dmxPackets)
         .arg(age);
 }
