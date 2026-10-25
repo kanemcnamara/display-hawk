@@ -1,5 +1,6 @@
-﻿#include "render/RenderThread.h"
+#include "render/RenderThread.h"
 
+#include "media/Ndi.h"
 #include "render/Patterns.h"
 #include "ui/OutputWindow.h"
 
@@ -91,6 +92,63 @@ void RenderThread::setPreview(int view, const PreviewRequest &request)
         return;
     QMutexLocker lock(&m_mutex);
     m_sharedPreview[view] = request;
+}
+
+void RenderThread::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedNdi = outputs;
+    m_ndiDirty = true;
+}
+
+void RenderThread::syncNdiOutputs()
+{
+    // Called on the render thread with the wanted list already copied into m_ndiWanted.
+    for (int i = int(m_ndiOutputs.size()) - 1; i >= 0; --i) {
+        NdiOutput *o = m_ndiOutputs[i];
+        if (m_ndiWanted.contains({o->screen, o->name}))
+            continue;
+        if (o->pending)
+            m_rhi->finish(); // completes the readback before its result object goes away
+        delete o->sender;
+        releaseTarget(o->target);
+        delete o;
+        m_ndiOutputs.removeAt(i);
+    }
+    for (const auto &w : std::as_const(m_ndiWanted)) {
+        bool have = false;
+        for (const NdiOutput *o : std::as_const(m_ndiOutputs))
+            have = have || (o->screen == w.first && o->name == w.second);
+        if (have)
+            continue;
+        auto *o = new NdiOutput;
+        o->screen = w.first;
+        o->name = w.second;
+        o->sender = new NdiSender(w.second);
+        if (!o->sender->isValid())
+            qWarning("NDI output %s not started: %s", qPrintable(w.second), qPrintable(Ndi::runtimeStatus()));
+        else
+            qInfo("NDI output: %s", qPrintable(w.second));
+        m_ndiOutputs.append(o);
+    }
+}
+
+void RenderThread::renderNdiOutputs(QRhiCommandBuffer *cb)
+{
+    for (NdiOutput *o : std::as_const(m_ndiOutputs)) {
+        if (o->pending || !o->sender->isValid() || o->screen < 0 || o->screen >= m_project.screens.size())
+            continue;
+        const Screen &s = m_project.screens[o->screen];
+        const QSize size(s.width, s.height);
+        if (!ensureTarget(o->target, size, true))
+            continue;
+        QRhiResourceUpdateBatch *after = m_rhi->nextResourceUpdateBatch();
+        o->readback = QRhiReadbackResult();
+        o->readback.completed = [o] { o->done = true; };
+        after->readBackTexture(QRhiReadbackDescription(o->target.tex), &o->readback);
+        m_quad.recordPass(cb, o->target.rt, Qt::black, screenDraws(s, size, QRectF(QPointF(), size)), nullptr, after);
+        o->pending = true;
+    }
 }
 
 void RenderThread::addOutput(OutputWindow *window)
@@ -204,6 +262,7 @@ void RenderThread::run()
                 m_quad.newFrame();
                 renderComposition(cb);
                 renderPreviews(cb);
+                renderNdiOutputs(cb);
                 m_rhi->endOffscreenFrame();
                 compositionDone = true;
             }
@@ -225,6 +284,7 @@ void RenderThread::run()
                 if (!compositionDone) {
                     renderComposition(cb);
                     renderPreviews(cb);
+                    renderNdiOutputs(cb);
                     compositionDone = true;
                 }
                 renderOutput(cb, *o);
@@ -261,6 +321,8 @@ void RenderThread::run()
         m_toRemove.clear();
         m_removed.wakeAll();
     }
+    m_ndiWanted.clear();
+    syncNdiOutputs();
     releaseTarget(m_comp);
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
@@ -305,7 +367,17 @@ void RenderThread::syncState()
     m_sharedMedia.clear();
     m_preview[0] = m_sharedPreview[0];
     m_preview[1] = m_sharedPreview[1];
+    const bool ndiChanged = m_ndiDirty;
+    if (m_ndiDirty) {
+        m_ndiWanted = m_sharedNdi;
+        m_ndiDirty = false;
+    }
 
+    if (ndiChanged) {
+        lock.unlock(); // creating NDI senders can take a moment; do not hold the GUI thread
+        syncNdiOutputs();
+        lock.relock();
+    }
     for (OutputWindow *w : std::as_const(m_toAdd))
         m_outputs.append({w});
     m_toAdd.clear();
@@ -477,7 +549,7 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
     qp.opacity = opacity;
     qp.clip = target;
 
-    if (clip.source == ContentSource::Media) {
+    if (clip.source != ContentSource::TestPattern) { // files and live inputs
         if (ct.newMedia) {
             ct.newMedia = false;
             QElapsedTimer prep;
@@ -836,6 +908,17 @@ void RenderThread::renderPreviews(QRhiCommandBuffer *cb)
 
 void RenderThread::deliverReadbacks()
 {
+    for (NdiOutput *o : std::as_const(m_ndiOutputs)) {
+        if (!o->done)
+            continue;
+        o->done = false;
+        o->pending = false;
+        const QRhiReadbackResult &rb = o->readback;
+        const QImage img(reinterpret_cast<const uchar *>(rb.data.constData()), rb.pixelSize.width(),
+                         rb.pixelSize.height(), QImage::Format_RGBA8888);
+        // NDI wants the top row first; rendered textures are bottom-up on Y-up backends (OpenGL).
+        o->sender->send(m_rhi->isYUpInFramebuffer() ? img.mirrored() : img.copy());
+    }
     for (int v = 0; v < 2; ++v) {
         if (!m_readbackDone[v])
             continue;

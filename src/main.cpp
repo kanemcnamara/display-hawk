@@ -1,6 +1,7 @@
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
 #include "control/Sacn.h"
+#include "media/Ndi.h"
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
@@ -11,7 +12,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QCameraDevice>
 #include <QDialog>
+#include <QMediaDevices>
 #include <QTabWidget>
 #include <QEventLoop>
 #include <functional>
@@ -435,6 +438,58 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.setMaster(1.0);
         doc.project().dmx.enabled = false;
         doc.notifyChanged();
+    }
+
+    // Live inputs and NDI. Hardware- or runtime-dependent checks are skipped (and say so) when absent.
+    {
+        Project roundTrip = doc.project();
+        roundTrip.layers[1].clips[6] = Clip::fromCapture(QStringLiteral("\\\\?\\usb#cam"), QStringLiteral("Desk camera"));
+        roundTrip.layers[1].clips[7] = Clip::fromNdi(QStringLiteral("STUDIO (Program)"));
+        const Project back = Project::fromJson(roundTrip.toJson());
+        check(back.layers[1].clips[6].mediaKey() == QStringLiteral("capture:\\\\?\\usb#cam")
+                  && back.layers[1].clips[6].name == QStringLiteral("Desk camera")
+                  && back.layers[1].clips[7].mediaKey() == QStringLiteral("ndi:STUDIO (Program)"),
+              "live input clips save and load");
+
+        const bool ndiRuntime = Ndi::available();
+        qInfo("selftest: %s", qPrintable(Ndi::runtimeStatus()));
+        // NDI out: with or without the runtime the render loop must carry on.
+        doc.project().screens[0].display = QStringLiteral("ndi");
+        doc.notifyChanged();
+        fps = 0;
+        check(waitFor([&] { return fps > 0; }, 5000), "NDI output degrades gracefully / keeps rendering");
+        if (ndiRuntime) {
+            // Loopback: receive our own NDI output as a clip.
+            const QString name = QStringLiteral("Display Hawk - %1").arg(doc.project().screens[0].name);
+            QString found;
+            waitFor([&] {
+                for (const QString &s : Ndi::sources())
+                    if (s.contains(name))
+                        found = s;
+                return !found.isEmpty();
+            }, 10000);
+            check(!found.isEmpty(), "NDI output is discoverable on the network");
+            doc.setClip(1, 7, Clip::fromNdi(found));
+            doc.triggerClip(1, 7);
+            check(waitFor([&] { return litPercent(previews[0]) > 20; }, 10000), "NDI loopback: our output comes back as a clip");
+            save(previews[0], "ndi-loopback");
+            doc.clearLayer(1);
+        } else {
+            qInfo("selftest: SKIP NDI loopback (no NDI runtime on this machine)");
+        }
+        doc.project().screens[0].display = QStringLiteral("window");
+        doc.notifyChanged();
+
+        const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
+        if (!cameras.isEmpty()) {
+            doc.setClip(1, 6, Clip::fromCapture(QString::fromUtf8(cameras.first().id()), cameras.first().description()));
+            doc.triggerClip(1, 6);
+            check(waitFor([&] { return litPercent(previews[0]) > 5; }, 10000), "capture device delivers frames");
+            save(previews[0], "capture");
+            doc.clearLayer(1);
+        } else {
+            qInfo("selftest: SKIP capture device (none connected)");
+        }
     }
 
     // The app's own window (not the desktop), for checking the UI layout: the wall page, with a

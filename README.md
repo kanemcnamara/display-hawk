@@ -14,6 +14,13 @@ Media server for LED walls on **macOS and Windows** (C++17, Qt 6, Qt RHI). The o
 
 Slices that sample exactly a wall's area follow the wall when it is moved or resized.
 
+## Live video in, NDI out
+
+- **Capture devices** (cameras, capture cards, anything the OS lists as a video input): right-click a clip slot → *Capture device*, or set a clip's source to *Capture device* and pick the input. The device's best format is chosen (highest resolution, then frame rate, avoiding MJPEG), and frames take the same GPU YUV path as video files. macOS asks for camera permission the first time.
+- **NDI sources**: right-click a clip slot → *NDI source*. Each NDI clip has its own receiver thread.
+- **NDI out**: set a screen's output device to *NDI*. While outputs are live, the screen is rendered off-screen at its own resolution and published as **"Display Hawk - &lt;screen name&gt;"**, for vision mixers, streaming software or another media server.
+- NDI uses the **NDI runtime installed on the machine** (NDI Tools or the NDI Runtime from [ndi.video](https://ndi.video)); Display Hawk loads it when needed and runs normally without it. NDI® is a registered trademark of Vizrt NDI AB.
+
 ## LED tools
 
 - **Colour correction per slice:** red/green/blue gain, a gamma exponent and black level, applied on the GPU to that slice only, for matching cabinet batches or neighbouring walls.

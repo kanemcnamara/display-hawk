@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "model/Project.h"
 
@@ -75,7 +75,7 @@ private:
     // Clip
     QStackedWidget *m_clipStack;
     QLineEdit *m_clipName;
-    QComboBox *m_source, *m_pattern, *m_scale;
+    QComboBox *m_source, *m_pattern, *m_scale, *m_input;
     QSpinBox *m_gridSpacing;
     QPushButton *m_solidColor;
     QLineEdit *m_mediaPath;

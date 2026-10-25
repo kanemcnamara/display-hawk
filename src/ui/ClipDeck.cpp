@@ -1,7 +1,11 @@
 #include "ui/ClipDeck.h"
 
 #include "model/Document.h"
+#include "media/Ndi.h"
 #include "render/Patterns.h"
+
+#include <QCameraDevice>
+#include <QMediaDevices>
 
 #include <QContextMenuEvent>
 #include <QFileDialog>
@@ -259,6 +263,7 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
     QJsonObject keyObj{{"src", int(clip.source)},
                        {"pattern", int(clip.pattern)},
                        {"path", clip.mediaPath},
+                       {"input", clip.inputId},
                        {"color", clip.solidColor.name()},
                        {"spacing", clip.gridSpacing}};
     if (clip.source == ContentSource::TestPattern && clip.pattern == TestPattern::PanelMap) {
@@ -270,6 +275,31 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         return *it;
 
     QImage img;
+    if (clip.isLive()) {
+        // Live inputs: a badge rather than a frame (the picture changes all the time).
+        QPixmap pm(size);
+        pm.fill(QColor(30, 22, 22));
+        QPainter p(&pm);
+        p.setRenderHint(QPainter::Antialiasing);
+        QFont f = p.font();
+        f.setBold(true);
+        f.setPixelSize(15);
+        p.setFont(f);
+        p.setBrush(QColor(220, 40, 40));
+        p.setPen(Qt::NoPen);
+        p.drawRoundedRect(QRect(size.width() / 2 - 26, size.height() / 2 - 22, 52, 22), 4, 4);
+        p.setPen(Qt::white);
+        p.drawText(QRect(size.width() / 2 - 26, size.height() / 2 - 22, 52, 22), Qt::AlignCenter, QStringLiteral("LIVE"));
+        f.setPixelSize(10);
+        f.setBold(false);
+        p.setFont(f);
+        p.setPen(QColor(220, 200, 200));
+        p.drawText(pm.rect().adjusted(4, 0, -4, -4), Qt::AlignHCenter | Qt::AlignBottom,
+                   clip.source == ContentSource::Ndi ? QStringLiteral("NDI") : QStringLiteral("Capture"));
+        p.end();
+        m_thumbs.insert(key, pm);
+        return pm;
+    }
     if (clip.source == ContentSource::TestPattern) {
         // Generated at the real size (capped) so labels like the grid's resolution are truthful.
         const QSize genSize = project.compSize().boundedTo(QSize(3840, 2160));
@@ -456,6 +486,20 @@ void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
     if (!clip.isEmpty())
         menu.addAction(tr("Trigger"), this, [this, layer, column] { m_doc->triggerClip(layer, column); });
     menu.addAction(tr("Load media..."), this, [this, layer, column] { browseInto(layer, column); });
+    QMenu *capture = menu.addMenu(tr("Capture device"));
+    const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
+    for (const QCameraDevice &cam : cameras) {
+        const QString id = QString::fromUtf8(cam.id()), name = cam.description();
+        capture->addAction(name, this, [this, layer, column, id, name] { m_doc->setClip(layer, column, Clip::fromCapture(id, name)); });
+    }
+    if (cameras.isEmpty())
+        capture->addAction(tr("No capture devices found"))->setEnabled(false);
+    QMenu *ndi = menu.addMenu(tr("NDI source"));
+    const QStringList ndiSources = Ndi::sources();
+    for (const QString &name : ndiSources)
+        ndi->addAction(name, this, [this, layer, column, name] { m_doc->setClip(layer, column, Clip::fromNdi(name)); });
+    if (ndiSources.isEmpty())
+        ndi->addAction(Ndi::available() ? tr("No NDI sources found yet") : Ndi::runtimeStatus())->setEnabled(false);
     QMenu *patterns = menu.addMenu(tr("Test pattern"));
     for (int i = 0; i < kTestPatternCount; ++i) {
         patterns->addAction(testPatternName(TestPattern(i)), this, [this, layer, column, i] {

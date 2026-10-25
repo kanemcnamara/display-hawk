@@ -95,9 +95,41 @@ QString Clip::displayName() const
 {
     if (!name.isEmpty())
         return name;
-    if (source == ContentSource::Media)
-        return QFileInfo(mediaPath).completeBaseName();
-    return testPatternName(pattern);
+    switch (source) {
+    case ContentSource::Media: return QFileInfo(mediaPath).completeBaseName();
+    case ContentSource::Capture: return QStringLiteral("Capture");
+    case ContentSource::Ndi: return inputId;
+    default: return testPatternName(pattern);
+    }
+}
+
+QString Clip::mediaKey() const
+{
+    switch (source) {
+    case ContentSource::Media: return mediaPath;
+    case ContentSource::Capture: return inputId.isEmpty() ? QString() : QStringLiteral("capture:") + inputId;
+    case ContentSource::Ndi: return inputId.isEmpty() ? QString() : QStringLiteral("ndi:") + inputId;
+    default: return QString();
+    }
+}
+
+Clip Clip::fromCapture(const QString &deviceId, const QString &description)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Capture;
+    c.inputId = deviceId;
+    c.name = description;
+    return c;
+}
+
+Clip Clip::fromNdi(const QString &sourceName)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Ndi;
+    c.inputId = sourceName;
+    return c;
 }
 
 Clip Clip::fromPattern(TestPattern p)
@@ -179,6 +211,7 @@ static QJsonObject clipToJson(const Clip &c)
                        {"source", int(c.source)},
                        {"pattern", int(c.pattern)},
                        {"mediaPath", c.mediaPath},
+                       {"inputId", c.inputId},
                        {"scale", int(c.scale)},
                        {"loop", c.loop},
                        {"solidColor", c.solidColor.name()},
@@ -195,6 +228,7 @@ static Clip clipFromJson(const QJsonObject &o)
     c.source = ContentSource(o["source"].toInt(0));
     c.pattern = TestPattern(o["pattern"].toInt(0));
     c.mediaPath = o["mediaPath"].toString();
+    c.inputId = o["inputId"].toString();
     c.scale = ScaleMode(o["scale"].toInt(0));
     c.loop = o["loop"].toBool(true);
     c.solidColor = QColor(o["solidColor"].toString("#ffffff"));

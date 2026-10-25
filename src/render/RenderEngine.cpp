@@ -1,4 +1,4 @@
-﻿#include "render/RenderEngine.h"
+#include "render/RenderEngine.h"
 
 #include "media/MediaSource.h"
 #include "model/Document.h"
@@ -73,7 +73,7 @@ void RenderEngine::syncMedia()
     for (const Layer &l : m_doc->project().layers) {
         longestTransition = qMax(longestTransition, l.transitionMs);
         const Clip *c = l.activeClip();
-        if (c && c->source == ContentSource::Media && !c->mediaPath.isEmpty())
+        if (c && !c->mediaKey().isEmpty())
             wanted.insert(c->id, c);
     }
 
@@ -99,9 +99,9 @@ void RenderEngine::syncMedia()
             connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
             m_media.insert(id, m);
         }
-        if (m_mediaPaths.value(id) != clip->mediaPath) {
-            m_mediaPaths.insert(id, clip->mediaPath);
-            m->open(clip->mediaPath);
+        if (m_mediaPaths.value(id) != clip->mediaKey()) {
+            m_mediaPaths.insert(id, clip->mediaKey());
+            m->open(clip->mediaKey());
         }
         m->setLoop(clip->loop);
     }
@@ -113,7 +113,7 @@ void RenderEngine::syncMedia()
         QTimer::singleShot(longestTransition + 500, this, [this, id] {
             bool stillWanted = false;
             for (const Layer &l : m_doc->project().layers)
-                if (const Clip *c = l.activeClip(); c && c->id == id && c->source == ContentSource::Media)
+                if (const Clip *c = l.activeClip(); c && c->id == id && !c->mediaKey().isEmpty())
                     stillWanted = true;
             if (!stillWanted)
                 releaseMedia(id);
@@ -213,6 +213,12 @@ void RenderEngine::setPreview(int view, const PreviewRequest &request)
 {
     if (m_thread)
         m_thread->setPreview(view, request);
+}
+
+void RenderEngine::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)
+{
+    if (m_thread)
+        m_thread->setNdiOutputs(outputs);
 }
 
 void RenderEngine::pushProject()

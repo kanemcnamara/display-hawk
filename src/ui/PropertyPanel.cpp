@@ -1,10 +1,12 @@
 #include "ui/PropertyPanel.h"
 
 #include "media/MediaSource.h"
+#include "media/Ndi.h"
 #include "render/RenderEngine.h"
 #include "ui/PanelGridEditor.h"
 #include "model/Document.h"
 
+#include <QCameraDevice>
 #include <QCheckBox>
 #include <QColorDialog>
 #include <QComboBox>
@@ -17,6 +19,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMediaDevices>
 #include <QPushButton>
 #include <QScreen>
 #include <QScrollArea>
@@ -365,7 +368,10 @@ QWidget *PropertyPanel::buildClipPage()
     auto *f = new QFormLayout(box);
     m_clipName = new QLineEdit;
     m_source = new QComboBox;
-    m_source->addItems({tr("Test pattern"), tr("Media file")});
+    m_source->addItems({tr("Test pattern"), tr("Media file"), tr("Capture device (live)"), tr("NDI source (live)")});
+    m_input = new QComboBox;
+    m_input->setToolTip(tr("Camera or capture card, or NDI source on the network"));
+    auto *refreshInputs = new QPushButton(tr("Refresh"));
     m_pattern = new QComboBox;
     for (int i = 0; i < kTestPatternCount; ++i)
         m_pattern->addItem(testPatternName(TestPattern(i)));
@@ -390,6 +396,7 @@ QWidget *PropertyPanel::buildClipPage()
     f->addRow(tr("Grid size"), m_gridSpacing);
     f->addRow(tr("Solid colour"), m_solidColor);
     f->addRow(tr("Media"), row({m_mediaPath, browse}));
+    f->addRow(tr("Input"), row({m_input, refreshInputs}));
     f->addRow(QString(), m_loop);
     f->addRow(tr("Scale"), m_scale);
     f->addRow(trigger);
@@ -407,8 +414,22 @@ QWidget *PropertyPanel::buildClipPage()
         editClip([&](Clip &c) { c.name = t; });
     });
     connect(m_source, &QComboBox::activated, this, [this](int i) {
-        editClip([&](Clip &c) { c.source = ContentSource(i); });
+        editClip([&](Clip &c) {
+            if (c.source != ContentSource(i))
+                c.inputId.clear(); // device ids and NDI names do not carry over
+            c.source = ContentSource(i);
+        });
     });
+    connect(m_input, &QComboBox::activated, this, [this](int i) {
+        const QString id = m_input->itemData(i).toString();
+        const QString label = m_input->itemText(i);
+        editClip([&](Clip &c) {
+            c.inputId = id;
+            if (c.source == ContentSource::Capture)
+                c.name = label;
+        });
+    });
+    connect(refreshInputs, &QPushButton::clicked, this, &PropertyPanel::refresh);
     connect(m_pattern, &QComboBox::activated, this, [this](int i) {
         editClip([&](Clip &c) {
             c.pattern = TestPattern(i);
@@ -495,12 +516,34 @@ void PropertyPanel::refreshClip()
     m_loop->setChecked(c->loop);
     m_scale->setCurrentIndex(int(c->scale));
 
-    const bool media = c->source == ContentSource::Media;
+    // Live input list for the clip's source type.
+    m_input->clear();
+    if (c->source == ContentSource::Capture) {
+        for (const QCameraDevice &cam : QMediaDevices::videoInputs())
+            m_input->addItem(cam.description(), QString::fromUtf8(cam.id()));
+        if (m_input->count() == 0)
+            m_input->addItem(tr("No capture devices found"), QString());
+    } else if (c->source == ContentSource::Ndi) {
+        for (const QString &name : Ndi::sources())
+            m_input->addItem(name, name);
+        if (m_input->count() == 0)
+            m_input->addItem(Ndi::available() ? tr("No NDI sources found yet") : tr("NDI runtime not installed"), QString());
+    }
+    int current = m_input->findData(c->inputId);
+    if (current < 0 && !c->inputId.isEmpty()) { // remembered but not present right now
+        m_input->addItem(tr("%1 (not available)").arg(c->source == ContentSource::Capture ? c->name : c->inputId), c->inputId);
+        current = m_input->count() - 1;
+    }
+    m_input->setCurrentIndex(qMax(0, current));
+    m_input->setEnabled(c->isLive());
+
+    const bool media = c->source != ContentSource::TestPattern;
     m_pattern->setEnabled(!media);
     m_gridSpacing->setEnabled(!media && (c->pattern == TestPattern::Grid || c->pattern == TestPattern::Checker));
     m_solidColor->setEnabled(!media && c->pattern == TestPattern::Solid);
     m_scale->setEnabled(media);
-    m_loop->setEnabled(media);
+    m_loop->setEnabled(c->source == ContentSource::Media);
+    m_mediaPath->setEnabled(c->source == ContentSource::Media);
 
     QString status;
     if (media) {
@@ -822,6 +865,8 @@ void PropertyPanel::refreshDisplays()
     m_display->clear();
     m_display->addItem(tr("None (preview only)"), QString());
     m_display->addItem(tr("Window (for testing)"), QStringLiteral("window"));
+    m_display->addItem(Ndi::available() ? tr("NDI (network video source)") : tr("NDI (runtime not installed)"),
+                       QStringLiteral("ndi"));
     const QList<QScreen *> screens = QGuiApplication::screens();
     for (int i = 0; i < screens.size(); ++i) {
         QScreen *qs = screens[i];

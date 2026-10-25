@@ -405,7 +405,9 @@ void MainWindow::syncOutputs()
         QScreen *target = nullptr;
         if (m_live && i < p.screens.size() && p.screens[i].enabled && !p.screens[i].display.isEmpty()) {
             const Screen &s = p.screens[i];
-            if (s.display == QLatin1String("window")) {
+            if (s.display == QLatin1String("ndi")) {
+                // Published over NDI by the render thread; no window.
+            } else if (s.display == QLatin1String("window")) {
                 key = QStringLiteral("window");
             } else {
                 for (QScreen *d : displays)
@@ -449,9 +451,20 @@ void MainWindow::syncOutputs()
     while (!m_outputs.isEmpty() && !m_outputs.last())
         m_outputs.removeLast();
 
+    // NDI screens: published as "<Screen name>" from this machine while outputs are live.
+    QVector<QPair<int, QString>> ndi;
+    for (int i = 0; m_live && i < p.screens.size(); ++i)
+        if (p.screens[i].enabled && p.screens[i].display == QLatin1String("ndi"))
+            ndi.append({i, QStringLiteral("Display Hawk - %1").arg(p.screens[i].name)});
+    if (ndi != m_ndiOutputs) {
+        m_ndiOutputs = ndi;
+        m_engine->setNdiOutputs(ndi);
+    }
+    opened += int(ndi.size());
+
     if (m_live && opened == 0)
         statusBar()->showMessage(tr("Live, but no screen has an output device assigned. "
-                                    "Select a screen and choose a display or 'Window'."), 6000);
+                                    "Select a screen and choose a display, 'Window' or 'NDI'."), 6000);
 }
 
 void MainWindow::closeOutputs()

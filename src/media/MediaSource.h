@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "media/HapDecoder.h"
 
@@ -7,12 +7,16 @@
 #include <QVideoFrame>
 
 class HapPlayer;
+class NdiReceiver;
+class QCamera;
+class QMediaCaptureSession;
 class QMediaPlayer;
 class QThread;
 class QVideoSink;
 
-// Loads a still image, plays a HAP movie (GPU-compressed frames, read on a worker thread) or
-// decodes any other video through Qt Multimedia. Frames are pushed out through signals that may be
+// Loads a still image, plays a HAP movie (GPU-compressed frames, read on a worker thread),
+// decodes any other video through Qt Multimedia, or shows a live input: a camera / capture card
+// ("capture:<device id>") or an NDI source ("ndi:<source name>"). Frames are pushed out through signals that may be
 // emitted from other threads; connect with Qt::DirectConnection to thread-safe receivers.
 class MediaSource : public QObject
 {
@@ -21,7 +25,9 @@ public:
     explicit MediaSource(QObject *parent = nullptr);
     ~MediaSource() override;
 
-    void open(const QString &path);
+    // A file path, or a live input key as produced by Clip::mediaKey().
+    void open(const QString &key);
+    bool isLive() const { return m_camera || m_ndi; }
     void close();
     void play();
     void pause();
@@ -42,11 +48,18 @@ signals:
 
 private:
     void stopHap();
+    void stopLive();
+    void openCapture(const QString &deviceId);
+    void openNdi(const QString &sourceName);
 
     QMediaPlayer *m_player = nullptr;
     QVideoSink *m_sink = nullptr;
     HapPlayer *m_hap = nullptr;
     QThread *m_hapThread = nullptr;
+    QCamera *m_camera = nullptr;
+    QMediaCaptureSession *m_capture = nullptr;
+    QVideoSink *m_captureSink = nullptr;
+    NdiReceiver *m_ndi = nullptr;
     QString m_error;
     bool m_isVideo = false;
     bool m_hasImage = false;

@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "model/Project.h"
 #include "render/RenderEngine.h"
@@ -11,6 +11,8 @@
 #include <QThread>
 #include <QVideoFrame>
 #include <QWaitCondition>
+
+class NdiSender;
 
 // Owns the QRhi and every GPU resource. All public methods are called from the GUI thread and only
 // touch the mutex-protected "shared" state; run() copies it at the start of each frame.
@@ -30,6 +32,7 @@ public:
     void setClipHap(const QString &clipId, const HapFrame &frame);
     void dropClipMedia(const QString &clipId);
     void setPreview(int view, const PreviewRequest &request);
+    void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -68,6 +71,8 @@ private:
     void renderOutput(QRhiCommandBuffer *cb, Output &o);
     QVector<RhiQuad::Params> screenDraws(const Screen &screen, const QSizeF &target, const QRectF &screenRect) const;
     void deliverReadbacks();
+    void syncNdiOutputs();
+    void renderNdiOutputs(QRhiCommandBuffer *cb);
     QByteArray patternKey(const Clip &clip) const;
     QByteArray overlayKey() const;
 
@@ -90,6 +95,8 @@ private:
     PreviewRequest m_sharedPreview[2];
     QVector<OutputWindow *> m_toAdd;
     QVector<OutputWindow *> m_toRemove;
+    QVector<QPair<int, QString>> m_sharedNdi;
+    bool m_ndiDirty = false;
 
     QSemaphore m_initDone;
     bool m_initOk = false;
@@ -149,4 +156,17 @@ private:
     bool m_readbackDone[2] = {false, false};
     PreviewRequest m_readbackRequest[2];
     QElapsedTimer m_previewClock[2];
+
+    // Screens published over NDI: rendered off-screen, read back, sent.
+    struct NdiOutput {
+        int screen = -1;
+        QString name;
+        Target target;
+        NdiSender *sender = nullptr;
+        QRhiReadbackResult readback;
+        bool pending = false;
+        bool done = false;
+    };
+    QVector<NdiOutput *> m_ndiOutputs;
+    QVector<QPair<int, QString>> m_ndiWanted;
 };

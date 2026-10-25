@@ -1,10 +1,11 @@
-﻿#pragma once
+#pragma once
 
 #include <QHash>
 #include <QImage>
 #include <QObject>
 #include <QRectF>
 #include <QSurface>
+#include <QVector>
 
 class Document;
 class MediaSource;
@@ -52,6 +53,9 @@ public:
     void removeOutput(OutputWindow *window);
 
     void setPreview(int view, const PreviewRequest &request);
+
+    // Screens published as NDI sources (screen index -> NDI source name); empty stops them all.
+    void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
 
 signals:
     void mediaStateChanged();

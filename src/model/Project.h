@@ -7,7 +7,7 @@
 #include <QString>
 #include <QVector>
 
-enum class ContentSource { TestPattern = 0, Media = 1 };
+enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3 };
 enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid, MovingBars };
 constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
@@ -84,6 +84,7 @@ struct Clip {
     ContentSource source = ContentSource::TestPattern;
     TestPattern pattern = TestPattern::Grid;
     QString mediaPath;
+    QString inputId; // Capture: camera/capture device id; Ndi: NDI source name
     ScaleMode scale = ScaleMode::Fit;
     bool loop = true;
     QColor solidColor = Qt::white;
@@ -93,6 +94,11 @@ struct Clip {
     QString displayName() const;
     static Clip fromPattern(TestPattern p);
     static Clip fromMedia(const QString &path);
+    static Clip fromCapture(const QString &deviceId, const QString &description);
+    static Clip fromNdi(const QString &sourceName);
+    bool isLive() const { return source == ContentSource::Capture || source == ContentSource::Ndi; }
+    // What a media decoder must open for this clip ("" for test patterns): file path or live input.
+    QString mediaKey() const;
 };
 
 // A row of the clip deck. Layers are composited bottom (index 0) to top.

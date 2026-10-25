@@ -42,6 +42,8 @@ qt_add_executable(DisplayHawk
     src/media/HapDecoder.cpp
     src/media/MovReader.h
     src/media/MovReader.cpp
+    src/media/Ndi.h
+    src/media/Ndi.cpp
     src/media/HapPlayer.h
     src/media/HapPlayer.cpp
     src/ui/MainWindow.h
@@ -82,6 +84,7 @@ set_target_properties(DisplayHawk PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.displayhawk.app"
     MACOSX_BUNDLE_ICON_FILE "displayhawk.icns"
+    MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/assets/macos/Info.plist.in"
     MACOSX_BUNDLE_BUNDLE_NAME "Display Hawk"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"
