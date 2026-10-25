@@ -3,7 +3,8 @@
 #include <QMainWindow>
 #include <QPointer>
 
-class CanvasView;
+class OutputMonitor;
+class OutputSetupWindow;
 class AudioReactive;
 class LfoDialog;
 class ClipPreviewPanel;
@@ -54,17 +55,15 @@ public:
     void showControls();
     void showAudioReactive();
     void showLfos();
+    void showOutputSetup();
+    OutputSetupWindow *outputSetup() const { return m_setup; }
+    OutputMonitor *outputMonitor() const { return m_monitor; }
 
 protected:
     void closeEvent(QCloseEvent *e) override;
 
 private:
     void buildActions();
-    void buildTree();
-    void rebuildTree();
-    void syncTreeSelection();
-    void onTreeSelection();
-    void refreshOutputScreenCombo();
     void syncOutputs();
     void closeOutputs();
     void identifyDisplays();
@@ -82,11 +81,11 @@ private:
 
     Document *m_doc;
     RenderEngine *m_engine;
-    CanvasView *m_inputView;
-    CanvasView *m_outputView;
-    QComboBox *m_outputScreen;
+    OutputSetupWindow *m_setup;
+    OutputMonitor *m_monitor;
     PropertyPanel *m_props;
-    QTreeWidget *m_tree;
+    QAction *m_setupAction;
+    QByteArray m_defaultState;
     ControlRouter *m_router;
     ControlDialog *m_controlDialog = nullptr;
     AudioReactive *m_audioReactive;
@@ -116,6 +115,5 @@ private:
     QVector<QPair<int, QString>> m_ndiOutputs;
     QVector<QPair<int, QString>> m_shareOutputs;
     bool m_live = false;
-    bool m_syncingTree = false;
     bool m_autosaveDirty = false;
 };

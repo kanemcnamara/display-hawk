@@ -16,6 +16,9 @@ class RenderThread;
 
 // What an editor view wants to see: a region of the composition (input) or of one screen (output),
 // rendered at the view's pixel resolution.
+// Editor previews: 0 the input map, 1 the output map, 2 the output monitor (whole composition).
+constexpr int kPreviewViews = 3;
+
 struct PreviewRequest {
     bool enabled = false;
     bool outputMode = false;

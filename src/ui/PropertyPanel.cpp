@@ -38,6 +38,7 @@
 #include <QDialog>
 #include <QFrame>
 #include <QStackedWidget>
+#include <QTabBar>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QtMath>
@@ -142,10 +143,11 @@ constexpr double kPixelsPerGigPort = 655360.0;
 
 } // namespace
 
-PropertyPanel::PropertyPanel(Document *doc, RenderEngine *engine, QWidget *parent)
+PropertyPanel::PropertyPanel(Document *doc, RenderEngine *engine, Scope scope, QWidget *parent)
     : QWidget(parent)
     , m_doc(doc)
     , m_engine(engine)
+    , m_scope(scope)
 {
     auto *scroll = new QScrollArea;
     scroll->setWidgetResizable(true);
@@ -158,9 +160,30 @@ PropertyPanel::PropertyPanel(Document *doc, RenderEngine *engine, QWidget *paren
     m_stack->addWidget(buildLayerPage());
     m_stack->addWidget(buildClipPage());
     scroll->setWidget(m_stack);
+    for (QWidget *w : std::as_const(m_setupOnly))
+        w->setVisible(scope == Scope::Setup);
+    for (QWidget *w : std::as_const(m_showOnly))
+        w->setVisible(scope == Scope::Show);
 
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    layout->setSpacing(0);
+    if (scope == Scope::Show) {
+        // Like Resolume: the composition, the selected layer and the selected clip as tabs.
+        m_tabs = new QTabBar;
+        m_tabs->setExpanding(false);
+        m_tabs->addTab(tr("Composition"));
+        m_tabs->addTab(tr("Layer"));
+        m_tabs->addTab(tr("Clip"));
+        connect(m_tabs, &QTabBar::tabBarClicked, this, [this](int tab) {
+            if (!m_tabs->isTabEnabled(tab))
+                return;
+            m_refreshing = true;
+            showPage(tab == 1 ? LayerPage : tab == 2 ? ClipPage : CompositionPage);
+            m_refreshing = false;
+        });
+        layout->addWidget(m_tabs);
+    }
     layout->addWidget(scroll);
 
     connect(m_doc, &Document::changed, this, &PropertyPanel::refresh);
@@ -194,6 +217,7 @@ QWidget *PropertyPanel::buildCompositionPage()
     cf->addRow(tr("Background"), m_compBg);
     cf->addRow(fitWalls);
     v->addWidget(comp);
+    m_setupOnly << comp;
 
     auto *overlay = new QGroupBox(tr("LED panel overlay"));
     auto *of = new QFormLayout(overlay);
@@ -205,6 +229,7 @@ QWidget *PropertyPanel::buildCompositionPage()
     m_maskToPanels->setToolTip(tr("Show only what the physical walls can display: gaps and cabinets marked as not fitted go black"));
     of->addRow(m_maskToPanels);
     v->addWidget(overlay);
+    m_setupOnly << overlay;
 
     auto *groups = new QGroupBox(tr("Layer groups"));
     auto *gl = new QVBoxLayout(groups);
@@ -214,6 +239,7 @@ QWidget *PropertyPanel::buildCompositionPage()
     addGroup->setToolTip(tr("Then choose the group on each layer's page"));
     gl->addWidget(addGroup);
     v->addWidget(groups);
+    m_showOnly << groups;
     connect(addGroup, &QPushButton::clicked, this, [this] {
         LayerGroup g;
         g.id = newId();
@@ -229,11 +255,13 @@ QWidget *PropertyPanel::buildCompositionPage()
     connect(m_compFx, &EffectChainEditor::midiLearnRequested, this, &PropertyPanel::midiLearnRequested);
     fxl->addWidget(m_compFx);
     v->addWidget(fx);
+    m_showOnly << fx;
 
     auto *hint = new QLabel(tr("Content is played from the clip deck: select a layer or clip slot to edit it."));
     hint->setWordWrap(true);
     hint->setEnabled(false);
     v->addWidget(hint);
+    m_showOnly << hint;
     v->addStretch();
 
     Project &p = m_doc->project();
@@ -469,14 +497,14 @@ QWidget *PropertyPanel::buildLayerPage()
     auto playback = [this] {
         if (m_refreshing)
             return;
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         m_doc->setLayerPlayback(s.layer, m_layerOpacity->value() / 100.0, m_layerBypass->isChecked(),
                                 m_layerSolo->isChecked());
     };
     connect(m_layerOpacity, &QDoubleSpinBox::valueChanged, this, playback);
     connect(m_layerVolume, &QDoubleSpinBox::valueChanged, this, [this](double v) {
         if (!m_refreshing)
-            m_doc->setLayerVolume(m_doc->selection().layer, v / 100.0);
+            m_doc->setLayerVolume(m_sel.layer, v / 100.0);
     });
     connect(m_layerBypass, &QCheckBox::toggled, this, playback);
     connect(m_layerSolo, &QCheckBox::toggled, this, playback);
@@ -485,7 +513,7 @@ QWidget *PropertyPanel::buildLayerPage()
 
 void PropertyPanel::editLayer(const std::function<void(Layer &)> &fn, bool structural)
 {
-    Layer *l = m_doc->selectedLayer();
+    Layer *l = selLayer();
     if (!l)
         return;
     fn(*l);
@@ -494,7 +522,7 @@ void PropertyPanel::editLayer(const std::function<void(Layer &)> &fn, bool struc
 
 void PropertyPanel::refreshLayer()
 {
-    const Layer *l = m_doc->selectedLayer();
+    const Layer *l = selLayer();
     if (!l)
         return;
     setText(m_layerName, l->name);
@@ -521,7 +549,7 @@ void PropertyPanel::refreshLayer()
     for (int i = 0; i < p.walls.size(); ++i)
         m_layerTarget->addItem(p.walls[i].name, i);
     m_layerTarget->setCurrentIndex(qMax(0, m_layerTarget->findData(l->targetWall)));
-    m_layerFx->setLayer(m_doc->selection().layer);
+    m_layerFx->setLayer(m_sel.layer);
 }
 
 // ---------------------------------------------------------------- Clip
@@ -552,11 +580,11 @@ QWidget *PropertyPanel::buildClipPage()
     ef->addRow(addText);
     ef->addRow(tr("Generator"), row({newGenerator, addGenerator}));
     connect(addText, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         m_doc->setClip(s.layer, s.column, Clip::fromText(tr("Display Hawk")));
     });
     connect(addGenerator, &QPushButton::clicked, this, [this, newGenerator] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         const QString id = newGenerator->currentData().toString();
         m_doc->setClip(s.layer, s.column, Clip::fromGenerator(id, generatorDefaults(id)));
     });
@@ -699,7 +727,7 @@ QWidget *PropertyPanel::buildClipPage()
     });
     auto colourButton = [this](QPushButton *b, QColor Clip::*field, bool alpha) {
         connect(b, &QPushButton::clicked, this, [this, field, alpha] {
-            const Clip *c = m_doc->selectedClip();
+            const Clip *c = selClip();
             if (!c)
                 return;
             const QColor col = QColorDialog::getColor(c->*field, this, QString(),
@@ -801,7 +829,7 @@ QWidget *PropertyPanel::buildClipPage()
         });
     });
     connect(m_position, &QSlider::sliderMoved, this, [this](int v) {
-        const Clip *c = m_doc->selectedClip();
+        const Clip *c = selClip();
         if (MediaSource *m = c ? m_engine->mediaFor(c->id) : nullptr)
             m->seek(v / 1000.0);
     });
@@ -811,7 +839,7 @@ QWidget *PropertyPanel::buildClipPage()
     positionTimer->start();
 
     connect(addPattern, &QPushButton::clicked, this, [this, newPattern] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         m_doc->setClip(s.layer, s.column, Clip::fromPattern(TestPattern(newPattern->currentIndex())));
     });
     connect(addMedia, &QPushButton::clicked, this, &PropertyPanel::browseMedia);
@@ -847,7 +875,7 @@ QWidget *PropertyPanel::buildClipPage()
             editClip([&](Clip &c) { c.gridSpacing = v; });
     });
     connect(m_solidColor, &QPushButton::clicked, this, [this] {
-        const Clip *clip = m_doc->selectedClip();
+        const Clip *clip = selClip();
         if (!clip)
             return;
         const QColor col = QColorDialog::getColor(clip->solidColor, this, tr("Solid colour"));
@@ -862,12 +890,12 @@ QWidget *PropertyPanel::buildClipPage()
             editClip([&](Clip &c) { c.volume = v / 100.0; });
     });
     connect(trigger, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         m_doc->triggerClip(s.layer, s.column);
     });
     auto withMedia = [this](void (MediaSource::*fn)()) {
         return [this, fn] {
-            if (const Clip *c = m_doc->selectedClip())
+            if (const Clip *c = selClip())
                 if (MediaSource *m = m_engine->mediaFor(c->id))
                     (m->*fn)();
         };
@@ -880,7 +908,7 @@ QWidget *PropertyPanel::buildClipPage()
 
 void PropertyPanel::editClip(const std::function<void(Clip &)> &fn)
 {
-    Clip *c = m_doc->selectedClip();
+    Clip *c = selClip();
     if (!c)
         return;
     fn(*c);
@@ -889,10 +917,10 @@ void PropertyPanel::editClip(const std::function<void(Clip &)> &fn)
 
 void PropertyPanel::browseMedia()
 {
-    const Selection s = m_doc->selection();
+    const Selection s = m_sel;
     if (s.kind != Selection::Clip)
         return;
-    const Clip *existing = m_doc->selectedClip();
+    const Clip *existing = selClip();
     const QString start = existing ? QFileInfo(existing->mediaPath).absolutePath() : QString();
     const QString path = QFileDialog::getOpenFileName(
         this, tr("Open media"), start,
@@ -907,7 +935,7 @@ void PropertyPanel::browseMedia()
 
 void PropertyPanel::refreshClip()
 {
-    const Clip *c = m_doc->selectedClip();
+    const Clip *c = selClip();
     m_clipStack->setCurrentIndex(c ? 1 : 0);
     if (!c)
         return;
@@ -958,7 +986,7 @@ void PropertyPanel::refreshClip()
     setValue(m_clipScale, c->scaleBy * 100.0);
     setValue(m_clipRotation, c->rotation);
     setValue(m_clipOpacity, c->opacity * 100.0);
-    m_clipFx->setClip(m_doc->selection().layer, m_doc->selection().column);
+    m_clipFx->setClip(m_sel.layer, m_sel.column);
     m_scale->setCurrentIndex(int(c->scale));
     setValue(m_clipVolume, qRound(c->volume * 100.0));
     m_clipVolume->setEnabled(c->source == ContentSource::Media);
@@ -1095,7 +1123,7 @@ void PropertyPanel::refreshPosition()
 {
     if (!m_position || !m_position->isVisible() || m_position->isSliderDown())
         return;
-    const Clip *c = m_doc->selectedClip();
+    const Clip *c = selClip();
     const MediaSource *m = c ? m_engine->mediaFor(c->id) : nullptr;
     const double pos = m ? m->position() : -1.0;
     if (pos < 0) {
@@ -1228,7 +1256,7 @@ QWidget *PropertyPanel::buildWallPage()
     mmField(m_panelMmW, &LedWall::panelMmW);
     mmField(m_panelMmH, &LedWall::panelMmH);
     connect(m_wallColor, &QPushButton::clicked, this, [this] {
-        const LedWall *w = m_doc->selectedWall();
+        const LedWall *w = selWall();
         if (!w)
             return;
         const QColor c = QColorDialog::getColor(w->color, this, tr("Wall colour"));
@@ -1236,12 +1264,12 @@ QWidget *PropertyPanel::buildWallPage()
             editWall([&](LedWall &wall) { wall.color = c; });
     });
     connect(createSlice, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         if (s.kind == Selection::Wall)
             m_doc->createSliceForWall(s.wall, m_wallScreen->currentData().toInt());
     });
     connect(mapCabinets, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         if (s.kind != Selection::Wall)
             return;
         int screen = m_wallScreen->currentData().toInt();
@@ -1253,7 +1281,7 @@ QWidget *PropertyPanel::buildWallPage()
             m_doc->select(Selection::ofScreen(screen));
     });
     connect(fillContent, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         if (s.kind != Selection::Wall)
             return;
         for (Layer &l : m_doc->project().layers)
@@ -1265,7 +1293,7 @@ QWidget *PropertyPanel::buildWallPage()
 
 void PropertyPanel::editWall(const std::function<void(LedWall &)> &fn)
 {
-    const Selection s = m_doc->selection();
+    const Selection s = m_sel;
     if (s.kind != Selection::Wall)
         return;
     LedWall w = m_doc->project().walls[s.wall];
@@ -1276,7 +1304,7 @@ void PropertyPanel::editWall(const std::function<void(LedWall &)> &fn)
 
 void PropertyPanel::refreshWall()
 {
-    const LedWall *w = m_doc->selectedWall();
+    const LedWall *w = selWall();
     if (!w)
         return;
     setText(m_wallName, w->name);
@@ -1425,7 +1453,7 @@ QWidget *PropertyPanel::buildScreenPage()
     });
     connect(refreshBtn, &QPushButton::clicked, this, &PropertyPanel::refreshDisplays);
     connect(matchBtn, &QPushButton::clicked, this, [this] {
-        const Screen *s = m_doc->selectedScreen();
+        const Screen *s = selScreen();
         if (!s)
             return;
         for (QScreen *qs : QGuiApplication::screens()) {
@@ -1439,7 +1467,7 @@ QWidget *PropertyPanel::buildScreenPage()
         }
     });
     connect(addSlice, &QPushButton::clicked, this, [this] {
-        const Selection s = m_doc->selection();
+        const Selection s = m_sel;
         if (s.screen >= 0)
             m_doc->addSlice(s.screen);
     });
@@ -1477,7 +1505,7 @@ void PropertyPanel::refreshDisplays()
 
 void PropertyPanel::editScreen(const std::function<void(Screen &)> &fn, bool structural)
 {
-    Screen *s = m_doc->selectedScreen();
+    Screen *s = selScreen();
     if (!s)
         return;
     fn(*s);
@@ -1488,7 +1516,7 @@ void PropertyPanel::editScreen(const std::function<void(Screen &)> &fn, bool str
 
 void PropertyPanel::refreshScreen()
 {
-    const Screen *s = m_doc->selectedScreen();
+    const Screen *s = selScreen();
     if (!s)
         return;
     setText(m_screenName, s->name);
@@ -1496,8 +1524,8 @@ void PropertyPanel::refreshScreen()
     syncSizePreset(m_screenPreset, s->width, s->height);
     setValue(m_screenW, s->width);
     setValue(m_screenH, s->height);
-    m_cabinets->setScreen(m_doc->selection().screen);
-    m_masks->setScreen(m_doc->selection().screen);
+    m_cabinets->setScreen(m_sel.screen);
+    m_masks->setScreen(m_sel.screen);
     int di = m_display->findData(s->display);
     if (di < 0 && !s->display.isEmpty()) {
         m_display->addItem(tr("%1 (not connected)").arg(s->display), s->display);
@@ -1656,7 +1684,7 @@ QWidget *PropertyPanel::buildSlicePage()
     });
 
     connect(m_sliceName, &QLineEdit::textEdited, this, [this](const QString &t) {
-        Slice *sl = m_doc->selectedSlice();
+        Slice *sl = selSlice();
         if (!sl)
             return;
         sl->name = t;
@@ -1783,7 +1811,7 @@ QWidget *PropertyPanel::buildSlicePage()
         });
     });
     auto toScreen = [this](bool keepAspect) {
-        const Screen *sc = m_doc->selectedScreen();
+        const Screen *sc = selScreen();
         if (!sc)
             return;
         const QSize screen(sc->width, sc->height);
@@ -1801,7 +1829,7 @@ QWidget *PropertyPanel::buildSlicePage()
 
 void PropertyPanel::editSlice(const std::function<void(Slice &)> &fn)
 {
-    Slice *s = m_doc->selectedSlice();
+    Slice *s = selSlice();
     if (!s)
         return;
     fn(*s);
@@ -1810,7 +1838,7 @@ void PropertyPanel::editSlice(const std::function<void(Slice &)> &fn)
 
 void PropertyPanel::refreshSlice()
 {
-    const Slice *s = m_doc->selectedSlice();
+    const Slice *s = selSlice();
     if (!s)
         return;
     setText(m_sliceName, s->name);
@@ -1867,36 +1895,126 @@ void PropertyPanel::refreshSlice()
 
 // ----------------------------------------------------------------
 
+bool PropertyPanel::inScope(const Selection &s) const
+{
+    switch (s.kind) {
+    case Selection::Composition:
+        return true;
+    case Selection::Layer:
+    case Selection::Clip:
+        return m_scope == Scope::Show;
+    case Selection::Wall:
+    case Selection::Screen:
+    case Selection::Slice:
+        return m_scope == Scope::Setup;
+    default:
+        return false;
+    }
+}
+
+bool PropertyPanel::isValid(const Selection &s) const
+{
+    const Project &p = m_doc->project();
+    switch (s.kind) {
+    case Selection::Wall:
+        return s.wall >= 0 && s.wall < p.walls.size();
+    case Selection::Screen:
+        return s.screen >= 0 && s.screen < p.screens.size();
+    case Selection::Slice:
+        return s.screen >= 0 && s.screen < p.screens.size() && s.slice >= 0 && s.slice < p.screens[s.screen].slices.size();
+    case Selection::Layer:
+        return s.layer >= 0 && s.layer < p.layers.size();
+    case Selection::Clip:
+        return s.layer >= 0 && s.layer < p.layers.size() && s.column >= 0 && s.column < p.layers[s.layer].clips.size();
+    default:
+        return true;
+    }
+}
+
+Layer *PropertyPanel::selLayer()
+{
+    if (m_sel.kind != Selection::Layer && m_sel.kind != Selection::Clip)
+        return nullptr;
+    return &m_doc->project().layers[m_sel.layer];
+}
+
+Clip *PropertyPanel::selClip()
+{
+    if (m_sel.kind != Selection::Clip)
+        return nullptr;
+    Clip &c = m_doc->project().layers[m_sel.layer].clips[m_sel.column];
+    return c.isEmpty() ? nullptr : &c;
+}
+
+LedWall *PropertyPanel::selWall()
+{
+    return m_sel.kind == Selection::Wall ? &m_doc->project().walls[m_sel.wall] : nullptr;
+}
+
+Screen *PropertyPanel::selScreen()
+{
+    if (m_sel.kind != Selection::Screen && m_sel.kind != Selection::Slice)
+        return nullptr;
+    return &m_doc->project().screens[m_sel.screen];
+}
+
+Slice *PropertyPanel::selSlice()
+{
+    return m_sel.kind == Selection::Slice ? &m_doc->project().screens[m_sel.screen].slices[m_sel.slice] : nullptr;
+}
+
+void PropertyPanel::showPage(int page)
+{
+    // Pages that need a selection the panel does not have fall back to the composition.
+    if ((page == LayerPage && !selLayer()) || (page == ClipPage && m_sel.kind != Selection::Clip)
+        || (page == WallPage && !selWall()) || (page == ScreenPage && !selScreen()) || (page == SlicePage && !selSlice()))
+        page = CompositionPage;
+    m_stack->setCurrentIndex(page);
+    switch (page) {
+    case WallPage: refreshWall(); break;
+    case ScreenPage: refreshScreen(); break;
+    case SlicePage: refreshSlice(); break;
+    case LayerPage: refreshLayer(); break;
+    case ClipPage:
+        refreshLayer();
+        refreshClip();
+        break;
+    default: refreshComposition(); break;
+    }
+    if (m_tabs) {
+        m_tabs->setTabEnabled(1, selLayer() != nullptr);
+        m_tabs->setTabEnabled(2, m_sel.kind == Selection::Clip);
+        m_tabs->setTabText(1, selLayer() ? tr("Layer: %1").arg(selLayer()->name) : tr("Layer"));
+        const QSignalBlocker b(m_tabs);
+        m_tabs->setCurrentIndex(page == LayerPage ? 1 : page == ClipPage ? 2 : 0);
+    }
+}
+
 void PropertyPanel::refresh()
 {
     m_refreshing = true;
     const Selection s = m_doc->selection();
-    switch (s.kind) {
-    case Selection::Wall:
-        m_stack->setCurrentIndex(WallPage);
-        refreshWall();
-        break;
-    case Selection::Screen:
-        m_stack->setCurrentIndex(ScreenPage);
-        refreshScreen();
-        break;
-    case Selection::Slice:
-        m_stack->setCurrentIndex(SlicePage);
-        refreshSlice();
-        break;
-    case Selection::Layer:
-        m_stack->setCurrentIndex(LayerPage);
-        refreshLayer();
-        break;
-    case Selection::Clip:
-        m_stack->setCurrentIndex(ClipPage);
-        refreshLayer();
-        refreshClip();
-        break;
-    default:
-        m_stack->setCurrentIndex(CompositionPage);
-        refreshComposition();
-        break;
+    bool moved = false;
+    if (inScope(s) && s != m_sel) {
+        m_sel = s;
+        moved = true;
     }
+    if (!isValid(m_sel)) {
+        m_sel = Selection::composition();
+        moved = true;
+    }
+    int page = CompositionPage;
+    switch (m_sel.kind) {
+    case Selection::Wall: page = WallPage; break;
+    case Selection::Screen: page = ScreenPage; break;
+    case Selection::Slice: page = SlicePage; break;
+    case Selection::Layer: page = LayerPage; break;
+    case Selection::Clip: page = ClipPage; break;
+    default: break;
+    }
+    // The show panel's tabs stay where the user put them until the selection moves.
+    if (m_tabs && !moved)
+        page = m_stack->currentIndex();
+    showPage(page);
     m_refreshing = false;
 }

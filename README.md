@@ -8,9 +8,9 @@ Media server for LED walls on **macOS and Windows** (C++17, Qt 6, Qt RHI). The o
 | --- | --- |
 | **Composition** | The master canvas (any resolution). Content is rendered here. |
 | **Content** | A test pattern (grid, colour bars, ramps, checker, solid, LED panel map) or a video/image file, scaled Fit / Fill / Stretch / Native into the whole composition or into one LED wall. |
-| **LED wall** | A grid of identical panels: panel pixels, panel size in mm, columns Ã— rows and position in the composition. Shows pitch, physical size, total pixels and an estimate of 1G processor ports. |
-| **Screen** | A video output (GPU output â†’ LED processor). Fullscreen on a display, a test window, or preview only. |
-| **Slice** | Copies a rectangle of the composition onto a rectangle of a screen, with 90Â° rotation, flips and brightness. |
+| **LED wall** | A grid of identical panels: panel pixels, panel size in mm, columns × rows and position in the composition. Shows pitch, physical size, total pixels and an estimate of 1G processor ports. |
+| **Screen** | A video output (GPU output → LED processor). Fullscreen on a display, a test window, or preview only. |
+| **Slice** | Copies a rectangle of the composition onto a rectangle of a screen, with 90° rotation, flips and brightness. |
 
 Slices that sample exactly a wall's area follow the wall when it is moved or resized.
 
@@ -195,13 +195,20 @@ Each clip (select it in the deck) has:
 Each layer has a **transition** time and **style** (crossfade, wipes, pushes in four directions, zoom), and **autopilot**: move to the next or a random clip when a movie reaches its end (or completes a loop), or after a set time for stills, patterns and live inputs.
 ## Using it
 
+Two windows, as in Resolume:
+
+- The **main window** is for running the show: the **Clip Deck** on top (tempo, crossfader, master and blackout in its bar), and along the bottom **Properties** (tabs for the *Composition*: groups and composition effects; the selected *Layer*; the selected *Clip*), the **Output** monitor (the composition as it goes out), the clip **Preview** and the **Media** browser. Docks can be moved, tabbed or closed; *View → Reset layout* puts them back.
+- **Output → Output Setup…** (Ctrl/Cmd+Shift+O) opens the setup in a window of its own: the tree of walls, screens and slices, the input and output maps and their properties. Set it up, close it, and the main window has the room. It reopens where it was, and is reopened at launch if it was open when the app closed. Undo, save, live and the add/delete shortcuts work in both windows.
+
+In the Output Setup window:
+
 - **Input map** (top): composition with walls (dashed) and slice inputs (orange). **Output map** (bottom): the selected screen with slice outputs. Red outlines = outside the canvas.
 - Drag to move/resize; edges snap to the canvas, other items and panel seams. Shift disables snapping, Alt+click selects items underneath, arrow keys nudge 1 px (Shift: 10 px).
 - Zoom: mouse wheel, Ctrl/Cmd+scroll or trackpad pinch. Pan: trackpad scroll, middle-drag or drag empty space. Double-click or F resets the view.
 - **Undo/redo** (Ctrl/Cmd+Z, Ctrl+Y / Cmd+Shift+Z): a whole drag or a burst of typing is one step.
 - **F9** toggles outputs live; **Esc** on an output turns them off. **Ctrl/Cmd+I** identifies every physical display.
 - Setups save as `.dhawk` (JSON, written atomically). Unsaved changes are autosaved every 15 s; after a crash you are offered the recovered setup on the next launch.
-- Unattended installs: *Output â†’ Go live on launch* (or `--live`) recovers without asking and opens outputs at startup. *File â†’ Reopen last setup on launch* is on by default.
+- Unattended installs: *Output → Go live on launch* (or `--live`) recovers without asking and opens outputs at startup. *File → Reopen last setup on launch* is on by default.
 - Log: `%LOCALAPPDATA%\Display Hawk\Display Hawk\displayhawk.log` (Windows), `~/Library/Application Support/Display Hawk/Display Hawk/displayhawk.log` (macOS).
 
 ## Rendering
@@ -217,7 +224,7 @@ A dedicated render thread owns the GPU through Qt RHI: **Metal** on macOS, **Dir
 
 ## Building
 
-Qt 6.8 with **Qt Multimedia** and **Qt Shader Tools**, CMake â‰¥ 3.21 and Ninja. `aqtinstall` installs Qt without admin rights:
+Qt 6.8 with **Qt Multimedia** and **Qt Shader Tools**, CMake ≥ 3.21 and Ninja. `aqtinstall` installs Qt without admin rights:
 
 ```sh
 python -m pip install --user aqtinstall cmake ninja

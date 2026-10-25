@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/Document.h"
 #include "model/Project.h"
 
 #include <QWidget>
@@ -24,14 +25,19 @@ class QPlainTextEdit;
 class QFontComboBox;
 class QFormLayout;
 class QStackedWidget;
+class QTabBar;
 class QVBoxLayout;
 
-// Inspector for whatever is selected: composition/content, LED wall, screen or slice.
+// Inspector for whatever is selected. Two of them: the main window's (Show: composition effects
+// and groups, layer, clip, as tabs) and the output setup window's (Setup: composition size and
+// overlay, LED wall, screen, slice). Each keeps the last selection in its scope, so picking a clip
+// does not take the setup window off the slice being edited.
 class PropertyPanel : public QWidget
 {
     Q_OBJECT
 public:
-    PropertyPanel(Document *doc, RenderEngine *engine, QWidget *parent = nullptr);
+    enum class Scope { Show, Setup };
+    PropertyPanel(Document *doc, RenderEngine *engine, Scope scope, QWidget *parent = nullptr);
 
 signals:
     void identifyRequested();
@@ -61,8 +67,22 @@ private:
     void editClip(const std::function<void(Clip &)> &fn);
     void browseMedia();
 
+    // The selection this panel shows (the document's, when it is in this panel's scope).
+    bool inScope(const Selection &s) const;
+    bool isValid(const Selection &s) const;
+    Layer *selLayer();
+    Clip *selClip();
+    LedWall *selWall();
+    Screen *selScreen();
+    Slice *selSlice();
+    void showPage(int page);
+
     Document *m_doc;
     RenderEngine *m_engine;
+    Scope m_scope;
+    Selection m_sel;
+    QTabBar *m_tabs = nullptr; // Show: Composition / Layer / Clip
+    QVector<QWidget *> m_setupOnly, m_showOnly;
     QStackedWidget *m_stack;
     bool m_refreshing = false;
 

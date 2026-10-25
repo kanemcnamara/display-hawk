@@ -90,7 +90,7 @@ void RenderThread::dropClipMedia(const QString &clipId)
 
 void RenderThread::setPreview(int view, const PreviewRequest &request)
 {
-    if (view < 0 || view > 1)
+    if (view < 0 || view >= kPreviewViews)
         return;
     QMutexLocker lock(&m_mutex);
     m_sharedPreview[view] = request;
@@ -494,8 +494,8 @@ void RenderThread::run()
     QElapsedTimer fpsClock;
     fpsClock.start();
     int frames = 0;
-    m_previewClock[0].start();
-    m_previewClock[1].start();
+    for (QElapsedTimer &c : m_previewClock)
+        c.start();
     m_clock.start();
     m_perfLog = qEnvironmentVariableIsSet("DISPLAYHAWK_PERF");
 
@@ -612,8 +612,8 @@ void RenderThread::run()
     releaseTarget(m_recordRb.target);
     releaseTarget(m_dmxRb.target);
     m_compOut = nullptr;
-    releaseTarget(m_previewTarget[0]);
-    releaseTarget(m_previewTarget[1]);
+    for (Target &t : m_previewTarget)
+        releaseTarget(t);
     for (ClipTex &ct : m_clipTex)
         releaseClipTex(ct, false);
     m_clipTex.clear();
@@ -660,8 +660,8 @@ void RenderThread::syncState()
         }
     }
     m_sharedMedia.clear();
-    m_preview[0] = m_sharedPreview[0];
-    m_preview[1] = m_sharedPreview[1];
+    for (int v = 0; v < kPreviewViews; ++v)
+        m_preview[v] = m_sharedPreview[v];
     m_masterMod = m_sharedMasterMod;
     m_layerMod = m_sharedLayerMod;
     m_effectMod = m_sharedEffectMod;
@@ -1610,7 +1610,7 @@ void RenderThread::renderOutput(QRhiCommandBuffer *cb, Output &o)
 
 void RenderThread::renderPreviews(QRhiCommandBuffer *cb)
 {
-    for (int v = 0; v < 2; ++v) {
+    for (int v = 0; v < kPreviewViews; ++v) {
         const PreviewRequest &req = m_preview[v];
         if (!req.enabled || req.pixelSize.isEmpty() || req.region.isEmpty() || m_readbackPending[v])
             continue;
@@ -1685,7 +1685,7 @@ void RenderThread::deliverReadbacks()
                          rb.pixelSize.height(), QImage::Format_RGBA8888);
         emit clipPreviewReady(m_clipPreviewId, m_rhi->isYUpInFramebuffer() ? img.mirrored() : img.copy());
     }
-    for (int v = 0; v < 2; ++v) {
+    for (int v = 0; v < kPreviewViews; ++v) {
         if (!m_readbackDone[v])
             continue;
         m_readbackDone[v] = false;

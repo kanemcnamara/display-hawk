@@ -15,6 +15,8 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include "ui/OutputSetupWindow.h"
+#include "ui/OutputMonitor.h"
 #include "control/Osc.h"
 #include "control/ControlFeedback.h"
 #include <QNetworkDatagram>
@@ -126,7 +128,8 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     doc.notifyChanged();
     window.setLive(true);
 
-    QImage previews[2];
+    window.showOutputSetup(); // the input and output map previews are rendered while it is shown
+    QImage previews[kPreviewViews];
     int fps = 0;
     QObject::connect(&engine, &RenderEngine::previewReady, &app,
                      [&previews](int view, const QImage &img) { previews[view] = img; });
@@ -188,6 +191,9 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         waitFor([&] { return !previews[0].isNull() && previews[0] != panelMap && litPercent(previews[0]) > 50; });
     save(previews[0], "deck-colour-bars");
     check(barsShown, "triggered clip reaches the composition");
+    const bool monitorShows = waitFor([&] { return litPercent(previews[OutputMonitor::kView]) > 50; });
+    save(previews[OutputMonitor::kView], "output-monitor");
+    check(monitorShows && window.outputMonitor()->isVisible(), "the main window's output monitor shows the composition");
 
     // Blend modes: a red solid on the top layer over the colour bars. Bars are white, yellow, cyan,
     // green, magenta, red, blue, black across the top three quarters.
@@ -963,7 +969,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
         doc.select(Selection::ofScreen(0));
         waitMs(300);
-        window.grab().save(QStringLiteral("%1/cabinet-layout-window.png").arg(outDir));
+        window.outputSetup()->grab().save(QStringLiteral("%1/cabinet-layout-window.png").arg(outDir));
         p.compEffects.clear();
         doc.removeCabinetLayout(0, 0);
         check(p.screens[0].slices.isEmpty() && p.screens[0].cabinetLayouts.isEmpty(),
@@ -1031,7 +1037,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         check(flat && bent, "mesh warp bends the slice smoothly");
         doc.select(Selection::ofSlice(0, 0));
         waitMs(300);
-        window.grab().save(QStringLiteral("%1/projection-window.png").arg(outDir));
+        window.outputSetup()->grab().save(QStringLiteral("%1/projection-window.png").arg(outDir));
 
         // Edge blend over white: a linear 240 px ramp on the right goes from full to black.
         Clip whiteSolid = Clip::fromPattern(TestPattern::Solid);
@@ -2265,6 +2271,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
     }
     window.grab().save(QStringLiteral("%1/main-window.png").arg(outDir));
+    window.outputSetup()->grab().save(QStringLiteral("%1/output-setup-window.png").arg(outDir));
     window.setLive(false);
     return ok ? 0 : 1;
 }

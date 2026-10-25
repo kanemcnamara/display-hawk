@@ -1,4 +1,6 @@
 #include "ui/MainWindow.h"
+#include "ui/OutputMonitor.h"
+#include "ui/OutputSetupWindow.h"
 
 #include <QSet>
 
@@ -68,47 +70,16 @@
 #include <QTimer>
 #include <QToolBar>
 #include <QToolButton>
-#include <QTreeWidget>
 #include <QVBoxLayout>
 
 namespace {
 
-constexpr int kKindRole = Qt::UserRole;
-constexpr int kARole = Qt::UserRole + 1;
-constexpr int kBRole = Qt::UserRole + 2;
-constexpr int kGroupRole = Qt::UserRole + 3; // cabinet group nodes: "screen:wall"
 constexpr int kAutosaveMs = 15000;
+constexpr int kLayoutVersion = 2; // bump when the default dock layout changes
 
 const char *kSettingLastProject = "lastProject";
 const char *kSettingReopenLast = "reopenLastOnLaunch";
 const char *kSettingLiveOnLaunch = "goLiveOnLaunch";
-
-Selection selectionOf(const QTreeWidgetItem *item)
-{
-    Selection s;
-    s.kind = Selection::Kind(item->data(0, kKindRole).toInt());
-    const int a = item->data(0, kARole).toInt();
-    const int b = item->data(0, kBRole).toInt();
-    if (s.kind == Selection::Wall)
-        s.wall = a;
-    else if (s.kind == Selection::Screen)
-        s.screen = a;
-    else if (s.kind == Selection::Slice) {
-        s.screen = a;
-        s.slice = b;
-    }
-    return s;
-}
-
-QTreeWidgetItem *makeItem(QTreeWidgetItem *parent, const QString &text, const QString &detail, Selection::Kind kind,
-                          int a = -1, int b = -1)
-{
-    auto *item = new QTreeWidgetItem(parent, {text, detail});
-    item->setData(0, kKindRole, int(kind));
-    item->setData(0, kARole, a);
-    item->setData(0, kBRole, b);
-    return item;
-}
 
 } // namespace
 
@@ -119,46 +90,20 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
 {
     resize(1600, 950);
 
-    m_inputView = new CanvasView(doc, engine, CanvasView::InputMap);
-    m_outputView = new CanvasView(doc, engine, CanvasView::OutputMap);
+    // Output setup (walls, screens, slices and both maps) lives in a window of its own; this one
+    // is for running the show.
+    m_setup = new OutputSetupWindow(doc, engine);
+    connect(m_setup, &OutputSetupWindow::identifyRequested, this, &MainWindow::identifyDisplays);
+    connect(m_setup, &OutputSetupWindow::midiLearnRequested, this, [this](int action, int layer, int column, int param) {
+        showControls();
+        m_controlDialog->learnNew(action, layer, column, param);
+    });
 
-    auto *inputPane = new QWidget;
-    auto *il = new QVBoxLayout(inputPane);
-    il->setContentsMargins(0, 0, 0, 0);
-    il->setSpacing(2);
-    auto *inputTitle = new QLabel(tr("<b>Input map</b> &nbsp; composition, LED walls and the area each slice samples"));
-    inputTitle->setContentsMargins(6, 4, 6, 0);
-    il->addWidget(inputTitle);
-    il->addWidget(m_inputView, 1);
-
-    auto *outputPane = new QWidget;
-    auto *ol = new QVBoxLayout(outputPane);
-    ol->setContentsMargins(0, 0, 0, 0);
-    ol->setSpacing(2);
-    auto *outHeader = new QHBoxLayout;
-    outHeader->setContentsMargins(6, 4, 6, 0);
-    outHeader->addWidget(new QLabel(tr("<b>Output map</b> &nbsp; where each slice lands on")));
-    m_outputScreen = new QComboBox;
-    m_outputScreen->setMinimumWidth(180);
-    outHeader->addWidget(m_outputScreen);
-    outHeader->addStretch();
-    ol->addLayout(outHeader);
-    ol->addWidget(m_outputView, 1);
-
-    auto *splitter = new QSplitter(Qt::Vertical);
-    splitter->addWidget(inputPane);
-    splitter->addWidget(outputPane);
-    splitter->setSizes({500, 400});
-    setCentralWidget(splitter);
-
-    buildTree();
-
-    m_props = new PropertyPanel(doc, engine);
+    m_props = new PropertyPanel(doc, engine, PropertyPanel::Scope::Show);
     auto *propDock = new QDockWidget(tr("Properties"));
     propDock->setObjectName(QStringLiteral("properties"));
     propDock->setWidget(m_props);
     propDock->setMinimumWidth(360);
-    addDockWidget(Qt::RightDockWidgetArea, propDock);
     connect(m_props, &PropertyPanel::identifyRequested, this, &MainWindow::identifyDisplays);
     connect(m_props, &PropertyPanel::midiLearnRequested, this, [this](int action, int layer, int column, int param) {
         showControls();
@@ -197,25 +142,30 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
         showControls();
         m_controlDialog->learnNew(action, layer, column);
     });
+    setCentralWidget(deck);
     m_clipPreview = new ClipPreviewPanel(doc, engine);
     auto *previewDock = new QDockWidget(tr("Preview"));
     previewDock->setObjectName(QStringLiteral("preview"));
     previewDock->setWidget(m_clipPreview);
-    auto *deckDock = new QDockWidget(tr("Clip Deck"));
-    deckDock->setObjectName(QStringLiteral("deck"));
-    deckDock->setWidget(deck);
-    addDockWidget(Qt::BottomDockWidgetArea, deckDock);
-    addDockWidget(Qt::BottomDockWidgetArea, previewDock);
-    splitDockWidget(deckDock, previewDock, Qt::Horizontal);
-    resizeDocks({deckDock, previewDock}, {1200, 360}, Qt::Horizontal);
-    resizeDocks({deckDock}, {280}, Qt::Vertical);
+    m_monitor = new OutputMonitor(doc, engine);
+    auto *monitorDock = new QDockWidget(tr("Output"));
+    monitorDock->setObjectName(QStringLiteral("monitor"));
+    monitorDock->setWidget(m_monitor);
+    auto *mediaDock = new QDockWidget(tr("Media"));
+    mediaDock->setObjectName(QStringLiteral("media"));
+    mediaDock->setWidget(new MediaBrowser(m_doc));
+    // Like Resolume: the deck on top, then properties, monitors and the browser side by side.
+    addDockWidget(Qt::BottomDockWidgetArea, propDock);
+    splitDockWidget(propDock, monitorDock, Qt::Horizontal);
+    splitDockWidget(monitorDock, previewDock, Qt::Horizontal);
+    splitDockWidget(previewDock, mediaDock, Qt::Horizontal);
+    resizeDocks({propDock, monitorDock, previewDock, mediaDock}, {460, 420, 420, 300}, Qt::Horizontal);
+    resizeDocks({propDock}, {430}, Qt::Vertical);
 
     m_cursorLabel = new QLabel;
     m_fpsLabel = new QLabel;
     statusBar()->addWidget(m_cursorLabel, 1);
     statusBar()->addPermanentWidget(m_fpsLabel);
-    connect(m_inputView, &CanvasView::statusMessage, m_cursorLabel, &QLabel::setText);
-    connect(m_outputView, &CanvasView::statusMessage, m_cursorLabel, &QLabel::setText);
     connect(m_engine, &RenderEngine::statsUpdated, this, [this](int fps, const QSize &comp) {
         m_fpsLabel->setText(tr("%1 fps  |  %2 x %3  |  %4  |  %5")
                                 .arg(fps)
@@ -227,47 +177,31 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
 
     buildActions();
 
-    connect(m_doc, &Document::structureChanged, this, [this] {
-        rebuildTree();
-        refreshOutputScreenCombo();
-    });
     connect(m_doc, &Document::changed, this, [this] {
         m_autosaveDirty = true;
         syncOutputs();
     });
     connect(m_doc, &Document::fileStateChanged, this, &MainWindow::updateTitle);
-    connect(m_doc, &Document::selectionChanged, this, [this] {
-        syncTreeSelection();
-        const Selection s = m_doc->selection();
-        if (s.screen >= 0) {
-            m_outputView->setScreenIndex(s.screen);
-            QSignalBlocker block(m_outputScreen);
-            m_outputScreen->setCurrentIndex(s.screen);
-        }
-    });
-    connect(m_outputScreen, &QComboBox::activated, this, [this](int i) {
-        m_outputView->setScreenIndex(i);
-        m_doc->select(Selection::ofScreen(i));
-    });
     connect(qApp, &QGuiApplication::screenAdded, this, &MainWindow::syncOutputs);
     connect(qApp, &QGuiApplication::screenRemoved, this, &MainWindow::syncOutputs);
-
-    rebuildTree();
-    refreshOutputScreenCombo();
     updateTitle();
+
+    // The layout as built is the default; the user's arrangement is restored over it.
+    m_defaultState = saveState();
+    QSettings ui;
+    if (ui.value(QStringLiteral("ui/layoutVersion")).toInt() == kLayoutVersion)
+        restoreState(ui.value(QStringLiteral("ui/mainState")).toByteArray());
 
     m_autosaveTimer = new QTimer(this);
     m_autosaveTimer->setInterval(kAutosaveMs);
     connect(m_autosaveTimer, &QTimer::timeout, this, &MainWindow::autosave);
     m_autosaveTimer->start();
-
-    statusBar()->showMessage(tr("Tip: Shift disables snapping, Alt+click selects items underneath, "
-                                "arrow keys nudge, wheel zooms, drag empty space to pan."), 15000);
 }
 
 MainWindow::~MainWindow()
 {
     closeOutputs();
+    delete m_setup;
 }
 
 void MainWindow::buildActions()
@@ -326,11 +260,19 @@ void MainWindow::buildActions()
     connect(m_doc, &Document::undoStateChanged, this, syncUndo);
     syncUndo();
     edit->addSeparator();
-    QAction *addWall = edit->addAction(tr("Add LED &Wall"), QKeySequence(tr("Ctrl+Shift+W")), m_doc, &Document::addWall);
-    QAction *addScreen = edit->addAction(tr("Add &Screen"), QKeySequence(tr("Ctrl+Shift+S")), m_doc, &Document::addScreen);
+    // Adding setup items opens the setup window, where they are edited.
+    QAction *addWall = edit->addAction(tr("Add LED &Wall"), QKeySequence(tr("Ctrl+Shift+W")), this, [this] {
+        showOutputSetup();
+        m_doc->addWall();
+    });
+    QAction *addScreen = edit->addAction(tr("Add &Screen"), QKeySequence(tr("Ctrl+Shift+S")), this, [this] {
+        showOutputSetup();
+        m_doc->addScreen();
+    });
     QAction *addSlice = edit->addAction(tr("Add S&lice"), QKeySequence(tr("Ctrl+Shift+L")), this, [this] {
+        showOutputSetup();
         const Selection s = m_doc->selection();
-        m_doc->addSlice(s.screen >= 0 ? s.screen : m_outputView->screenIndex());
+        m_doc->addSlice(s.screen >= 0 ? s.screen : m_setup->currentScreen());
     });
     edit->addSeparator();
     QAction *dup = edit->addAction(tr("&Duplicate"), QKeySequence(tr("Ctrl+D")), m_doc, &Document::duplicateSelection);
@@ -341,6 +283,21 @@ void MainWindow::buildActions()
 #endif
 
     QMenu *output = menuBar()->addMenu(tr("&Output"));
+    m_setupAction = output->addAction(tr("Output &Setup..."));
+    m_setupAction->setShortcut(QKeySequence(tr("Ctrl+Shift+O")));
+    m_setupAction->setCheckable(true);
+    m_setupAction->setToolTip(tr("LED walls, screens, slices and the input/output maps, in their own window (Ctrl+Shift+O)"));
+    connect(m_setupAction, &QAction::triggered, this, [this](bool on) {
+        if (on)
+            showOutputSetup();
+        else
+            m_setup->hide();
+    });
+    connect(m_setup, &OutputSetupWindow::visibilityChanged, this, [this](bool visible) {
+        const QSignalBlocker b(m_setupAction);
+        m_setupAction->setChecked(visible);
+    });
+    output->addSeparator();
     m_liveAction = output->addAction(tr("Outputs &Live"));
     m_liveAction->setCheckable(true);
     m_liveAction->setShortcut(QKeySequence(Qt::Key_F9));
@@ -462,8 +419,8 @@ void MainWindow::buildActions()
     });
 
     QMenu *view = menuBar()->addMenu(tr("&View"));
-    view->addAction(tr("Reset input view"), this, [this] { m_inputView->resetView(); });
-    view->addAction(tr("Reset output view"), this, [this] { m_outputView->resetView(); });
+    view->addAction(m_setupAction);
+    view->addAction(tr("Reset layout"), this, [this] { restoreState(m_defaultState); });
 
     QToolBar *tb = addToolBar(tr("Main"));
     tb->setObjectName(QStringLiteral("main"));
@@ -475,140 +432,30 @@ void MainWindow::buildActions()
     tb->addAction(m_undoAction);
     tb->addAction(m_redoAction);
     tb->addSeparator();
-    tb->addAction(addWall);
-    tb->addAction(addScreen);
-    tb->addAction(addSlice);
-    tb->addAction(dup);
-    tb->addAction(del);
-    tb->addSeparator();
+    tb->addAction(m_setupAction);
     tb->addAction(identify);
     tb->addAction(m_liveAction);
+    const QString liveStyle =
+        QStringLiteral("QToolButton:checked { background: #c62828; color: white; font-weight: bold; }");
     if (auto *btn = qobject_cast<QToolButton *>(tb->widgetForAction(m_liveAction)))
-        btn->setStyleSheet(QStringLiteral("QToolButton:checked { background: #c62828; color: white; font-weight: bold; }"));
-}
+        btn->setStyleSheet(liveStyle);
 
-void MainWindow::buildTree()
-{
-    m_tree = new QTreeWidget;
-    m_tree->setHeaderLabels({tr("Item"), tr("Size")});
-    m_tree->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    m_tree->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_tree->header()->setStretchLastSection(false);
-    connect(m_tree, &QTreeWidget::currentItemChanged, this, &MainWindow::onTreeSelection);
-
-    auto *dock = new QDockWidget(tr("Setup"));
-    dock->setObjectName(QStringLiteral("setup"));
-    dock->setWidget(m_tree);
-    dock->setMinimumWidth(260);
-    addDockWidget(Qt::LeftDockWidgetArea, dock);
-
-    // Media files, tabbed with the setup tree.
-    auto *media = new QDockWidget(tr("Media"));
-    media->setObjectName(QStringLiteral("media"));
-    media->setWidget(new MediaBrowser(m_doc));
-    addDockWidget(Qt::LeftDockWidgetArea, media);
-    tabifyDockWidget(dock, media);
-    dock->raise();
-}
-
-void MainWindow::rebuildTree()
-{
-    m_syncingTree = true;
-    const Project &p = m_doc->project();
-    // Cabinet groups stay as the user left them (collapsed by default).
-    QSet<QString> expandedGroups;
-    for (QTreeWidgetItemIterator it(m_tree); *it; ++it)
-        if ((*it)->isExpanded() && !(*it)->data(0, kGroupRole).toString().isEmpty())
-            expandedGroups.insert((*it)->data(0, kGroupRole).toString());
-    m_tree->clear();
-
-    auto *comp = makeItem(nullptr, tr("Composition"), QStringLiteral("%1 x %2").arg(p.compWidth).arg(p.compHeight),
-                          Selection::Composition);
-    m_tree->addTopLevelItem(comp);
-
-    auto *walls = makeItem(nullptr, tr("LED Walls"), QString::number(p.walls.size()), Selection::None);
-    m_tree->addTopLevelItem(walls);
-    for (int i = 0; i < p.walls.size(); ++i) {
-        const LedWall &w = p.walls[i];
-        auto *it = makeItem(walls, w.name, QStringLiteral("%1 x %2").arg(w.pixelWidth()).arg(w.pixelHeight()),
-                            Selection::Wall, i);
-        it->setForeground(0, w.color);
+    // The setup window gets the same shortcuts and its own toolbar of setup actions.
+    m_setup->addSharedActions({newAct, openAct, saveAct, m_undoAction, m_redoAction, addWall, addScreen, addSlice, dup,
+                               del, identify, identifySlices, m_liveAction, m_recordAction},
+                              {addWall, addScreen, addSlice, dup, del, nullptr, m_undoAction, m_redoAction, nullptr,
+                               identify, identifySlices, m_liveAction});
+    if (auto *btn = m_setup->findChild<QToolBar *>()) {
+        if (auto *live = qobject_cast<QToolButton *>(btn->widgetForAction(m_liveAction)))
+            live->setStyleSheet(liveStyle);
     }
-
-    QVector<QTreeWidgetItem *> collapsed;
-    auto *screens = makeItem(nullptr, tr("Screens"), QString::number(p.screens.size()), Selection::None);
-    m_tree->addTopLevelItem(screens);
-    for (int s = 0; s < p.screens.size(); ++s) {
-        const Screen &sc = p.screens[s];
-        auto *si = makeItem(screens, sc.name, QStringLiteral("%1 x %2").arg(sc.width).arg(sc.height),
-                            Selection::Screen, s);
-        QHash<int, QTreeWidgetItem *> groups; // wall -> its cabinet slices' node
-        for (int i = 0; i < sc.slices.size(); ++i) {
-            const Slice &sl = sc.slices[i];
-            QTreeWidgetItem *parent = si;
-            if (sl.isCabinet()) {
-                QTreeWidgetItem *&g = groups[sl.wall];
-                if (!g) {
-                    const QString wallName = sl.wall < p.walls.size() ? p.walls[sl.wall].name : QString();
-                    g = makeItem(si, tr("%1 cabinets").arg(wallName), QString(), Selection::Screen, s);
-                    const QString key = QStringLiteral("%1:%2").arg(s).arg(sl.wall);
-                    g->setData(0, kGroupRole, key);
-                    if (!expandedGroups.contains(key))
-                        collapsed << g;
-                }
-                parent = g;
-            }
-            const QString label = sl.isCabinet() && sl.port > 0 ? tr("%1  (port %2)").arg(sl.name).arg(sl.port) : sl.name;
-            auto *it = makeItem(parent, label, QStringLiteral("%1 x %2").arg(sl.output.width()).arg(sl.output.height()),
-                                Selection::Slice, s, i);
-            if (!sl.enabled)
-                it->setForeground(0, QColor(130, 130, 130));
-        }
-        for (auto g = groups.cbegin(); g != groups.cend(); ++g)
-            g.value()->setText(1, QString::number(g.value()->childCount()));
-    }
-    m_tree->expandAll();
-    for (QTreeWidgetItem *g : std::as_const(collapsed))
-        g->setExpanded(false);
-    m_syncingTree = false;
-    syncTreeSelection();
 }
 
-void MainWindow::syncTreeSelection()
+void MainWindow::showOutputSetup()
 {
-    m_syncingTree = true;
-    const Selection sel = m_doc->selection();
-    QTreeWidgetItemIterator it(m_tree);
-    while (*it) {
-        // Group nodes stand for their screen; the screen's own row wins.
-        if (selectionOf(*it) == sel && (*it)->data(0, kGroupRole).toString().isEmpty()) {
-            m_tree->setCurrentItem(*it);
-            break;
-        }
-        ++it;
-    }
-    m_syncingTree = false;
-}
-
-void MainWindow::onTreeSelection()
-{
-    if (m_syncingTree || !m_tree->currentItem())
-        return;
-    const Selection s = selectionOf(m_tree->currentItem());
-    if (s.kind != Selection::None)
-        m_doc->select(s);
-}
-
-void MainWindow::refreshOutputScreenCombo()
-{
-    const Project &p = m_doc->project();
-    QSignalBlocker block(m_outputScreen);
-    m_outputScreen->clear();
-    for (const Screen &s : p.screens)
-        m_outputScreen->addItem(s.name);
-    const int idx = qBound(0, m_outputView->screenIndex(), int(p.screens.size()) - 1);
-    m_outputScreen->setCurrentIndex(idx);
-    m_outputView->setScreenIndex(idx);
+    m_setup->show();
+    m_setup->raise();
+    m_setup->activateWindow();
 }
 
 void MainWindow::setLive(bool live)
@@ -787,6 +634,8 @@ void MainWindow::startup(const QStringList &args)
             loaded = openPath(last);
     }
 
+    if (settings.value(QStringLiteral("ui/setupOpen"), false).toBool())
+        showOutputSetup();
     if (live)
         QTimer::singleShot(500, this, [this] { setLive(true); });
 }
@@ -931,6 +780,11 @@ void MainWindow::closeEvent(QCloseEvent *e)
         return;
     }
     m_autosaveTimer->stop();
+    QSettings ui;
+    ui.setValue(QStringLiteral("ui/mainState"), saveState());
+    ui.setValue(QStringLiteral("ui/layoutVersion"), kLayoutVersion);
+    ui.setValue(QStringLiteral("ui/setupOpen"), m_setup->isVisible());
+    m_setup->close();
     closeOutputs();
     QFile::remove(autosavePath()); // clean exit: nothing to recover
     e->accept();

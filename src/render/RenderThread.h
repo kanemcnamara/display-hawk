@@ -150,7 +150,7 @@ private:
         HapFrame hap;
     };
     QHash<QString, SharedMedia> m_sharedMedia; // clip id -> newest media not yet taken by run()
-    PreviewRequest m_sharedPreview[2];
+    PreviewRequest m_sharedPreview[kPreviewViews];
     QVector<OutputWindow *> m_toAdd;
     QVector<OutputWindow *> m_toRemove;
     QVector<QPair<int, QString>> m_sharedNdi;
@@ -229,7 +229,7 @@ public:
 private:
     QAtomicInt m_zeroCopyTotal;
     Project m_project;
-    PreviewRequest m_preview[2];
+    PreviewRequest m_preview[kPreviewViews];
     QVector<Output> m_outputs;
     Mixer m_compMix;                  // layers over the background
     QHash<QString, Mixer> m_groupMix; // layer groups, by group id
@@ -239,7 +239,7 @@ private:
     IsfRenderer m_isf;
     Target m_compFinal;               // composition effects, then mask / overlay / master on top
     QRhiTexture *m_compOut = nullptr; // what screens and previews show: the mix or m_compFinal
-    Target m_previewTarget[2];
+    Target m_previewTarget[kPreviewViews];
     // Per clip: its pattern image or its newest media frame.
     struct ClipTex {
         QRhiTexture *tex = nullptr;     // patterns, images and CPU-converted video
@@ -277,11 +277,11 @@ private:
     QByteArray m_overlayKey;
     QRhiTexture *m_maskTex = nullptr;
     QByteArray m_maskKey;
-    QRhiReadbackResult m_readback[2];
-    bool m_readbackPending[2] = {false, false};
-    bool m_readbackDone[2] = {false, false};
-    PreviewRequest m_readbackRequest[2];
-    QElapsedTimer m_previewClock[2];
+    QRhiReadbackResult m_readback[kPreviewViews];
+    bool m_readbackPending[kPreviewViews] = {};
+    bool m_readbackDone[kPreviewViews] = {};
+    PreviewRequest m_readbackRequest[kPreviewViews];
+    QElapsedTimer m_previewClock[kPreviewViews];
 
     // Screens published over NDI: rendered off-screen, read back, sent.
     struct NdiOutput {

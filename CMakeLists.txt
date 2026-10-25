@@ -101,11 +101,15 @@ qt_add_executable(DisplayHawk
     src/ui/ClipPreviewPanel.h
     src/ui/ClipPreviewPanel.cpp
     src/ui/MediaBrowser.h
+    src/ui/OutputMonitor.h
+    src/ui/OutputSetupWindow.h
     src/ui/CueListDialog.h
     src/ui/PixelMapDialog.h
     src/ui/PixelMapDialog.cpp
     src/ui/CueListDialog.cpp
     src/ui/MediaBrowser.cpp
+    src/ui/OutputMonitor.cpp
+    src/ui/OutputSetupWindow.cpp
     src/ui/MaskEditor.h
     src/ui/MaskEditor.cpp
     src/ui/EffectChainEditor.h
