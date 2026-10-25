@@ -2,6 +2,7 @@
 #include "control/ControlRouter.h"
 #include "control/Sacn.h"
 #include "media/Ndi.h"
+#include "media/TextureShare.h"
 #include "model/Document.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
@@ -479,6 +480,66 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
         doc.project().screens[0].display = QStringLiteral("window");
         doc.notifyChanged();
+
+        // Spout / Syphon loopback: share screen 1, then receive our own sender as a clip.
+        const QString tech = TextureShare::technology();
+        const bool shareBackend = (tech == QLatin1String("Spout") && engine.backendName() == QLatin1String("Direct3D 11"))
+                                  || (tech == QLatin1String("Syphon") && engine.backendName() == QLatin1String("Metal"));
+        if (!tech.isEmpty()) {
+            doc.project().screens[0].display = QStringLiteral("share");
+            doc.notifyChanged();
+            if (shareBackend) {
+                const QString name = QStringLiteral("Display Hawk - %1").arg(doc.project().screens[0].name);
+                QString found;
+                waitFor([&] {
+                    for (const QString &s : TextureShare::sources())
+                        if (s.contains(name))
+                            found = s;
+                    return !found.isEmpty();
+                }, 10000);
+                check(!found.isEmpty(), qPrintable(tech + QStringLiteral(" output is listed for other apps")));
+                // Show what comes back on a second wall outside the area the output samples (no
+                // feedback loop). The shared screen is the main wall's colour bars at its top left and
+                // black elsewhere, so in the returned picture point A is lit and point B is black,
+                // where the colour bars underneath are bright: only a real received frame passes.
+                LedWall testWall;
+                testWall.name = QStringLiteral("Share test");
+                testWall.cols = 5;
+                testWall.rows = 3;
+                testWall.x = 1280;
+                testWall.y = 640; // 640 x 384; the 1920x1080 frame fits as 640x360 at y 652
+                doc.project().walls.append(testWall);
+                doc.project().layers[1].targetWall = int(doc.project().walls.size()) - 1;
+                doc.project().layers[1].blend = BlendMode::Normal;
+                doc.notifyChanged(true);
+                doc.triggerClip(0, 2); // colour bars underneath
+                doc.setClip(1, 5, Clip::fromShare(found));
+                doc.triggerClip(1, 5);
+                auto compPixel = [&](int x, int y) {
+                    const QImage &img = previews[0];
+                    return img.isNull() ? QColor()
+                                        : QColor(img.pixel(x * img.width() / doc.project().compWidth,
+                                                           y * img.height() / doc.project().compHeight));
+                };
+                const bool ok = waitFor([&] {
+                    return qGray(compPixel(1280 + 200, 652 + 100).rgb()) > 60  // A: inside the shared wall area
+                           && qGray(compPixel(1813, 952).rgb()) < 12;         // B: black part of the screen
+                }, 10000);
+                save(previews[0], "share-loopback");
+                check(ok, qPrintable(tech + QStringLiteral(" loopback: our shared output comes back as a clip")));
+                doc.clearLayer(1);
+                doc.project().layers[1].targetWall = -1;
+                doc.removeWall(int(doc.project().walls.size()) - 1);
+            } else {
+                fps = 0;
+                check(waitFor([&] { return fps > 0; }, 5000),
+                      qPrintable(tech + QStringLiteral(" on an unsupported backend keeps rendering")));
+                qInfo("selftest: SKIP %s loopback (needs %s, running %s)", qPrintable(tech),
+                      tech == QLatin1String("Spout") ? "Direct3D 11" : "Metal", qPrintable(engine.backendName()));
+            }
+            doc.project().screens[0].display = QStringLiteral("window");
+            doc.notifyChanged();
+        }
 
         const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
         if (!cameras.isEmpty()) {

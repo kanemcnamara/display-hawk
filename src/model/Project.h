@@ -7,7 +7,7 @@
 #include <QString>
 #include <QVector>
 
-enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3 };
+enum class ContentSource { TestPattern = 0, Media = 1, Capture = 2, Ndi = 3, Share = 4 }; // Share: Spout / Syphon
 enum class TestPattern { Grid = 0, ColorBars, Gradient, Checker, PanelMap, Solid, MovingBars };
 constexpr int kTestPatternCount = int(TestPattern::MovingBars) + 1;
 enum class ScaleMode { Fit = 0, Fill, Stretch, Native };
@@ -84,7 +84,7 @@ struct Clip {
     ContentSource source = ContentSource::TestPattern;
     TestPattern pattern = TestPattern::Grid;
     QString mediaPath;
-    QString inputId; // Capture: camera/capture device id; Ndi: NDI source name
+    QString inputId; // Capture: camera/capture device id; Ndi: NDI source name; Share: Spout sender / Syphon server
     ScaleMode scale = ScaleMode::Fit;
     bool loop = true;
     QColor solidColor = Qt::white;
@@ -96,8 +96,13 @@ struct Clip {
     static Clip fromMedia(const QString &path);
     static Clip fromCapture(const QString &deviceId, const QString &description);
     static Clip fromNdi(const QString &sourceName);
-    bool isLive() const { return source == ContentSource::Capture || source == ContentSource::Ndi; }
-    // What a media decoder must open for this clip ("" for test patterns): file path or live input.
+    static Clip fromShare(const QString &sourceName);
+    bool isLive() const
+    {
+        return source == ContentSource::Capture || source == ContentSource::Ndi || source == ContentSource::Share;
+    }
+    // What a media decoder must open for this clip: file path or live input. Empty for test patterns
+    // and Spout/Syphon, which the render thread receives itself.
     QString mediaKey() const;
 };
 

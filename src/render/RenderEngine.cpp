@@ -221,6 +221,12 @@ void RenderEngine::setNdiOutputs(const QVector<QPair<int, QString>> &outputs)
         m_thread->setNdiOutputs(outputs);
 }
 
+void RenderEngine::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
+{
+    if (m_thread)
+        m_thread->setShareOutputs(outputs);
+}
+
 void RenderEngine::pushProject()
 {
     if (m_thread)

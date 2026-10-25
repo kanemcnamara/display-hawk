@@ -151,6 +151,59 @@ void RenderThread::renderNdiOutputs(QRhiCommandBuffer *cb)
     }
 }
 
+void RenderThread::setShareOutputs(const QVector<QPair<int, QString>> &outputs)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedShare = outputs;
+    m_shareDirty = true;
+}
+
+void RenderThread::syncShareOutputs()
+{
+    for (int i = int(m_shareOutputs.size()) - 1; i >= 0; --i) {
+        ShareOutput *o = m_shareOutputs[i];
+        if (m_shareWanted.contains({o->screen, o->name}))
+            continue;
+        m_rhi->finish();
+        delete o->sender;
+        releaseTarget(o->target);
+        delete o;
+        m_shareOutputs.removeAt(i);
+    }
+    for (const auto &w : std::as_const(m_shareWanted)) {
+        bool have = false;
+        for (const ShareOutput *o : std::as_const(m_shareOutputs))
+            have = have || (o->screen == w.first && o->name == w.second);
+        if (!have)
+            m_shareOutputs.append(new ShareOutput{w.first, w.second});
+    }
+}
+
+void RenderThread::renderShareOutputs(QRhiCommandBuffer *cb)
+{
+    for (ShareOutput *o : std::as_const(m_shareOutputs)) {
+        if (o->failed || o->screen < 0 || o->screen >= m_project.screens.size())
+            continue;
+        if (!o->sender) {
+            o->sender = TextureSender::create(m_rhi, o->name);
+            if (!o->sender) {
+                o->failed = true; // logged once
+                qWarning("%s output %s not started: needs the %s backend",
+                         qPrintable(TextureShare::technology().isEmpty() ? QStringLiteral("Texture sharing") : TextureShare::technology()),
+                         qPrintable(o->name), TextureShare::technology() == QLatin1String("Syphon") ? "Metal" : "Direct3D 11");
+                continue;
+            }
+            qInfo("%s output: %s", qPrintable(TextureShare::technology()), qPrintable(o->name));
+        }
+        const Screen &s = m_project.screens[o->screen];
+        const QSize size(s.width, s.height);
+        if (!ensureTarget(o->target, size, false, o->sender->format()))
+            continue;
+        m_quad.recordPass(cb, o->target.rt, Qt::black, screenDraws(s, size, QRectF(QPointF(), size)));
+        o->sender->publish(cb, o->target.tex);
+    }
+}
+
 void RenderThread::addOutput(OutputWindow *window)
 {
     QMutexLocker lock(&m_mutex);
@@ -263,6 +316,7 @@ void RenderThread::run()
                 renderComposition(cb);
                 renderPreviews(cb);
                 renderNdiOutputs(cb);
+                renderShareOutputs(cb);
                 m_rhi->endOffscreenFrame();
                 compositionDone = true;
             }
@@ -285,6 +339,7 @@ void RenderThread::run()
                     renderComposition(cb);
                     renderPreviews(cb);
                     renderNdiOutputs(cb);
+                    renderShareOutputs(cb);
                     compositionDone = true;
                 }
                 renderOutput(cb, *o);
@@ -323,6 +378,8 @@ void RenderThread::run()
     }
     m_ndiWanted.clear();
     syncNdiOutputs();
+    m_shareWanted.clear();
+    syncShareOutputs();
     releaseTarget(m_comp);
     releaseTarget(m_previewTarget[0]);
     releaseTarget(m_previewTarget[1]);
@@ -371,6 +428,11 @@ void RenderThread::syncState()
     if (m_ndiDirty) {
         m_ndiWanted = m_sharedNdi;
         m_ndiDirty = false;
+    }
+    if (m_shareDirty) {
+        m_shareWanted = m_sharedShare;
+        m_shareDirty = false;
+        syncShareOutputs();
     }
 
     if (ndiChanged) {
@@ -439,9 +501,9 @@ void RenderThread::releaseOutput(Output &o)
 #endif
 }
 
-bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable)
+bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format)
 {
-    if (t.tex && t.size == size)
+    if (t.tex && t.size == size && t.format == format)
         return true;
     if (t.tex) {
         m_quad.forgetTexture(t.tex);
@@ -454,7 +516,7 @@ bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable)
     QRhiTexture::Flags flags = QRhiTexture::RenderTarget;
     if (readable)
         flags |= QRhiTexture::UsedAsTransferSource;
-    t.tex = m_rhi->newTexture(QRhiTexture::RGBA8, size, 1, flags);
+    t.tex = m_rhi->newTexture(format, size, 1, flags);
     if (!t.tex->create()) {
         delete t.tex;
         t = Target();
@@ -465,6 +527,7 @@ bool RenderThread::ensureTarget(Target &t, const QSize &size, bool readable)
     t.rt->setRenderPassDescriptor(t.rp);
     t.rt->create();
     t.size = size;
+    t.format = format;
     return true;
 }
 
@@ -535,6 +598,12 @@ void RenderThread::releaseClipTex(ClipTex &ct, bool deferred)
     if (ct.yuv.rgba)
         m_quad.forgetTexture(ct.yuv.rgba);
     m_yuv.releaseTarget(ct.yuv, deferred);
+    if (ct.share) {
+        if (deferred)
+            m_rhi->finish(); // its wrapped texture may be used by frames in flight
+        delete ct.share;
+        ct.share = nullptr;
+    }
 }
 
 void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params> &draws,
@@ -549,6 +618,23 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
     qp.opacity = opacity;
     qp.clip = target;
 
+    if (clip.source == ContentSource::Share) {
+        // Spout / Syphon: the frame is already a GPU texture on our device.
+        if (!ct.share && !ct.shareFailed) {
+            ct.share = TextureReceiver::create(m_rhi, clip.inputId);
+            ct.shareFailed = !ct.share;
+            if (ct.shareFailed)
+                qWarning("Cannot receive %s here (needs the %s backend)", qPrintable(clip.inputId),
+                         TextureShare::technology() == QLatin1String("Syphon") ? "Metal" : "Direct3D 11");
+        }
+        QRhiTexture *tex = ct.share ? ct.share->receive(cb) : nullptr;
+        if (!tex)
+            return;
+        qp.texture = tex;
+        qp.dst = scaledRect(tex->pixelSize(), target, clip.scale);
+        draws.append(qp);
+        return;
+    }
     if (clip.source != ContentSource::TestPattern) { // files and live inputs
         if (ct.newMedia) {
             ct.newMedia = false;

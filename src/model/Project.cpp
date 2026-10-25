@@ -98,7 +98,8 @@ QString Clip::displayName() const
     switch (source) {
     case ContentSource::Media: return QFileInfo(mediaPath).completeBaseName();
     case ContentSource::Capture: return QStringLiteral("Capture");
-    case ContentSource::Ndi: return inputId;
+    case ContentSource::Ndi:
+    case ContentSource::Share: return inputId;
     default: return testPatternName(pattern);
     }
 }
@@ -120,6 +121,15 @@ Clip Clip::fromCapture(const QString &deviceId, const QString &description)
     c.source = ContentSource::Capture;
     c.inputId = deviceId;
     c.name = description;
+    return c;
+}
+
+Clip Clip::fromShare(const QString &sourceName)
+{
+    Clip c;
+    c.id = newId();
+    c.source = ContentSource::Share;
+    c.inputId = sourceName;
     return c;
 }
 

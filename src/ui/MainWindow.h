@@ -73,6 +73,7 @@ private:
     QAction *m_reopenLastAction;
     QVector<QPointer<OutputWindow>> m_outputs;
     QVector<QPair<int, QString>> m_ndiOutputs;
+    QVector<QPair<int, QString>> m_shareOutputs;
     bool m_live = false;
     bool m_syncingTree = false;
     bool m_autosaveDirty = false;

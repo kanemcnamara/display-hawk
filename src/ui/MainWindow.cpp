@@ -405,8 +405,8 @@ void MainWindow::syncOutputs()
         QScreen *target = nullptr;
         if (m_live && i < p.screens.size() && p.screens[i].enabled && !p.screens[i].display.isEmpty()) {
             const Screen &s = p.screens[i];
-            if (s.display == QLatin1String("ndi")) {
-                // Published over NDI by the render thread; no window.
+            if (s.display == QLatin1String("ndi") || s.display == QLatin1String("share")) {
+                // Published by the render thread (NDI / Spout / Syphon); no window.
             } else if (s.display == QLatin1String("window")) {
                 key = QStringLiteral("window");
             } else {
@@ -461,6 +461,17 @@ void MainWindow::syncOutputs()
         m_engine->setNdiOutputs(ndi);
     }
     opened += int(ndi.size());
+
+    // Spout / Syphon screens, shared with other apps on this machine.
+    QVector<QPair<int, QString>> share;
+    for (int i = 0; m_live && i < p.screens.size(); ++i)
+        if (p.screens[i].enabled && p.screens[i].display == QLatin1String("share"))
+            share.append({i, QStringLiteral("Display Hawk - %1").arg(p.screens[i].name)});
+    if (share != m_shareOutputs) {
+        m_shareOutputs = share;
+        m_engine->setShareOutputs(share);
+    }
+    opened += int(share.size());
 
     if (m_live && opened == 0)
         statusBar()->showMessage(tr("Live, but no screen has an output device assigned. "

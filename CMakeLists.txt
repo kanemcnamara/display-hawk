@@ -109,6 +109,28 @@ target_link_libraries(DisplayHawk PRIVATE
     Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia Qt6::Network
 )
 
+# GPU texture sharing with other apps: Spout (Windows, vendored SpoutDX) / Syphon (macOS, vendored).
+target_sources(DisplayHawk PRIVATE src/media/TextureShare.h)
+if(WIN32)
+    file(GLOB SPOUT_SOURCES CONFIGURE_DEPENDS third_party/spout/*.cpp)
+    target_sources(DisplayHawk PRIVATE src/media/TextureShareSpout.cpp ${SPOUT_SOURCES})
+    target_include_directories(DisplayHawk PRIVATE third_party/spout)
+    target_link_libraries(DisplayHawk PRIVATE d3d11 dxgi psapi shell32 advapi32 version comctl32)
+    if(NOT MSVC)
+        # SpoutCopy uses SSSE3 intrinsics (guarded by a runtime CPU check); GCC needs them enabled.
+        set_source_files_properties(third_party/spout/SpoutCopy.cpp PROPERTIES COMPILE_OPTIONS "-mssse3")
+    endif()
+elseif(APPLE)
+    enable_language(C OBJC OBJCXX)
+    file(GLOB SYPHON_SOURCES CONFIGURE_DEPENDS third_party/syphon/Syphon/*.m third_party/syphon/Syphon/*.c)
+    target_sources(DisplayHawk PRIVATE src/media/TextureShareSyphon.mm ${SYPHON_SOURCES})
+    target_include_directories(DisplayHawk PRIVATE third_party/syphon third_party/syphon/Syphon)
+    set_source_files_properties(src/media/TextureShareSyphon.mm ${SYPHON_SOURCES} PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    target_link_libraries(DisplayHawk PRIVATE "-framework Foundation" "-framework AppKit" "-framework Metal" "-framework IOSurface")
+else()
+    target_sources(DisplayHawk PRIVATE src/media/TextureShareNone.cpp)
+endif()
+
 # MIDI input uses the OS API directly.
 if(WIN32)
     target_link_libraries(DisplayHawk PRIVATE winmm)

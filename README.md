@@ -14,11 +14,12 @@ Media server for LED walls on **macOS and Windows** (C++17, Qt 6, Qt RHI). The o
 
 Slices that sample exactly a wall's area follow the wall when it is moved or resized.
 
-## Live video in, NDI out
+## Live video in, NDI, Spout and Syphon
 
 - **Capture devices** (cameras, capture cards, anything the OS lists as a video input): right-click a clip slot → *Capture device*, or set a clip's source to *Capture device* and pick the input. The device's best format is chosen (highest resolution, then frame rate, avoiding MJPEG), and frames take the same GPU YUV path as video files. macOS asks for camera permission the first time.
 - **NDI sources**: right-click a clip slot → *NDI source*. Each NDI clip has its own receiver thread.
 - **NDI out**: set a screen's output device to *NDI*. While outputs are live, the screen is rendered off-screen at its own resolution and published as **"Display Hawk - &lt;screen name&gt;"**, for vision mixers, streaming software or another media server.
+- **Spout (Windows) / Syphon (macOS)** share GPU textures with other apps on the same machine (OBS, TouchDesigner, Resolume, MadMapper...), with no copy through system memory. Set a screen's output device to *Spout* / *Syphon* to publish it as "Display Hawk - &lt;screen name&gt;", or right-click a clip slot → *Spout source* / *Syphon source* to take another app's output in. Spout needs the Direct3D 11 backend (the Windows default) and Syphon the Metal backend (the macOS default). Built from the vendored, BSD-licensed Spout2 and Syphon SDKs in `third_party/`.
 - NDI uses the **NDI runtime installed on the machine** (NDI Tools or the NDI Runtime from [ndi.video](https://ndi.video)); Display Hawk loads it when needed and runs normally without it. NDI® is a registered trademark of Vizrt NDI AB.
 
 ## LED tools

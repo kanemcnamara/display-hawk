@@ -2,6 +2,7 @@
 
 #include "media/MediaSource.h"
 #include "media/Ndi.h"
+#include "media/TextureShare.h"
 #include "render/RenderEngine.h"
 #include "ui/PanelGridEditor.h"
 #include "model/Document.h"
@@ -368,7 +369,8 @@ QWidget *PropertyPanel::buildClipPage()
     auto *f = new QFormLayout(box);
     m_clipName = new QLineEdit;
     m_source = new QComboBox;
-    m_source->addItems({tr("Test pattern"), tr("Media file"), tr("Capture device (live)"), tr("NDI source (live)")});
+    m_source->addItems({tr("Test pattern"), tr("Media file"), tr("Capture device (live)"), tr("NDI source (live)"),
+                        tr("%1 (live)").arg(TextureShare::technology().isEmpty() ? tr("Spout / Syphon") : TextureShare::technology())});
     m_input = new QComboBox;
     m_input->setToolTip(tr("Camera or capture card, or NDI source on the network"));
     auto *refreshInputs = new QPushButton(tr("Refresh"));
@@ -523,6 +525,13 @@ void PropertyPanel::refreshClip()
             m_input->addItem(cam.description(), QString::fromUtf8(cam.id()));
         if (m_input->count() == 0)
             m_input->addItem(tr("No capture devices found"), QString());
+    } else if (c->source == ContentSource::Share) {
+        for (const QString &name : TextureShare::sources())
+            m_input->addItem(name, name);
+        if (m_input->count() == 0)
+            m_input->addItem(TextureShare::technology().isEmpty() ? tr("Not available on this platform")
+                                                                  : tr("No %1 sources found").arg(TextureShare::technology()),
+                             QString());
     } else if (c->source == ContentSource::Ndi) {
         for (const QString &name : Ndi::sources())
             m_input->addItem(name, name);
@@ -867,6 +876,9 @@ void PropertyPanel::refreshDisplays()
     m_display->addItem(tr("Window (for testing)"), QStringLiteral("window"));
     m_display->addItem(Ndi::available() ? tr("NDI (network video source)") : tr("NDI (runtime not installed)"),
                        QStringLiteral("ndi"));
+    if (!TextureShare::technology().isEmpty())
+        m_display->addItem(tr("%1 (share with other apps on this machine)").arg(TextureShare::technology()),
+                           QStringLiteral("share"));
     const QList<QScreen *> screens = QGuiApplication::screens();
     for (int i = 0; i < screens.size(); ++i) {
         QScreen *qs = screens[i];

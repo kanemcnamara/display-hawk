@@ -1,0 +1,10 @@
+# Third-party code
+
+Vendored unmodified (except where noted) so Display Hawk builds with no extra downloads.
+
+| Folder | Project | Version | Licence |
+| --- | --- | --- | --- |
+| `spout/` | [Spout2](https://github.com/leadedge/Spout2) SpoutDX (D3D11) and its support files from `SPOUTSDK/SpoutGL` | release 2.007.018 | BSD-2-Clause (`spout/LICENSE`) |
+| `syphon/Syphon/` | [Syphon-Framework](https://github.com/Syphon/Syphon-Framework): core + Metal server/client; the legacy OpenGL implementation is left out | commit f4761677a45b8034a3c2069ec0f3d2553da81fba | BSD-3-Clause (`syphon/License.txt`) |
+
+Spout is compiled on Windows only, Syphon on macOS only.

@@ -3,6 +3,7 @@
 #include "model/Project.h"
 #include "render/RenderEngine.h"
 #include "render/RhiQuad.h"
+#include "media/TextureShare.h"
 #include "render/YuvConverter.h"
 
 #include <QElapsedTimer>
@@ -33,6 +34,7 @@ public:
     void dropClipMedia(const QString &clipId);
     void setPreview(int view, const PreviewRequest &request);
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
+    void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
     void addOutput(OutputWindow *window);
     void removeOutput(OutputWindow *window);
 
@@ -54,13 +56,14 @@ private:
         QRhiTextureRenderTarget *rt = nullptr;
         QRhiRenderPassDescriptor *rp = nullptr;
         QSize size;
+        QRhiTexture::Format format = QRhiTexture::RGBA8;
     };
 
     bool createRhi();
     void syncState();
     bool ensureSwapChain(Output &o);
     void releaseOutput(Output &o);
-    bool ensureTarget(Target &t, const QSize &size, bool readable);
+    bool ensureTarget(Target &t, const QSize &size, bool readable, QRhiTexture::Format format = QRhiTexture::RGBA8);
     void releaseTarget(Target &t);
     void uploadImage(QRhiResourceUpdateBatch *u, QRhiTexture *&tex, const QImage &image);
     void renderComposition(QRhiCommandBuffer *cb);
@@ -73,6 +76,8 @@ private:
     void deliverReadbacks();
     void syncNdiOutputs();
     void renderNdiOutputs(QRhiCommandBuffer *cb);
+    void syncShareOutputs();
+    void renderShareOutputs(QRhiCommandBuffer *cb);
     QByteArray patternKey(const Clip &clip) const;
     QByteArray overlayKey() const;
 
@@ -97,6 +102,8 @@ private:
     QVector<OutputWindow *> m_toRemove;
     QVector<QPair<int, QString>> m_sharedNdi;
     bool m_ndiDirty = false;
+    QVector<QPair<int, QString>> m_sharedShare;
+    bool m_shareDirty = false;
 
     QSemaphore m_initDone;
     bool m_initOk = false;
@@ -121,6 +128,8 @@ private:
         QRhiTexture *tex = nullptr;     // patterns, images and CPU-converted video
         YuvConverter::Target yuv;       // video converted on the GPU
         bool useYuv = false;            // the newest frame went through the GPU conversion pass
+        TextureReceiver *share = nullptr; // Spout / Syphon input
+        bool shareFailed = false;
         QRhiTexture *hapTex = nullptr;  // HAP / HAP Alpha / HAP R blocks, sampled directly
         bool useHap = false;
         HapFrame hap;
@@ -169,4 +178,15 @@ private:
     };
     QVector<NdiOutput *> m_ndiOutputs;
     QVector<QPair<int, QString>> m_ndiWanted;
+
+    // Screens shared with other apps on this machine (Spout / Syphon): rendered, then published.
+    struct ShareOutput {
+        int screen = -1;
+        QString name;
+        Target target;
+        TextureSender *sender = nullptr;
+        bool failed = false;
+    };
+    QVector<ShareOutput *> m_shareOutputs;
+    QVector<QPair<int, QString>> m_shareWanted;
 };

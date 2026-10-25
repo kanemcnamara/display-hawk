@@ -56,6 +56,8 @@ public:
 
     // Screens published as NDI sources (screen index -> NDI source name); empty stops them all.
     void setNdiOutputs(const QVector<QPair<int, QString>> &outputs);
+    // Screens shared with other apps on this machine (Spout / Syphon), screen index -> name.
+    void setShareOutputs(const QVector<QPair<int, QString>> &outputs);
 
 signals:
     void mediaStateChanged();

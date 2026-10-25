@@ -2,6 +2,7 @@
 
 #include "model/Document.h"
 #include "media/Ndi.h"
+#include "media/TextureShare.h"
 #include "render/Patterns.h"
 
 #include <QCameraDevice>
@@ -295,7 +296,9 @@ QPixmap ClipGrid::thumbnail(const Clip &clip, const Project &project)
         p.setFont(f);
         p.setPen(QColor(220, 200, 200));
         p.drawText(pm.rect().adjusted(4, 0, -4, -4), Qt::AlignHCenter | Qt::AlignBottom,
-                   clip.source == ContentSource::Ndi ? QStringLiteral("NDI") : QStringLiteral("Capture"));
+                   clip.source == ContentSource::Ndi     ? QStringLiteral("NDI")
+                   : clip.source == ContentSource::Share ? TextureShare::technology()
+                                                         : QStringLiteral("Capture"));
         p.end();
         m_thumbs.insert(key, pm);
         return pm;
@@ -500,6 +503,14 @@ void ClipGrid::contextMenuEvent(QContextMenuEvent *e)
         ndi->addAction(name, this, [this, layer, column, name] { m_doc->setClip(layer, column, Clip::fromNdi(name)); });
     if (ndiSources.isEmpty())
         ndi->addAction(Ndi::available() ? tr("No NDI sources found yet") : Ndi::runtimeStatus())->setEnabled(false);
+    if (!TextureShare::technology().isEmpty()) {
+        QMenu *share = menu.addMenu(tr("%1 source").arg(TextureShare::technology()));
+        const QStringList shared = TextureShare::sources();
+        for (const QString &name : shared)
+            share->addAction(name, this, [this, layer, column, name] { m_doc->setClip(layer, column, Clip::fromShare(name)); });
+        if (shared.isEmpty())
+            share->addAction(tr("No %1 sources found").arg(TextureShare::technology()))->setEnabled(false);
+    }
     QMenu *patterns = menu.addMenu(tr("Test pattern"));
     for (int i = 0; i < kTestPatternCount; ++i) {
         patterns->addAction(testPatternName(TestPattern(i)), this, [this, layer, column, i] {
