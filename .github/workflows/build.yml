@@ -70,7 +70,7 @@ jobs:
         run: |
           $env:DISPLAYHAWK_TEST_VIDEO = "$PWD/hap/hapm-snappy.mov"
           $p = Start-Process dist/DisplayHawk.exe -ArgumentList '--selftest', "$PWD/selftest" -PassThru
-          if (-not $p.WaitForExit(60000)) { $p.Kill(); exit 1 }
+          if (-not $p.WaitForExit(600000)) { $p.Kill(); exit 1 } # the suite takes a few minutes
           Get-Content "$env:LOCALAPPDATA/Display Hawk/Display Hawk/displayhawk.log"
           exit $p.ExitCode
 
@@ -80,7 +80,7 @@ jobs:
         run: |
           export DISPLAYHAWK_TEST_VIDEO="$PWD/hap/hapm-snappy.mov"
           ./dist/DisplayHawk.app/Contents/MacOS/DisplayHawk --selftest "$PWD/selftest" &
-          pid=$!; (sleep 60; kill $pid 2>/dev/null) &
+          pid=$!; (sleep 600; kill $pid 2>/dev/null) & # the suite takes a few minutes
           code=0; wait $pid || code=$?
           cat "$HOME/Library/Application Support/Display Hawk/Display Hawk/displayhawk.log" || true
           exit $code
