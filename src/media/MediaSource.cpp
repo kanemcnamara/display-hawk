@@ -1,8 +1,12 @@
 ﻿#include "media/MediaSource.h"
 
+#include "media/HapPlayer.h"
+#include "media/MovReader.h"
+
 #include <QFileInfo>
 #include <QImageReader>
 #include <QMediaPlayer>
+#include <QThread>
 #include <QUrl>
 #include <QVideoSink>
 
@@ -14,7 +18,7 @@ MediaSource::MediaSource(QObject *parent)
     m_player->setVideoSink(m_sink);
     m_player->setLoops(QMediaPlayer::Infinite);
     connect(m_sink, &QVideoSink::videoFrameChanged, this, [this](const QVideoFrame &frame) {
-        if (frame.isValid() && m_isVideo)
+        if (frame.isValid() && m_isVideo && !m_hap)
             emit videoFrame(frame);
     }, Qt::DirectConnection);
     connect(m_player, &QMediaPlayer::playbackStateChanged, this, &MediaSource::stateChanged);
@@ -22,6 +26,11 @@ MediaSource::MediaSource(QObject *parent)
         m_error = msg;
         emit stateChanged();
     });
+}
+
+MediaSource::~MediaSource()
+{
+    stopHap();
 }
 
 void MediaSource::open(const QString &path)
@@ -44,6 +53,33 @@ void MediaSource::open(const QString &path)
             m_error = reader.errorString();
         m_hasImage = !image.isNull();
         emit stillImage(image);
+    } else if (MovReader::isHap(path)) {
+        auto *hap = new HapPlayer;
+        QString err;
+        if (!hap->open(path, &err)) {
+            delete hap;
+            m_error = err;
+        } else {
+            m_isVideo = true;
+            m_hap = hap;
+            m_hapThread = new QThread(this);
+            m_hapThread->setObjectName(QStringLiteral("HAP reader"));
+            m_hap->moveToThread(m_hapThread);
+            connect(m_hap, &HapPlayer::frame, this, &MediaSource::hapFrame, Qt::DirectConnection);
+            connect(m_hap, &HapPlayer::stateChanged, this, [this](bool playing) {
+                m_hapPlaying = playing;
+                emit stateChanged();
+            });
+            connect(m_hap, &HapPlayer::error, this, [this](const QString &msg) {
+                m_error = msg;
+                emit stateChanged();
+            });
+            m_hapThread->start(QThread::HighPriority);
+            QMetaObject::invokeMethod(m_hap, [hap = m_hap, loop = m_loop] {
+                hap->setLoop(loop);
+                hap->play();
+            });
+        }
     } else {
         m_isVideo = true;
         m_player->setSource(QUrl::fromLocalFile(path));
@@ -52,9 +88,24 @@ void MediaSource::open(const QString &path)
     emit stateChanged();
 }
 
+void MediaSource::stopHap()
+{
+    if (!m_hap)
+        return;
+    QMetaObject::invokeMethod(m_hap, &HapPlayer::stop, Qt::BlockingQueuedConnection);
+    m_hapThread->quit();
+    m_hapThread->wait();
+    delete m_hap;
+    delete m_hapThread;
+    m_hap = nullptr;
+    m_hapThread = nullptr;
+    m_hapPlaying = false;
+}
+
 void MediaSource::close()
 {
     m_isVideo = false;
+    stopHap();
     m_player->stop();
     m_player->setSource(QUrl());
     m_error.clear();
@@ -64,19 +115,25 @@ void MediaSource::close()
 
 void MediaSource::play()
 {
-    if (m_isVideo)
+    if (m_hap)
+        QMetaObject::invokeMethod(m_hap, &HapPlayer::play);
+    else if (m_isVideo)
         m_player->play();
 }
 
 void MediaSource::pause()
 {
-    if (m_isVideo)
+    if (m_hap)
+        QMetaObject::invokeMethod(m_hap, &HapPlayer::pause);
+    else if (m_isVideo)
         m_player->pause();
 }
 
 void MediaSource::restart()
 {
-    if (m_isVideo) {
+    if (m_hap) {
+        QMetaObject::invokeMethod(m_hap, &HapPlayer::restart);
+    } else if (m_isVideo) {
         m_player->setPosition(0);
         m_player->play();
     }
@@ -84,10 +141,15 @@ void MediaSource::restart()
 
 void MediaSource::setLoop(bool loop)
 {
+    m_loop = loop;
     m_player->setLoops(loop ? QMediaPlayer::Infinite : 1);
+    if (m_hap)
+        QMetaObject::invokeMethod(m_hap, [hap = m_hap, loop] { hap->setLoop(loop); });
 }
 
 bool MediaSource::isPlaying() const
 {
+    if (m_hap)
+        return m_hapPlaying;
     return m_isVideo && m_player->playbackState() == QMediaPlayer::PlayingState;
 }

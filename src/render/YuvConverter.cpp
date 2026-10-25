@@ -78,6 +78,38 @@ QMatrix4x4 colorMatrix(const QVideoFrameFormat &f)
                       0.0f, 0.0f, 0.0f, 1.0f);
 }
 
+// CPU fallback for backends without BC4 (Qt's OpenGL backend): expands the blocks to 8-bit values.
+QByteArray decodeBc4(const QByteArray &blocks, const QSize &padded)
+{
+    QByteArray out(qsizetype(padded.width()) * padded.height(), Qt::Uninitialized);
+    const int bw = padded.width() / 4, bh = padded.height() / 4;
+    if (blocks.size() < qsizetype(bw) * bh * 8)
+        return {};
+    const auto *in = reinterpret_cast<const unsigned char *>(blocks.constData());
+    auto *dst = reinterpret_cast<unsigned char *>(out.data());
+    for (int by = 0; by < bh; ++by) {
+        for (int bx = 0; bx < bw; ++bx, in += 8) {
+            const int a0 = in[0], a1 = in[1];
+            int pal[8] = {a0, a1};
+            if (a0 > a1) {
+                for (int k = 1; k < 7; ++k)
+                    pal[k + 1] = ((7 - k) * a0 + k * a1) / 7;
+            } else {
+                for (int k = 1; k < 5; ++k)
+                    pal[k + 1] = ((5 - k) * a0 + k * a1) / 5;
+                pal[6] = 0;
+                pal[7] = 255;
+            }
+            quint64 bits = 0;
+            for (int i = 0; i < 6; ++i)
+                bits |= quint64(in[2 + i]) << (8 * i);
+            for (int i = 0; i < 16; ++i)
+                dst[(by * 4 + i / 4) * padded.width() + bx * 4 + i % 4] = uchar(pal[(bits >> (3 * i)) & 7]);
+        }
+    }
+    return out;
+}
+
 QShader loadShader(const QString &path)
 {
     QFile f(path);
@@ -127,7 +159,7 @@ void YuvConverter::releaseTarget(Target &t, bool deferred)
 bool YuvConverter::ensureTarget(Target &t, const QVideoFrameFormat &format)
 {
     const QSize size = format.frameSize();
-    if (t.rgba && t.size == size && t.format == format.pixelFormat())
+    if (t.rgba && t.size == size && t.format == format.pixelFormat() && t.hapKind == HapFrame::None)
         return true;
     releaseTarget(t, true);
 
@@ -139,6 +171,37 @@ bool YuvConverter::ensureTarget(Target &t, const QVideoFrameFormat &format)
         if (!t.planes[i]->create())
             return false;
     }
+    if (!createOutput(t, size))
+        return false;
+    t.format = format.pixelFormat();
+    return true;
+}
+
+bool YuvConverter::ensureHapTarget(Target &t, const HapFrame &frame)
+{
+    const QSize padded = frame.paddedSize();
+    if (t.rgba && t.size == padded && t.hapKind == frame.kind)
+        return true;
+    releaseTarget(t, true);
+
+    t.planes[0] = m_rhi->newTexture(QRhiTexture::BC3, padded);
+    if (!t.planes[0]->create())
+        return false;
+    if (frame.kind == HapFrame::YCoCgAlpha) {
+        const bool bc4 = m_rhi->isTextureFormatSupported(QRhiTexture::BC4);
+        t.planes[1] = m_rhi->newTexture(bc4 ? QRhiTexture::BC4 : QRhiTexture::R8, padded);
+        if (!t.planes[1]->create())
+            return false;
+    }
+    if (!createOutput(t, padded))
+        return false;
+    t.hapKind = frame.kind;
+    return true;
+}
+
+// The RGBA render target, its uniforms and the bindings to whatever input textures exist.
+bool YuvConverter::createOutput(Target &t, const QSize &size)
+{
     t.rgba = m_rhi->newTexture(QRhiTexture::RGBA8, size, 1, QRhiTexture::RenderTarget);
     if (!t.rgba->create())
         return false;
@@ -148,8 +211,9 @@ bool YuvConverter::ensureTarget(Target &t, const QVideoFrameFormat &format)
     t.rt->create();
     t.ubuf = m_rhi->newBuffer(QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, kUniformSize);
     t.ubuf->create();
-    QRhiTexture *u = t.planes[1];
-    QRhiTexture *v = t.planes[2] ? t.planes[2] : t.planes[1]; // unused by semi-planar formats
+    // Unused inputs are bound to the first texture so the layout stays the same for every mode.
+    QRhiTexture *u = t.planes[1] ? t.planes[1] : t.planes[0];
+    QRhiTexture *v = t.planes[2] ? t.planes[2] : u;
     t.srb = m_rhi->newShaderResourceBindings();
     t.srb->setBindings({
         QRhiShaderResourceBinding::uniformBuffer(
@@ -160,7 +224,6 @@ bool YuvConverter::ensureTarget(Target &t, const QVideoFrameFormat &format)
     });
     t.srb->create();
     t.size = size;
-    t.format = format.pixelFormat();
     return true;
 }
 
@@ -184,6 +247,28 @@ QRhiGraphicsPipeline *YuvConverter::pipelineFor(QRhiRenderPassDescriptor *rp, QR
     }
     m_pipelineFormat = rp->serializedFormat();
     return m_pipeline;
+}
+
+void YuvConverter::runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateBatch *u, const QMatrix4x4 &matrix,
+                           int mode)
+{
+    char data[kUniformSize];
+    std::memset(data, 0, sizeof(data));
+    std::memcpy(data, m_rhi->clipSpaceCorrMatrix().constData(), 64);
+    std::memcpy(data + 64, matrix.constData(), 64);
+    const qint32 modes[4] = {mode, 0, 0, 0};
+    std::memcpy(data + 128, modes, sizeof(modes));
+    u->updateDynamicBuffer(t.ubuf, 0, kUniformSize, data);
+
+    QRhiGraphicsPipeline *ps = pipelineFor(t.rp, t.srb);
+    cb->beginPass(t.rt, Qt::black, {1.0f, 0}, u);
+    if (ps) {
+        cb->setGraphicsPipeline(ps);
+        cb->setViewport(QRhiViewport(0, 0, t.size.width(), t.size.height()));
+        cb->setShaderResources(t.srb);
+        cb->draw(4);
+    }
+    cb->endPass();
 }
 
 bool YuvConverter::convert(QRhiCommandBuffer *cb, const QVideoFrame &frame, Target &t)
@@ -222,25 +307,23 @@ bool YuvConverter::convert(QRhiCommandBuffer *cb, const QVideoFrame &frame, Targ
         u->uploadTexture(t.planes[i], QRhiTextureUploadDescription({0, 0, desc}));
     }
     f.unmap();
+    runPass(cb, t, u, colorMatrix(format), l.mode);
+    return true;
+}
 
-    char data[kUniformSize];
-    std::memset(data, 0, sizeof(data));
-    std::memcpy(data, m_rhi->clipSpaceCorrMatrix().constData(), 64);
-    std::memcpy(data + 64, colorMatrix(format).constData(), 64);
-    const qint32 mode[4] = {l.mode, 0, 0, 0};
-    std::memcpy(data + 128, mode, sizeof(mode));
-    u->updateDynamicBuffer(t.ubuf, 0, kUniformSize, data);
-
-    QRhiGraphicsPipeline *ps = pipelineFor(t.rp, t.srb);
-    if (!ps) {
-        u->release();
+bool YuvConverter::convertHap(QRhiCommandBuffer *cb, const HapFrame &frame, Target &t)
+{
+    if ((frame.kind != HapFrame::YCoCg && frame.kind != HapFrame::YCoCgAlpha) || !ensureHapTarget(t, frame))
         return false;
+    QRhiResourceUpdateBatch *u = m_rhi->nextResourceUpdateBatch();
+    u->uploadTexture(t.planes[0], QRhiTextureUploadDescription(
+                                      {0, 0, QRhiTextureSubresourceUploadDescription(frame.color)}));
+    if (frame.kind == HapFrame::YCoCgAlpha) {
+        const QByteArray alpha =
+            t.planes[1]->format() == QRhiTexture::BC4 ? frame.alpha : decodeBc4(frame.alpha, t.size);
+        u->uploadTexture(t.planes[1], QRhiTextureUploadDescription(
+                                          {0, 0, QRhiTextureSubresourceUploadDescription(alpha)}));
     }
-    cb->beginPass(t.rt, Qt::black, {1.0f, 0}, u);
-    cb->setGraphicsPipeline(ps);
-    cb->setViewport(QRhiViewport(0, 0, t.size.width(), t.size.height()));
-    cb->setShaderResources(t.srb);
-    cb->draw(4);
-    cb->endPass();
+    runPass(cb, t, u, QMatrix4x4(), frame.kind == HapFrame::YCoCgAlpha ? 4 : 3);
     return true;
 }

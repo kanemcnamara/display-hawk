@@ -88,6 +88,10 @@ void RenderEngine::syncMedia()
                 if (m_thread)
                     m_thread->setClipFrame(id, f);
             }, Qt::DirectConnection);
+            connect(m, &MediaSource::hapFrame, this, [this, id](const HapFrame &f) {
+                if (m_thread)
+                    m_thread->setClipHap(id, f);
+            }, Qt::DirectConnection);
             connect(m, &MediaSource::stillImage, this, [this, id](const QImage &img) {
                 if (m_thread)
                     m_thread->setClipImage(id, img);

@@ -27,6 +27,7 @@ public:
     // Media for one clip; callable from any thread (decoder threads deliver video frames).
     void setClipFrame(const QString &clipId, const QVideoFrame &frame);
     void setClipImage(const QString &clipId, const QImage &image);
+    void setClipHap(const QString &clipId, const HapFrame &frame);
     void dropClipMedia(const QString &clipId);
     void setPreview(int view, const PreviewRequest &request);
     void addOutput(OutputWindow *window);
@@ -83,6 +84,7 @@ private:
         QVideoFrame frame;
         QImage image;
         bool remove = false;
+        HapFrame hap;
     };
     QHash<QString, SharedMedia> m_sharedMedia; // clip id -> newest media not yet taken by run()
     PreviewRequest m_sharedPreview[2];
@@ -111,7 +113,12 @@ private:
     struct ClipTex {
         QRhiTexture *tex = nullptr;     // patterns, images and CPU-converted video
         YuvConverter::Target yuv;       // video converted on the GPU
-        bool useYuv = false;            // the newest frame went through the GPU path
+        bool useYuv = false;            // the newest frame went through the GPU conversion pass
+        QRhiTexture *hapTex = nullptr;  // HAP / HAP Alpha / HAP R blocks, sampled directly
+        bool useHap = false;
+        HapFrame hap;
+        QSize mediaSize;                // picture size (HAP textures are padded to multiples of 4)
+        QSizeF srcScale{1.0, 1.0};      // picture size / texture size
         QByteArray patternKey;
         QVideoFrame frame;
         QImage image;

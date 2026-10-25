@@ -51,6 +51,15 @@ jobs:
           mkdir dist && cp -R build/DisplayHawk.app dist/
           macdeployqt dist/DisplayHawk.app
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate HAP test clip
+        run: |
+          python -m pip install pillow
+          python tools/make_hap_test.py hap --frames 8
+
       # CI runners have no real GPU (WARP on Windows, a paravirtual device on macOS), so the
       # rendering self-test is informative rather than a gate.
       - name: Self-test (Windows)
@@ -58,6 +67,7 @@ jobs:
         continue-on-error: true
         shell: pwsh
         run: |
+          $env:DISPLAYHAWK_TEST_VIDEO = "$PWD/hap/hapm-snappy.mov"
           $p = Start-Process dist/DisplayHawk.exe -ArgumentList '--selftest', "$PWD/selftest" -PassThru
           if (-not $p.WaitForExit(60000)) { $p.Kill(); exit 1 }
           Get-Content "$env:LOCALAPPDATA/Display Hawk/Display Hawk/displayhawk.log"
@@ -67,6 +77,7 @@ jobs:
         if: runner.os == 'macOS'
         continue-on-error: true
         run: |
+          export DISPLAYHAWK_TEST_VIDEO="$PWD/hap/hapm-snappy.mov"
           ./dist/DisplayHawk.app/Contents/MacOS/DisplayHawk --selftest "$PWD/selftest" &
           pid=$!; (sleep 60; kill $pid 2>/dev/null) &
           code=0; wait $pid || code=$?

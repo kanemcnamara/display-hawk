@@ -44,6 +44,7 @@ A dedicated render thread owns the GPU through Qt RHI: **Metal** on macOS, **Dir
 
 - `DISPLAYHAWK_RHI=opengl|d3d11|d3d12|metal` picks a backend (D3D12 needs an MSVC build of Qt).
 - Video frames are uploaded as their native YUV planes (NV12/NV21, 4:2:0 and 4:2:2 planar, 10-bit P010/P016) and converted to RGB on the GPU with the frame's colour matrix (BT.601/709/2020) and range. On 4K H.264 this cuts the render thread's per-frame work about 3x versus CPU conversion, and matches it to within one 8-bit level. `DISPLAYHAWK_NO_GPU_YUV=1` forces the CPU path; `DISPLAYHAWK_PERF=1` logs per-frame preparation time.
+- **HAP** (`.mov` with Hap, Hap Alpha, Hap R, Hap Q or Hap Q Alpha) is played by Display Hawk's own reader instead of FFmpeg: a worker thread reads each frame, undoes the Snappy compression (including chunked frames) and the render thread uploads the DXT/BC blocks straight into a compressed GPU texture, so there is no decoding at all (~0.1 ms per frame on the render thread). Hap Q's YCoCg is converted to RGB in a shader. `tools/make_hap_test.py` writes Hap, Hap Alpha (chunked), Hap Q and Hap Q Alpha test movies, validated against FFmpeg's reference decoder; Hap R (BC7) is implemented but not yet tested with a real file. To make your own HAP files use an encoder such as the free Hap codec for Adobe/AVF, or an FFmpeg build with `--enable-libsnappy` (`-c:v hap -format hap_q`).
 - Shaders live in `shaders/` as Vulkan-style GLSL and are compiled to HLSL/MSL/GLSL/SPIR-V at build time by `qt_add_shaders`.
 - Over Remote Desktop, Windows composites Direct3D windows at ~30 fps; outputs on local displays run at the display's refresh rate.
 
@@ -84,6 +85,7 @@ src/model    Project data and JSON (walls, screens, slices, layers, clips; v1 fi
              Document (selection, undo/redo, playback, file state, autosave)
 src/render   RenderEngine (GUI-side API, backend choice), RenderThread (QRhi, outputs, previews),
              RhiQuad (quad drawing, blend modes), Patterns (test patterns)
-src/media    MediaSource (FFmpeg-backed video via Qt Multimedia, still images)
+src/media    MediaSource (video via Qt Multimedia, still images, HAP); HapPlayer, HapDecoder,
+             MovReader (QuickTime sample tables), Snappy
 src/ui       MainWindow, CanvasView (editors), ClipDeck, OutputWindow, IdentifyOverlay, PropertyPanel
 ```

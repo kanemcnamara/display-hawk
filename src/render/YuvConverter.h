@@ -1,5 +1,8 @@
 ﻿#pragma once
 
+#include "media/HapDecoder.h"
+
+#include <QMatrix4x4>
 #include <QVideoFrame>
 #include <rhi/qrhi.h>
 
@@ -19,6 +22,7 @@ public:
         QRhiBuffer *ubuf = nullptr;
         QSize size;
         QVideoFrameFormat::PixelFormat format = QVideoFrameFormat::Format_Invalid;
+        HapFrame::Kind hapKind = HapFrame::None; // set when the target holds HAP Q textures
     };
 
     static bool supports(QVideoFrameFormat::PixelFormat format);
@@ -29,10 +33,16 @@ public:
     // Uploads the frame's planes and records a conversion pass into target.rgba (recreating
     // resources when the size or format changes). Call outside any other render pass.
     bool convert(QRhiCommandBuffer *cb, const QVideoFrame &frame, Target &target);
+    // HAP Q / HAP Q Alpha: uploads the compressed YCoCg (and alpha) blocks and converts them to
+    // RGBA in target.rgba, which has the padded (multiple of 4) size.
+    bool convertHap(QRhiCommandBuffer *cb, const HapFrame &frame, Target &target);
     void releaseTarget(Target &target, bool deferred);
 
 private:
     bool ensureTarget(Target &t, const QVideoFrameFormat &format);
+    bool ensureHapTarget(Target &t, const HapFrame &frame);
+    bool createOutput(Target &t, const QSize &size);
+    void runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateBatch *u, const QMatrix4x4 &matrix, int mode);
     QRhiGraphicsPipeline *pipelineFor(QRhiRenderPassDescriptor *rp, QRhiShaderResourceBindings *srb);
 
     QRhi *m_rhi = nullptr;

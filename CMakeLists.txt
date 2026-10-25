@@ -26,6 +26,14 @@ qt_add_executable(DisplayHawk
     src/render/YuvConverter.cpp
     src/media/MediaSource.h
     src/media/MediaSource.cpp
+    src/media/Snappy.h
+    src/media/Snappy.cpp
+    src/media/HapDecoder.h
+    src/media/HapDecoder.cpp
+    src/media/MovReader.h
+    src/media/MovReader.cpp
+    src/media/HapPlayer.h
+    src/media/HapPlayer.cpp
     src/ui/MainWindow.h
     src/ui/MainWindow.cpp
     src/ui/CanvasView.h

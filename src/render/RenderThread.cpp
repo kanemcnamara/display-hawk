@@ -63,19 +63,25 @@ void RenderThread::setProject(const Project &project)
 void RenderThread::setClipFrame(const QString &clipId, const QVideoFrame &frame)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedMedia[clipId] = {frame, QImage(), false};
+    m_sharedMedia[clipId] = {frame, QImage(), false, HapFrame()};
 }
 
 void RenderThread::setClipImage(const QString &clipId, const QImage &image)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedMedia[clipId] = {QVideoFrame(), image, false};
+    m_sharedMedia[clipId] = {QVideoFrame(), image, false, HapFrame()};
+}
+
+void RenderThread::setClipHap(const QString &clipId, const HapFrame &frame)
+{
+    QMutexLocker lock(&m_mutex);
+    m_sharedMedia[clipId] = {QVideoFrame(), QImage(), false, frame};
 }
 
 void RenderThread::dropClipMedia(const QString &clipId)
 {
     QMutexLocker lock(&m_mutex);
-    m_sharedMedia[clipId] = {QVideoFrame(), QImage(), true};
+    m_sharedMedia[clipId] = {QVideoFrame(), QImage(), true, HapFrame()};
 }
 
 void RenderThread::setPreview(int view, const PreviewRequest &request)
@@ -285,9 +291,11 @@ void RenderThread::syncState()
             ct.newMedia = false;
             ct.frame = QVideoFrame();
             ct.image = QImage();
+            ct.hap = HapFrame();
         } else {
             ct.frame = it->frame;
             ct.image = it->image;
+            ct.hap = it->hap;
             ct.newMedia = true;
         }
     }
@@ -441,6 +449,14 @@ void RenderThread::releaseClipTex(ClipTex &ct, bool deferred)
             delete ct.tex;
         ct.tex = nullptr;
     }
+    if (ct.hapTex) {
+        m_quad.forgetTexture(ct.hapTex);
+        if (deferred)
+            ct.hapTex->deleteLater();
+        else
+            delete ct.hapTex;
+        ct.hapTex = nullptr;
+    }
     if (ct.yuv.rgba)
         m_quad.forgetTexture(ct.yuv.rgba);
     m_yuv.releaseTarget(ct.yuv, deferred);
@@ -465,35 +481,82 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
             prep.start();
             QRhiTexture *oldRgba = ct.yuv.rgba;
             static const bool gpuYuv = !qEnvironmentVariableIsSet("DISPLAYHAWK_NO_GPU_YUV");
-            if (gpuYuv && ct.frame.isValid() && YuvConverter::supports(ct.frame.pixelFormat())
-                && m_yuv.convert(cb, ct.frame, ct.yuv)) {
+            ct.useYuv = ct.useHap = false;
+            ct.srcScale = QSizeF(1.0, 1.0);
+            if (ct.hap.isValid()) {
+                // HAP: the blocks are already a GPU texture format, so they are uploaded untouched.
+                const HapFrame &h = ct.hap;
+                const QSize padded = h.paddedSize();
+                ct.mediaSize = h.size;
+                ct.srcScale = QSizeF(double(h.size.width()) / padded.width(), double(h.size.height()) / padded.height());
+                if (h.kind == HapFrame::YCoCg || h.kind == HapFrame::YCoCgAlpha) {
+                    ct.useYuv = m_yuv.convertHap(cb, h, ct.yuv);
+                } else {
+                    const QRhiTexture::Format format = h.kind == HapFrame::BC1   ? QRhiTexture::BC1
+                                                       : h.kind == HapFrame::BC3 ? QRhiTexture::BC3
+                                                                                 : QRhiTexture::BC7;
+                    if (!m_rhi->isTextureFormatSupported(format)) {
+                        static bool warned = false;
+                        if (!warned)
+                            qWarning("This GPU/backend cannot sample compressed format %d; HAP clip skipped", int(format));
+                        warned = true;
+                    } else {
+                        if (!ct.hapTex || ct.hapTex->pixelSize() != padded || ct.hapTex->format() != format) {
+                            if (ct.hapTex) {
+                                m_quad.forgetTexture(ct.hapTex);
+                                ct.hapTex->deleteLater();
+                            }
+                            ct.hapTex = m_rhi->newTexture(format, padded);
+                            if (!ct.hapTex->create()) {
+                                delete ct.hapTex;
+                                ct.hapTex = nullptr;
+                            }
+                        }
+                        if (ct.hapTex) {
+                            u->uploadTexture(ct.hapTex, QRhiTextureUploadDescription(
+                                                            {0, 0, QRhiTextureSubresourceUploadDescription(h.color)}));
+                            ct.useHap = true;
+                        }
+                    }
+                }
+                ct.hasMedia = ct.useHap || ct.useYuv;
+                m_perfNs += prep.nsecsElapsed();
+                ++m_perfFrames;
+                ++m_perfGpuFrames;
+            } else if (gpuYuv && ct.frame.isValid() && YuvConverter::supports(ct.frame.pixelFormat())
+                       && m_yuv.convert(cb, ct.frame, ct.yuv)) {
                 // Planes uploaded as decoded; colour conversion ran on the GPU.
-                if (oldRgba && oldRgba != ct.yuv.rgba)
-                    m_quad.forgetTexture(oldRgba);
                 ct.useYuv = true;
                 ct.hasMedia = true;
+                ct.mediaSize = ct.yuv.size;
+                m_perfNs += prep.nsecsElapsed();
+                ++m_perfFrames;
                 ++m_perfGpuFrames;
             } else {
                 const QImage img = ct.frame.isValid() ? ct.frame.toImage() : ct.image;
-                ct.useYuv = false;
                 ct.hasMedia = !img.isNull();
+                ct.mediaSize = img.size();
                 if (ct.hasMedia)
                     uploadImage(u, ct.tex, img);
+                if (ct.frame.isValid()) {
+                    m_perfNs += prep.nsecsElapsed();
+                    ++m_perfFrames;
+                }
             }
-            if (ct.frame.isValid()) {
-                m_perfNs += prep.nsecsElapsed();
-                ++m_perfFrames;
-            }
+            if (oldRgba && oldRgba != ct.yuv.rgba)
+                m_quad.forgetTexture(oldRgba);
             ct.frame = QVideoFrame();
             ct.image = QImage();
+            ct.hap = HapFrame();
             ct.patternKey.clear();
         }
-        QRhiTexture *tex = ct.useYuv ? ct.yuv.rgba : ct.tex;
+        QRhiTexture *tex = ct.useHap ? ct.hapTex : ct.useYuv ? ct.yuv.rgba : ct.tex;
         if (!ct.hasMedia || !tex)
             return;
         qp.texture = tex;
+        qp.src = QRectF(0, 0, ct.srcScale.width(), ct.srcScale.height());
         qp.texFlipY = ct.useYuv && m_rhi->isYUpInFramebuffer(); // rendered, not uploaded
-        qp.dst = scaledRect(tex->pixelSize(), target, clip.scale);
+        qp.dst = scaledRect(ct.mediaSize.isEmpty() ? tex->pixelSize() : ct.mediaSize, target, clip.scale);
     } else {
         // Patterns are drawn for the target area; the panel map always covers the whole composition.
         const bool panelMap = clip.pattern == TestPattern::PanelMap;
@@ -504,7 +567,8 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
             uploadImage(u, ct.tex, Patterns::generate(m_project, clip, size));
             ct.patternKey = key;
             ct.hasMedia = false;
-            ct.useYuv = false;
+            ct.useYuv = ct.useHap = false;
+            ct.srcScale = QSizeF(1.0, 1.0);
         }
         if (!ct.tex)
             return;
