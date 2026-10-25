@@ -114,6 +114,10 @@ void RenderEngine::syncMedia()
                     m_thread->setClipImage(id, img);
             }, Qt::DirectConnection);
             connect(m, &MediaSource::stateChanged, this, &RenderEngine::mediaStateChanged);
+            // Hardware-decoded frames as textures on our device (no copy through system memory),
+            // unless DISPLAYHAWK_NO_ZERO_COPY is set.
+            if (!qEnvironmentVariableIsSet("DISPLAYHAWK_NO_ZERO_COPY"))
+                m->setRhi(m_thread->rhi());
             // Beat sync needs the movie's length, known once it has loaded.
             connect(m, &MediaSource::stateChanged, this, [this] { QTimer::singleShot(0, this, &RenderEngine::syncMedia); });
             connect(m, &MediaSource::looped, this, [this, id] { emit clipFinished(id, false); });
@@ -351,6 +355,11 @@ void RenderEngine::setRecording(bool on, int fps)
 {
     if (m_thread)
         m_thread->setRecording(on, fps);
+}
+
+int RenderEngine::zeroCopyFrames() const
+{
+    return m_thread ? m_thread->zeroCopyFramesTotal() : 0;
 }
 
 void RenderEngine::setDmxSampling(bool on, int fps)

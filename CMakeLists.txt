@@ -188,6 +188,7 @@ target_include_directories(DisplayHawk PRIVATE src)
 target_link_libraries(DisplayHawk PRIVATE
     Qt6::Core Qt6::Gui Qt6::GuiPrivate Qt6::Widgets Qt6::Multimedia Qt6::Network
     Qt6::ShaderToolsPrivate # runtime shader compilation for ISF
+    Qt6::MultimediaPrivate # hardware-decoded video frames as textures (zero-copy)
 )
 
 # GPU texture sharing with other apps: Spout (Windows, vendored SpoutDX) / Syphon (macOS, vendored).

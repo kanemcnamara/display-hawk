@@ -401,6 +401,11 @@ double MediaSource::volume() const
     return m_audio->volume();
 }
 
+void MediaSource::setRhi(QRhi *rhi)
+{
+    m_sink->setRhi(rhi);
+}
+
 void MediaSource::setAudioDevice(const QAudioDevice &device)
 {
     m_audio->setDevice(device);

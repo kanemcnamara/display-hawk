@@ -574,8 +574,10 @@ void RenderThread::run()
             if (m_perfLog && m_perfFrames > 0)
                 qInfo("perf: %d video frames/s (%d on GPU path), %.2f ms each to prepare", m_perfFrames,
                       m_perfGpuFrames, m_perfNs / 1e6 / m_perfFrames);
+            if (m_perfLog && m_perfFrames > 0)
+                qInfo("perf: %d of them zero-copy (hardware decoder textures)", m_perfZeroCopyFrames);
             m_perfNs = 0;
-            m_perfFrames = m_perfGpuFrames = 0;
+            m_perfFrames = m_perfGpuFrames = m_perfZeroCopyFrames = 0;
             frames = 0;
             fpsClock.restart();
         }
@@ -1003,6 +1005,17 @@ void RenderThread::appendClipDraw(QRhiCommandBuffer *cb, QVector<RhiQuad::Params
                 m_perfNs += prep.nsecsElapsed();
                 ++m_perfFrames;
                 ++m_perfGpuFrames;
+            } else if (gpuYuv && ct.frame.isValid() && YuvConverter::supports(ct.frame.pixelFormat())
+                       && m_yuv.convertHw(cb, ct.frame, ct.yuv)) {
+                // Zero-copy: the hardware decoder's own textures, converted on the GPU.
+                ct.useYuv = true;
+                ct.hasMedia = true;
+                ct.mediaSize = ct.yuv.size;
+                m_perfNs += prep.nsecsElapsed();
+                ++m_perfFrames;
+                ++m_perfGpuFrames;
+                ++m_perfZeroCopyFrames;
+                m_zeroCopyTotal.fetchAndAddRelaxed(1);
             } else if (gpuYuv && ct.frame.isValid() && YuvConverter::supports(ct.frame.pixelFormat())
                        && m_yuv.convert(cb, ct.frame, ct.yuv)) {
                 // Planes uploaded as decoded; colour conversion ran on the GPU.

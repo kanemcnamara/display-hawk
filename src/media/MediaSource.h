@@ -8,6 +8,7 @@
 #include <QVideoFrame>
 
 class QAudioDevice;
+class QRhi;
 class QAudioOutput;
 class NdiReceiver;
 class QCamera;
@@ -37,6 +38,8 @@ public:
     void setVolume(double volume); // 0..1 (linear)
     double volume() const;
     void setAudioDevice(const QAudioDevice &device);
+    // The renderer's graphics device: hardware-decoded frames then stay on the GPU (zero-copy).
+    void setRhi(QRhi *rhi);
     void close();
     void play();
     void pause();

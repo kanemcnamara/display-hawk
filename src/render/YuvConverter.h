@@ -4,11 +4,16 @@
 
 #include <QMatrix4x4>
 #include <QVideoFrame>
+#include <memory>
 #include <rhi/qrhi.h>
 
 // Converts decoded YUV video frames to RGBA on the GPU: the planes are uploaded as they come from
 // the decoder (much less data than RGBA) and a shader applies the frame's colour matrix and range.
 // Render-thread only.
+QT_BEGIN_NAMESPACE
+class QVideoFrameTextures;
+QT_END_NAMESPACE
+
 class YuvConverter
 {
 public:
@@ -23,6 +28,14 @@ public:
         QSize size;
         QVideoFrameFormat::PixelFormat format = QVideoFrameFormat::Format_Invalid;
         HapFrame::Kind hapKind = HapFrame::None; // set when the target holds HAP Q textures
+        // Hardware-decoded frames: the decoder's own plane textures, mapped onto our device, kept
+        // (with their bindings) until the GPU can no longer be using them.
+        struct HwFrame {
+            std::shared_ptr<QVideoFrameTextures> textures;
+            QRhiShaderResourceBindings *srb = nullptr;
+        };
+        QVector<HwFrame> hwFrames;
+        bool hw = false;
     };
 
     static bool supports(QVideoFrameFormat::PixelFormat format);
@@ -33,6 +46,9 @@ public:
     // Uploads the frame's planes and records a conversion pass into target.rgba (recreating
     // resources when the size or format changes). Call outside any other render pass.
     bool convert(QRhiCommandBuffer *cb, const QVideoFrame &frame, Target &target);
+    // Zero-copy: a frame the hardware decoder left on the GPU (Direct3D 11 / Metal) is converted
+    // straight from its textures. Returns false if the frame is not one (then use convert()).
+    bool convertHw(QRhiCommandBuffer *cb, const QVideoFrame &frame, Target &target);
     // HAP Q / HAP Q Alpha: uploads the compressed YCoCg (and alpha) blocks and converts them to
     // RGBA in target.rgba, which has the padded (multiple of 4) size.
     bool convertHap(QRhiCommandBuffer *cb, const HapFrame &frame, Target &target);
@@ -42,12 +58,15 @@ private:
     bool ensureTarget(Target &t, const QVideoFrameFormat &format);
     bool ensureHapTarget(Target &t, const HapFrame &frame);
     bool createOutput(Target &t, const QSize &size);
-    void runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateBatch *u, const QMatrix4x4 &matrix, int mode);
+    bool createOutputOnly(Target &t, const QSize &size); // hardware frames: no plane textures of our own
+    void runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateBatch *u, const QMatrix4x4 &matrix, int mode,
+                 QRhiShaderResourceBindings *srb = nullptr);
     QRhiGraphicsPipeline *pipelineFor(QRhiRenderPassDescriptor *rp, QRhiShaderResourceBindings *srb);
 
     QRhi *m_rhi = nullptr;
     QShader m_vs, m_fs;
     QRhiSampler *m_sampler = nullptr;
+    QRhiTexture *m_placeholder = nullptr;
     QRhiGraphicsPipeline *m_pipeline = nullptr;
     QVector<quint32> m_pipelineFormat;
 };

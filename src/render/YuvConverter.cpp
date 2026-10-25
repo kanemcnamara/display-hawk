@@ -1,5 +1,8 @@
 ﻿#include "render/YuvConverter.h"
 
+#include <QtMultimedia/private/qhwvideobuffer_p.h>
+#include <QtMultimedia/private/qvideoframe_p.h>
+
 #include <QFile>
 #include <QMatrix4x4>
 #include <cstring>
@@ -140,6 +143,8 @@ void YuvConverter::release()
     m_pipeline = nullptr;
     delete m_sampler;
     m_sampler = nullptr;
+    delete m_placeholder;
+    m_placeholder = nullptr;
 }
 
 void YuvConverter::releaseTarget(Target &t, bool deferred)
@@ -153,13 +158,20 @@ void YuvConverter::releaseTarget(Target &t, bool deferred)
         else
             delete r;
     }
+    for (Target::HwFrame &f : t.hwFrames) {
+        f.textures->onFrameEndInvoked();
+        if (deferred)
+            f.srb->deleteLater();
+        else
+            delete f.srb;
+    }
     t = Target();
 }
 
 bool YuvConverter::ensureTarget(Target &t, const QVideoFrameFormat &format)
 {
     const QSize size = format.frameSize();
-    if (t.rgba && t.size == size && t.format == format.pixelFormat() && t.hapKind == HapFrame::None)
+    if (t.rgba && t.size == size && t.format == format.pixelFormat() && t.hapKind == HapFrame::None && !t.hw)
         return true;
     releaseTarget(t, true);
 
@@ -250,8 +262,10 @@ QRhiGraphicsPipeline *YuvConverter::pipelineFor(QRhiRenderPassDescriptor *rp, QR
 }
 
 void YuvConverter::runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateBatch *u, const QMatrix4x4 &matrix,
-                           int mode)
+                           int mode, QRhiShaderResourceBindings *srb)
 {
+    if (!srb)
+        srb = t.srb;
     char data[kUniformSize];
     std::memset(data, 0, sizeof(data));
     std::memcpy(data, m_rhi->clipSpaceCorrMatrix().constData(), 64);
@@ -260,12 +274,12 @@ void YuvConverter::runPass(QRhiCommandBuffer *cb, Target &t, QRhiResourceUpdateB
     std::memcpy(data + 128, modes, sizeof(modes));
     u->updateDynamicBuffer(t.ubuf, 0, kUniformSize, data);
 
-    QRhiGraphicsPipeline *ps = pipelineFor(t.rp, t.srb);
+    QRhiGraphicsPipeline *ps = pipelineFor(t.rp, srb);
     cb->beginPass(t.rt, Qt::black, {1.0f, 0}, u);
     if (ps) {
         cb->setGraphicsPipeline(ps);
         cb->setViewport(QRhiViewport(0, 0, t.size.width(), t.size.height()));
-        cb->setShaderResources(t.srb);
+        cb->setShaderResources(srb);
         cb->draw(4);
     }
     cb->endPass();
@@ -309,6 +323,65 @@ bool YuvConverter::convert(QRhiCommandBuffer *cb, const QVideoFrame &frame, Targ
     f.unmap();
     runPass(cb, t, u, colorMatrix(format), l.mode);
     return true;
+}
+
+bool YuvConverter::convertHw(QRhiCommandBuffer *cb, const QVideoFrame &frame, Target &t)
+{
+    QHwVideoBuffer *hw = QVideoFramePrivate::hwBuffer(frame);
+    if (!hw || hw->rhi() != m_rhi || frame.handleType() != QVideoFrame::RhiTextureHandle)
+        return false;
+    const QVideoFrameFormat format = frame.surfaceFormat();
+    PlaneLayout l;
+    if (!layoutFor(format.pixelFormat(), format.frameSize(), l))
+        return false;
+    QVideoFrameTexturesUPtr none;
+    QVideoFrameTexturesUPtr mapped = hw->mapTextures(*m_rhi, none);
+    if (!mapped || !mapped->texture(0))
+        return false;
+    // Our own output (its plane textures are not used: the decoder's are bound instead).
+    if (!t.hw || !t.rgba || t.size != format.frameSize() || t.format != format.pixelFormat()) {
+        releaseTarget(t, true);
+        if (!createOutputOnly(t, format.frameSize()))
+            return false;
+        t.format = format.pixelFormat();
+        t.hw = true;
+    }
+    QRhiTexture *y = mapped->texture(0);
+    QRhiTexture *u = mapped->texture(1) ? mapped->texture(1) : y;
+    QRhiTexture *v = l.count > 2 && mapped->texture(2) ? mapped->texture(2) : u;
+    auto *srb = m_rhi->newShaderResourceBindings();
+    srb->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(0, QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage, t.ubuf),
+        QRhiShaderResourceBinding::sampledTexture(1, QRhiShaderResourceBinding::FragmentStage, y, m_sampler),
+        QRhiShaderResourceBinding::sampledTexture(2, QRhiShaderResourceBinding::FragmentStage, u, m_sampler),
+        QRhiShaderResourceBinding::sampledTexture(3, QRhiShaderResourceBinding::FragmentStage, v, m_sampler),
+    });
+    if (!srb->create()) {
+        delete srb;
+        return false;
+    }
+    runPass(cb, t, m_rhi->nextResourceUpdateBatch(), colorMatrix(format), l.mode, srb);
+    // Frames in flight may still read the last few frames' textures: keep them a while.
+    t.hwFrames.append({std::shared_ptr<QVideoFrameTextures>(mapped.release()), srb});
+    while (t.hwFrames.size() > 4) {
+        Target::HwFrame old = t.hwFrames.takeFirst();
+        old.textures->onFrameEndInvoked();
+        old.srb->deleteLater();
+    }
+    return true;
+}
+
+bool YuvConverter::createOutputOnly(Target &t, const QSize &size)
+{
+    // createOutput() binds t.planes; with none of our own, a 1x1 placeholder keeps the layout.
+    if (!m_placeholder) {
+        m_placeholder = m_rhi->newTexture(QRhiTexture::R8, QSize(1, 1));
+        m_placeholder->create();
+    }
+    t.planes[0] = m_placeholder; // createOutput binds the planes; this only keeps the layout
+    const bool ok = createOutput(t, size);
+    t.planes[0] = nullptr;       // not ours to release
+    return ok;
 }
 
 bool YuvConverter::convertHap(QRhiCommandBuffer *cb, const HapFrame &frame, Target &t)

@@ -226,6 +226,12 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         save(second, "deck-video-b");
         check(litPercent(first) > 20, "video clip shows frames");
         check(!first.isNull() && first != second, "video clip is playing");
+        // On Direct3D 11 (and Metal) hardware-decoded frames stay on the GPU: no copy through memory.
+        if (engine.backendName().contains(QLatin1String("Direct3D")) && !video.endsWith(QLatin1String(".mov"), Qt::CaseInsensitive)) {
+            const int zeroCopy = engine.zeroCopyFrames();
+            qInfo("selftest: %d video frames arrived as hardware textures", zeroCopy);
+            check(zeroCopy > 0, "hardware-decoded video stays on the GPU (zero-copy)");
+        }
     }
 
     // Optional: DISPLAYHAWK_TEST_SOUND=<video with audio>, DISPLAYHAWK_TEST_HAP_SOUND=<HAP .mov with audio>.

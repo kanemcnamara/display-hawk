@@ -82,6 +82,7 @@ public:
     void setRecording(bool on, int fps);
     // DMX pixel mapping: the composition, scaled down, delivered as dmxFrame `fps` times a second.
     void setDmxSampling(bool on, int fps);
+    int zeroCopyFrames() const; // video frames that arrived as hardware textures, so far
     QString previewClip() const { return m_previewClip; }
     bool identifySlices() const { return m_identifySlices; }
 

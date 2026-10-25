@@ -221,6 +221,13 @@ private:
     qint64 m_perfNs = 0;
     int m_perfFrames = 0;
     int m_perfGpuFrames = 0;
+    int m_perfZeroCopyFrames = 0;
+public:
+    QRhi *rhi() const { return m_rhi; } // valid once waitForInit() returned true
+    // Video frames counted since start: how many arrived as hardware textures (zero-copy).
+    int zeroCopyFramesTotal() const { return m_zeroCopyTotal.loadRelaxed(); }
+private:
+    QAtomicInt m_zeroCopyTotal;
     Project m_project;
     PreviewRequest m_preview[2];
     QVector<Output> m_outputs;
