@@ -137,6 +137,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         qInfo("selftest: %s %dx%d, %d%% lit -> %s", names[v], img.width(), img.height(), lit, qPrintable(path));
         check(!img.isNull() && lit > 5, names[v]);
     }
+    waitFor([&] { return fps > 0; }, 5000); // statistics arrive once per second
     qInfo("selftest: %d fps while live on %s", fps, qPrintable(engine.backendName()));
     check(fps > 0, "render loop is running");
 
