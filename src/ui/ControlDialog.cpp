@@ -7,6 +7,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -100,9 +101,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, QWidget *pare
     m_monitor = new QPlainTextEdit;
     m_monitor->setReadOnly(true);
     m_monitor->setMaximumBlockCount(300);
-    QFont mono(QStringLiteral("Consolas"));
-    mono.setStyleHint(QFont::Monospace);
-    m_monitor->setFont(mono);
+    m_monitor->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     monl->addWidget(m_monitor);
 
     // Art-Net / DMX

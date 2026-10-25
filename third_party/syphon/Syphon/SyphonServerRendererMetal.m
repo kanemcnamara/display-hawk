@@ -52,7 +52,11 @@
         // Load the vertex/shader function from the library
         id <MTLFunction> vertexFunction = [defaultLibrary newFunctionWithName:@"textureToScreenVertexShader"];
         id <MTLFunction> fragmentFunction = [defaultLibrary newFunctionWithName:@"textureToScreenSamplingShader"];
-        
+        // Display Hawk patch: without the compiled shaders (not bundled; Display Hawk publishes BGRA so
+        // the server uses its blit path) give up cleanly instead of tripping Metal validation.
+        if (!vertexFunction || !fragmentFunction)
+            return nil;
+
         
         // Set up a descriptor for creating a pipeline state object
         MTLRenderPipelineDescriptor *pipelineStateDescriptor = [MTLRenderPipelineDescriptor new];
