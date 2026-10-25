@@ -38,10 +38,24 @@ qt_add_executable(DisplayHawk
     src/ui/PropertyPanel.cpp
 )
 
+# App icon: embedded in the .exe on Windows, bundled as an .icns on macOS, and used for every window at runtime.
+if(WIN32)
+    target_sources(DisplayHawk PRIVATE src/app.rc)
+elseif(APPLE)
+    set(DISPLAYHAWK_ICNS "${CMAKE_CURRENT_SOURCE_DIR}/assets/icon/displayhawk.icns")
+    target_sources(DisplayHawk PRIVATE "${DISPLAYHAWK_ICNS}")
+    set_source_files_properties("${DISPLAYHAWK_ICNS}" PROPERTIES MACOSX_PACKAGE_LOCATION Resources)
+endif()
+qt_add_resources(DisplayHawk "icons"
+    PREFIX "/"
+    FILES assets/icon/displayhawk.png
+)
+
 set_target_properties(DisplayHawk PROPERTIES
     WIN32_EXECUTABLE TRUE
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_GUI_IDENTIFIER "com.displayhawk.app"
+    MACOSX_BUNDLE_ICON_FILE "displayhawk.icns"
     MACOSX_BUNDLE_BUNDLE_NAME "Display Hawk"
     MACOSX_BUNDLE_BUNDLE_VERSION "${PROJECT_VERSION}"
     MACOSX_BUNDLE_SHORT_VERSION_STRING "${PROJECT_VERSION}"

@@ -1,0 +1,2 @@
+// Windows executable icon (Explorer, taskbar, Alt+Tab).
+IDI_ICON1 ICON "../assets/icon/displayhawk.ico"

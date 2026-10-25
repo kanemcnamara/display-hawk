@@ -8,6 +8,7 @@
 #include <QFileInfo>
 #include <QMessageBox>
 #include <QEventLoop>
+#include <QIcon>
 #include <QJsonObject>
 #include <QMutex>
 #include <QTimer>
@@ -202,6 +203,7 @@ int main(int argc, char *argv[])
     QApplication app(argc, argv);
     QApplication::setApplicationName(QStringLiteral("Display Hawk"));
     QApplication::setOrganizationName(QStringLiteral("Display Hawk"));
+    QApplication::setWindowIcon(QIcon(QStringLiteral(":/assets/icon/displayhawk.png")));
     applyDarkTheme(app);
     qInstallMessageHandler(logToFile);
 
