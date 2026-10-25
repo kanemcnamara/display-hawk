@@ -252,6 +252,186 @@ struct MidiInput::Backend {
 
 #endif
 
+// ---------------------------------------------------------------- output
+
+#if defined(Q_OS_WIN)
+
+struct MidiOutput::Backend {
+    struct Open {
+        HMIDIOUT handle = nullptr;
+        QString name;
+    };
+    QList<Open> open;
+
+    static QStringList devices()
+    {
+        QStringList names;
+        for (UINT i = 0, n = midiOutGetNumDevs(); i < n; ++i) {
+            MIDIOUTCAPSW caps{};
+            if (midiOutGetDevCapsW(i, &caps, sizeof(caps)) == MMSYSERR_NOERROR)
+                names << QString::fromWCharArray(caps.szPname);
+        }
+        return names;
+    }
+
+    void closeAll()
+    {
+        for (const Open &o : std::as_const(open)) {
+            midiOutReset(o.handle);
+            midiOutClose(o.handle);
+        }
+        open.clear();
+    }
+
+    void openByName(const QStringList &names)
+    {
+        closeAll();
+        const QStringList all = devices();
+        for (int i = 0; i < all.size(); ++i) {
+            if (!names.contains(all[i]))
+                continue;
+            HMIDIOUT h = nullptr;
+            if (midiOutOpen(&h, UINT(i), 0, 0, CALLBACK_NULL) != MMSYSERR_NOERROR) {
+                qWarning("MIDI: could not open output %s", qPrintable(all[i]));
+                continue;
+            }
+            open << Open{h, all[i]};
+        }
+    }
+
+    QStringList openNames() const
+    {
+        QStringList n;
+        for (const Open &o : open)
+            n << o.name;
+        return n;
+    }
+
+    void send(quint8 status, quint8 d1, quint8 d2)
+    {
+        const DWORD msg = DWORD(status) | DWORD(d1 & 0x7F) << 8 | DWORD(d2 & 0x7F) << 16;
+        for (const Open &o : std::as_const(open))
+            midiOutShortMsg(o.handle, msg);
+    }
+};
+
+#elif defined(Q_OS_MACOS)
+
+struct MidiOutput::Backend {
+    MIDIClientRef client = 0;
+    MIDIPortRef port = 0;
+    QList<QPair<MIDIEndpointRef, QString>> open;
+
+    static QString endpointName(MIDIEndpointRef e)
+    {
+        CFStringRef name = nullptr;
+        if (MIDIObjectGetStringProperty(e, kMIDIPropertyDisplayName, &name) != noErr || !name)
+            return QStringLiteral("MIDI destination");
+        const QString s = QString::fromCFString(name);
+        CFRelease(name);
+        return s;
+    }
+
+    static QStringList devices()
+    {
+        QStringList names;
+        for (ItemCount i = 0, n = MIDIGetNumberOfDestinations(); i < n; ++i)
+            names << endpointName(MIDIGetDestination(i));
+        return names;
+    }
+
+    void closeAll() { open.clear(); }
+
+    void openByName(const QStringList &names)
+    {
+        closeAll();
+        if (!client && MIDIClientCreate(CFSTR("Display Hawk output"), nullptr, nullptr, &client) != noErr)
+            return;
+        if (!port && MIDIOutputPortCreate(client, CFSTR("Display Hawk feedback"), &port) != noErr)
+            return;
+        for (ItemCount i = 0, n = MIDIGetNumberOfDestinations(); i < n; ++i) {
+            const MIDIEndpointRef e = MIDIGetDestination(i);
+            const QString name = endpointName(e);
+            if (names.contains(name))
+                open << qMakePair(e, name);
+        }
+    }
+
+    QStringList openNames() const
+    {
+        QStringList n;
+        for (const auto &o : open)
+            n << o.second;
+        return n;
+    }
+
+    void send(quint8 status, quint8 d1, quint8 d2)
+    {
+        if (!port)
+            return;
+        Byte buffer[64];
+        auto *list = reinterpret_cast<MIDIPacketList *>(buffer);
+        MIDIPacket *packet = MIDIPacketListInit(list);
+        const Byte bytes[3] = {status, Byte(d1 & 0x7F), Byte(d2 & 0x7F)};
+        packet = MIDIPacketListAdd(list, sizeof(buffer), packet, 0, 3, bytes);
+        if (!packet)
+            return;
+        for (const auto &o : std::as_const(open))
+            MIDISend(port, o.first, list);
+    }
+
+    ~Backend()
+    {
+        if (port)
+            MIDIPortDispose(port);
+        if (client)
+            MIDIClientDispose(client);
+    }
+};
+
+#else
+
+struct MidiOutput::Backend {
+    static QStringList devices() { return {}; }
+    void closeAll() {}
+    void openByName(const QStringList &) {}
+    QStringList openNames() const { return {}; }
+    void send(quint8, quint8, quint8) {}
+};
+
+#endif
+
+MidiOutput::MidiOutput(QObject *parent)
+    : QObject(parent)
+    , d(std::make_unique<Backend>())
+{
+}
+
+MidiOutput::~MidiOutput()
+{
+    d->closeAll();
+}
+
+QStringList MidiOutput::availableDevices() const
+{
+    return Backend::devices();
+}
+
+void MidiOutput::setOpenDevices(const QStringList &names)
+{
+    d->openByName(names);
+}
+
+QStringList MidiOutput::openDevices() const
+{
+    return d->openNames();
+}
+
+void MidiOutput::send(quint8 status, quint8 data1, quint8 data2)
+{
+    d->send(status, data1, data2);
+}
+
 MidiInput::MidiInput(QObject *parent)
     : QObject(parent)
     , d(std::make_unique<Backend>())

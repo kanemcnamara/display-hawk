@@ -37,6 +37,9 @@ public:
     int oscPort() const;
 
     MidiInput *midi() const { return m_midi; }
+    // Where OSC came from recently (feedback goes back to them), and sending from the OSC port.
+    QList<QHostAddress> oscClients() const { return m_oscClients; }
+    void sendOsc(const QByteArray &datagram, const QHostAddress &host, quint16 port);
     void setMidiDevices(const QStringList &names); // opens them and remembers the choice
 
     // The next MIDI note or controller is assigned to mapping `index`.
@@ -68,6 +71,8 @@ signals:
     void learnStateChanged();
     void liveRequested(int state);       // -1 toggle, 0 off, 1 on
     void oscStateChanged();
+    void oscClientAdded(const QHostAddress &address);
+    void midiDevicesChanged();
     void tapTempoRequested();
     void cueGoRequested();
     void cueBackRequested();
@@ -89,6 +94,8 @@ private:
 
     Document *m_doc;
     QUdpSocket *m_socket = nullptr;
+    QUdpSocket *m_sendSocket = nullptr; // for OSC feedback while not listening
+    QList<QHostAddress> m_oscClients;
     MidiInput *m_midi;
     int m_learn = -1;
     QHash<int, int> m_lastCC; // (channel << 8 | controller) -> last value, for trigger edges

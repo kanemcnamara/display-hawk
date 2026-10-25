@@ -955,6 +955,10 @@ QJsonObject Project::toJson() const
                                       {"key", m.key}});
     }
     root["controls"] = controlArr;
+    root["midiFeedback"] = QJsonObject{{"enabled", midiFeedback.enabled},
+                                       {"off", midiFeedback.offValue},
+                                       {"loaded", midiFeedback.loadedValue},
+                                       {"active", midiFeedback.activeValue}};
     root["compEffects"] = effectsToJson(compEffects);
     root["tempo"] = QJsonObject{{"bpm", bpm}, {"source", int(tempoSource)}, {"quantize", int(quantize)}};
     QJsonArray lfoArr;
@@ -1254,6 +1258,13 @@ Project Project::fromJson(const QJsonObject &root)
         l.amount = qBound(0.0, o["amount"].toDouble(1.0), 1.0);
         l.phase = qBound(0.0, o["phase"].toDouble(0.0), 1.0);
         p.lfos.append(l);
+    }
+    {
+        const QJsonObject o = root["midiFeedback"].toObject();
+        p.midiFeedback.enabled = o["enabled"].toBool(true);
+        p.midiFeedback.offValue = qBound(0, o["off"].toInt(0), 127);
+        p.midiFeedback.loadedValue = qBound(0, o["loaded"].toInt(1), 127);
+        p.midiFeedback.activeValue = qBound(0, o["active"].toInt(127), 127);
     }
     for (const QJsonValue &v : root["controls"].toArray()) {
         const QJsonObject o = v.toObject();

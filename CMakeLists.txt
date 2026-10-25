@@ -57,6 +57,7 @@ qt_add_executable(DisplayHawk
     src/control/Midi.h
     src/control/Midi.cpp
     src/control/ControlRouter.h
+    src/control/ControlFeedback.h
     src/control/AutopilotController.h
     src/control/TempoClock.h
     src/control/Timecode.h
@@ -72,6 +73,7 @@ qt_add_executable(DisplayHawk
     src/control/ModulationHub.cpp
     src/control/AutopilotController.cpp
     src/control/ControlRouter.cpp
+    src/control/ControlFeedback.cpp
     src/media/MediaSource.h
     src/media/MediaSource.cpp
     src/media/Snappy.h

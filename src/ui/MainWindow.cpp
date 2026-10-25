@@ -10,6 +10,7 @@
 #include "control/Midi.h"
 #include "control/ModulationHub.h"
 #include "control/TempoClock.h"
+#include "control/ControlFeedback.h"
 #include "ui/LfoDialog.h"
 #include "ui/ClipPreviewPanel.h"
 #include "ui/MediaBrowser.h"
@@ -175,6 +176,9 @@ MainWindow::MainWindow(Document *doc, RenderEngine *engine, QWidget *parent)
     connect(m_audioReactive, &AudioReactive::beatDetected, m_tempo, [this] { m_tempo->audioBeat(); });
     connect(m_router, &ControlRouter::tapTempoRequested, m_tempo, [this] { m_tempo->tap(); });
     connect(m_router, &ControlRouter::tempoResyncRequested, m_tempo, [this] { m_tempo->resync(); });
+    // Controller feedback: button LEDs, motor faders and OSC surfaces follow the show.
+    m_feedback = new ControlFeedback(doc, m_router, this);
+    connect(m_tempo, &TempoClock::beat, m_feedback, &ControlFeedback::beat);
     // Show control: timecode in, the cue list, and the web remote.
     m_timecode = new TimecodeInput(m_router->midi(), this);
     m_cueList = new CueList(doc, m_timecode, this);
@@ -610,6 +614,7 @@ void MainWindow::refreshOutputScreenCombo()
 void MainWindow::setLive(bool live)
 {
     m_live = live;
+    m_feedback->setLive(live);
     {
         QSignalBlocker block(m_liveAction);
         m_liveAction->setChecked(live);
@@ -883,7 +888,7 @@ void MainWindow::showLfos()
 void MainWindow::showControls()
 {
     if (!m_controlDialog)
-        m_controlDialog = new ControlDialog(m_doc, m_router, m_webRemote, this);
+        m_controlDialog = new ControlDialog(m_doc, m_router, m_feedback, m_webRemote, this);
     m_controlDialog->show();
     m_controlDialog->raise();
     m_controlDialog->activateWindow();

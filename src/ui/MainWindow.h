@@ -18,6 +18,7 @@ class TempoClock;
 class AudioReactiveDialog;
 class ControlDialog;
 class ControlRouter;
+class ControlFeedback;
 class Document;
 class OutputWindow;
 class PropertyPanel;
@@ -47,6 +48,7 @@ public:
     CueList *cueList() const { return m_cueList; }
     TimecodeInput *timecodeInput() const { return m_timecode; }
     WebRemote *webRemote() const { return m_webRemote; }
+    ControlFeedback *controlFeedback() const { return m_feedback; }
     PixelMapper *pixelMapper() const { return m_pixelMapper; }
     void showCueList();
     void showControls();
@@ -94,6 +96,7 @@ private:
     TimecodeInput *m_timecode;
     CueList *m_cueList;
     WebRemote *m_webRemote;
+    ControlFeedback *m_feedback;
     PixelMapper *m_pixelMapper;
     QDialog *m_pixelDialog = nullptr;
     QDialog *m_cueDialog = nullptr;

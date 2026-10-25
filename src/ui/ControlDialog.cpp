@@ -2,6 +2,7 @@
 
 #include "control/ArtNet.h"
 #include "control/ControlRouter.h"
+#include "control/ControlFeedback.h"
 #include "control/WebRemote.h"
 #include "control/Sacn.h"
 #include "model/Document.h"
@@ -14,6 +15,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QLineEdit>
 #include <QListWidget>
 #include <QNetworkInterface>
 #include <QPlainTextEdit>
@@ -27,10 +29,12 @@
 #include <QTimer>
 #include <QVBoxLayout>
 
-ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *web, QWidget *parent)
+ControlDialog::ControlDialog(Document *doc, ControlRouter *router, ControlFeedback *feedback, WebRemote *web,
+                             QWidget *parent)
     : QDialog(parent)
     , m_doc(doc)
     , m_router(router)
+    , m_feedback(feedback)
 {
     setWindowTitle(tr("OSC, MIDI & DMX"));
     resize(900, 720);
@@ -54,14 +58,104 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
     of->addWidget(m_oscStatus);
     of->addWidget(reference);
 
+    // OSC feedback: state back to the surfaces (TouchOSC, Open Stage Control, show controllers).
+    auto *oscFb = new QGroupBox(tr("OSC feedback"));
+    auto *ofl = new QVBoxLayout(oscFb);
+    auto *oscFbOn = new QCheckBox(tr("Send the show's state to port"));
+    auto *oscFbPort = new QSpinBox;
+    oscFbPort->setRange(1, 65535);
+    auto *oscFbHost = new QLineEdit;
+    oscFbHost->setPlaceholderText(tr("every device that sends us OSC"));
+    auto *oscFbRow = new QHBoxLayout;
+    oscFbRow->addWidget(oscFbOn);
+    oscFbRow->addWidget(oscFbPort);
+    oscFbRow->addWidget(new QLabel(tr("of")));
+    oscFbRow->addWidget(oscFbHost, 1);
+    ofl->addLayout(oscFbRow);
+    auto *oscFbHelp = new QLabel(tr("Sent on the same addresses as above when they change (master, blackout, layer "
+                                    "opacity/bypass/solo, clip and column triggers as 1 = playing), plus "
+                                    "/dh/layer/<l>/name, /dh/layer/<l>/clip/<c>/name and /dh/tempo/beat on each beat."));
+    oscFbHelp->setWordWrap(true);
+    ofl->addWidget(oscFbHelp);
+    oscFbOn->setChecked(m_feedback->oscEnabled());
+    oscFbPort->setValue(m_feedback->oscPort());
+    oscFbHost->setText(m_feedback->oscHost());
+    auto applyOscFb = [this, oscFbOn, oscFbPort, oscFbHost] {
+        m_feedback->setOsc(oscFbOn->isChecked(), oscFbPort->value(), oscFbHost->text());
+    };
+    connect(oscFbOn, &QCheckBox::toggled, this, applyOscFb);
+    connect(oscFbPort, &QSpinBox::editingFinished, this, applyOscFb);
+    connect(oscFbHost, &QLineEdit::editingFinished, this, applyOscFb);
+
     // MIDI devices
     auto *midi = new QGroupBox(tr("MIDI inputs"));
     auto *mf = new QVBoxLayout(midi);
     m_devices = new QListWidget;
-    m_devices->setMaximumHeight(90);
+    m_devices->setMaximumHeight(70);
     auto *refreshButton = new QPushButton(tr("Refresh"));
     mf->addWidget(m_devices);
     mf->addWidget(refreshButton, 0, Qt::AlignLeft);
+
+    // MIDI feedback: LEDs and motor faders on the controller follow the show.
+    auto *outputs = new QGroupBox(tr("MIDI outputs (feedback)"));
+    auto *outl = new QVBoxLayout(outputs);
+    auto *fb = new QGroupBox(tr("MIDI feedback (button lights, motor faders)"));
+    auto *fbl = new QVBoxLayout(fb);
+    m_outputs = new QListWidget;
+    m_outputs->setMaximumHeight(70);
+    outl->addWidget(m_outputs);
+    outl->addStretch();
+    m_fbEnabled = new QCheckBox(tr("Send to the controller. Note velocity / CC value for"));
+    auto spin = [] {
+        auto *s = new QSpinBox;
+        s->setRange(0, 127);
+        return s;
+    };
+    m_fbOff = spin();
+    m_fbLoaded = spin();
+    m_fbActive = spin();
+    auto *resend = new QPushButton(tr("Resend"));
+    resend->setToolTip(tr("Send every light and fader position again (after reconnecting a controller)"));
+    auto *fbRow = new QHBoxLayout;
+    fbRow->addWidget(m_fbEnabled);
+    fbRow->addWidget(new QLabel(tr("off")));
+    fbRow->addWidget(m_fbOff);
+    fbRow->addWidget(new QLabel(tr("loaded")));
+    fbRow->addWidget(m_fbLoaded);
+    fbRow->addWidget(new QLabel(tr("playing / on")));
+    fbRow->addWidget(m_fbActive);
+    fbRow->addStretch();
+    fbRow->addWidget(resend);
+    fbl->addLayout(fbRow);
+    auto *fbHelp = new QLabel(tr("Pad controllers choose colours by velocity (see the controller's manual). Faders and "
+                                 "knobs get their position back. Outputs named like the chosen inputs are used until "
+                                 "you tick outputs here."));
+    fbHelp->setWordWrap(true);
+    fbl->addWidget(fbHelp);
+    auto fbEdit = [this] {
+        if (m_refreshing)
+            return;
+        MidiFeedback &f = m_doc->project().midiFeedback;
+        f.enabled = m_fbEnabled->isChecked();
+        f.offValue = m_fbOff->value();
+        f.loadedValue = m_fbLoaded->value();
+        f.activeValue = m_fbActive->value();
+        m_doc->notifyChanged();
+        m_feedback->resendAll();
+    };
+    connect(m_fbEnabled, &QCheckBox::toggled, this, fbEdit);
+    for (QSpinBox *s : {m_fbOff, m_fbLoaded, m_fbActive})
+        connect(s, &QSpinBox::valueChanged, this, fbEdit);
+    connect(resend, &QPushButton::clicked, m_feedback, &ControlFeedback::resendAll);
+    connect(m_outputs, &QListWidget::itemChanged, this, [this] {
+        if (m_refreshing)
+            return;
+        QStringList on;
+        for (int i = 0; i < m_outputs->count(); ++i)
+            if (m_outputs->item(i)->checkState() == Qt::Checked)
+                on << m_outputs->item(i)->text();
+        m_feedback->setMidiOutputs(on);
+    });
 
     // Mappings
     auto *maps = new QGroupBox(tr("MIDI mappings (saved with the setup)"));
@@ -156,6 +250,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
     auto *oscPage = new QWidget;
     auto *ol = new QVBoxLayout(oscPage);
     ol->addWidget(osc);
+    ol->addWidget(oscFb);
 
     // Web remote: HTTP on the network, for phones, tablets and show-control systems.
     auto *webBox = new QGroupBox(tr("Web remote (HTTP)"));
@@ -206,7 +301,11 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
     ol->addStretch();
     auto *midiPage = new QWidget;
     auto *ml = new QVBoxLayout(midiPage);
-    ml->addWidget(midi);
+    auto *devicesRow = new QHBoxLayout;
+    devicesRow->addWidget(midi);
+    devicesRow->addWidget(outputs);
+    ml->addLayout(devicesRow);
+    ml->addWidget(fb);
     ml->addWidget(maps, 1);
     m_tabs = new QTabWidget;
     m_tabs->addTab(oscPage, tr("OSC"));
@@ -252,8 +351,10 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
     });
     dmxTimer->start();
     connect(m_doc, &Document::changed, this, [this] {
-        if (isVisible())
+        if (isVisible()) {
             refreshDmx();
+            refreshFeedback();
+        }
     });
     refreshDmx();
 
@@ -278,6 +379,7 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
             if (m_devices->item(i)->checkState() == Qt::Checked)
                 on << m_devices->item(i)->text();
         m_router->setMidiDevices(on);
+        refreshOutputs(); // default outputs follow the inputs
     });
     connect(add, &QPushButton::clicked, this, [this] {
         addMapping(m_newAction->currentData().toInt(), m_newLayer->value() - 1, m_newColumn->value() - 1,
@@ -307,6 +409,36 @@ ControlDialog::ControlDialog(Document *doc, ControlRouter *router, WebRemote *we
     refreshOsc();
     refreshDevices();
     refreshMappings();
+    refreshFeedback();
+}
+
+void ControlDialog::refreshFeedback()
+{
+    const MidiFeedback &f = m_doc->project().midiFeedback;
+    m_refreshing = true;
+    m_fbEnabled->setChecked(f.enabled);
+    m_fbOff->setValue(f.offValue);
+    m_fbLoaded->setValue(f.loadedValue);
+    m_fbActive->setValue(f.activeValue);
+    m_refreshing = false;
+}
+
+void ControlDialog::refreshOutputs()
+{
+    m_refreshing = true;
+    m_outputs->clear();
+    const QStringList open = m_feedback->midiOutput()->openDevices();
+    const QStringList all = m_feedback->midiOutput()->availableDevices();
+    for (const QString &name : all) {
+        auto *item = new QListWidgetItem(name, m_outputs);
+        item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+        item->setCheckState(open.contains(name) ? Qt::Checked : Qt::Unchecked);
+    }
+    if (all.isEmpty()) {
+        auto *item = new QListWidgetItem(tr("No MIDI outputs found"), m_outputs);
+        item->setFlags(Qt::NoItemFlags);
+    }
+    m_refreshing = false;
 }
 
 void ControlDialog::refreshOsc()
@@ -387,6 +519,7 @@ void ControlDialog::refreshDevices()
         item->setFlags(Qt::NoItemFlags);
     }
     m_refreshing = false;
+    refreshOutputs();
 }
 
 void ControlDialog::addMapping(int action, int layer, int column, int param)

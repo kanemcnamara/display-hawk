@@ -148,6 +148,7 @@ For projectors, on each slice (*Warp and edge blend*) and screen (*Projection ma
   | +6, +7, +8 | Layer 2, and so on for the number of layers patched |
 
   Values act when they change, so the desk and the Display Hawk UI can both be used. When a desk first appears (or returns after 10 s of silence) its clip and column channels are taken as the starting point and only faders are applied, so a desk sitting at 0 does not stop every layer.
+- **Feedback** so controllers show the show: learned MIDI controls get a note velocity / CC value back on the chosen MIDI outputs (outputs named like the open inputs by default). Clip buttons show empty, loaded or playing; column buttons whether the column has clips or is playing; toggles on/off; faders and knobs their position (motor faders, LED rings); *Tap tempo* flashes on the beat. The three velocities are set per setup, since pad controllers pick colours by velocity. **OSC feedback** (off by default) sends the same addresses back, changes only, to every device that sends us OSC or to a fixed host, at the feedback port (default 9000), plus `/dh/layer/<l>/name`, `/dh/layer/<l>/clip/<c>/name` and `/dh/tempo/beat`; a new client gets the full state.
 - The dialog's monitor shows every incoming OSC and MIDI message, and DMX changes on the patched channels.
 
 ## Clip deck

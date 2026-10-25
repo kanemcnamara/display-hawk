@@ -102,6 +102,18 @@ void ControlRouter::setMidiDevices(const QStringList &names)
 {
     m_midi->setOpenDevices(names);
     QSettings().setValue("midi/devices", names);
+    emit midiDevicesChanged();
+}
+
+void ControlRouter::sendOsc(const QByteArray &datagram, const QHostAddress &host, quint16 port)
+{
+    QUdpSocket *s = m_socket;
+    if (!s) {
+        if (!m_sendSocket)
+            m_sendSocket = new QUdpSocket(this);
+        s = m_sendSocket;
+    }
+    s->writeDatagram(datagram, host, port);
 }
 
 void ControlRouter::startLearn(int index)
@@ -121,6 +133,13 @@ void ControlRouter::readDatagrams()
     while (m_socket && m_socket->hasPendingDatagrams()) {
         const QNetworkDatagram d = m_socket->receiveDatagram();
         const QString from = d.senderAddress().toString();
+        QHostAddress sender(d.senderAddress().toIPv4Address());
+        if (!sender.isNull() && !m_oscClients.contains(sender)) {
+            m_oscClients.append(sender);
+            while (m_oscClients.size() > 8) // a few controllers at a time; the oldest drop out
+                m_oscClients.removeFirst();
+            emit oscClientAdded(sender);
+        }
         for (const OscMessage &m : Osc::parse(d.data()))
             handleOsc(m, from);
     }

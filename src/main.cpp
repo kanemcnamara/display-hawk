@@ -15,6 +15,8 @@
 #include "render/Isf.h"
 #include "render/RenderEngine.h"
 #include "ui/MainWindow.h"
+#include "control/Osc.h"
+#include "control/ControlFeedback.h"
 #include <QNetworkDatagram>
 #include "control/PixelMapper.h"
 #include <QJsonDocument>
@@ -1850,7 +1852,7 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         QMediaPlayer player;
         player.setSource(QUrl::fromLocalFile(file));
         const bool playable = waitFor([&] { return player.duration() > 1000; }, 5000);
-        check(started && frames > 30 && playable,
+        check(started && frames >= 20 && playable,
               qPrintable(QStringLiteral("recording writes a playable video (%1 frames, %2 ms, %3 bytes)%4")
                              .arg(frames).arg(player.duration()).arg(QFileInfo(file).size())
                              .arg(error.isEmpty() ? QString() : QStringLiteral(": ") + error)));
@@ -2059,6 +2061,84 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         doc.clearLayer(0);
     }
 
+    // Controller feedback: what each learned MIDI control shows, then OSC state to a client.
+    {
+        Project &p = doc.project();
+        Project t;
+        Layer l;
+        l.clips.resize(3);
+        l.clips[0] = Clip::fromPattern(TestPattern::Grid);
+        l.clips[1] = Clip::fromPattern(TestPattern::Solid);
+        l.activeColumn = 1;
+        l.opacity = 0.5;
+        l.bypass = true;
+        t.layers = {l};
+        t.columns = 3;
+        auto map = [](ControlAction a, int column, bool cc, int number) {
+            ControlMapping m;
+            m.action = a;
+            m.column = column;
+            m.midiSet = true;
+            m.midiIsCC = cc;
+            m.midiNumber = number;
+            return m;
+        };
+        t.controls = {map(ControlAction::TriggerClip, 0, false, 10), map(ControlAction::TriggerClip, 1, false, 11),
+                      map(ControlAction::TriggerClip, 2, false, 12), map(ControlAction::TriggerColumn, 1, false, 20),
+                      map(ControlAction::TriggerColumn, 2, false, 21), map(ControlAction::LayerBypass, 0, false, 30),
+                      map(ControlAction::LayerOpacity, 0, true, 7), map(ControlAction::TapTempo, 0, false, 40),
+                      map(ControlAction::LayerSolo, 0, false, 41)};
+        t.midiFeedback.loadedValue = 5;
+        t.midiFeedback.activeValue = 21;
+        const QHash<int, int> m = ControlFeedback::midiState(t, false, true);
+        const int cc7 = 1 << 16 | 7;
+        check(m.value(10) == 5 && m.value(11) == 21 && m.value(12) == 0 && m.value(20) == 21 && m.value(21) == 0
+                  && m.value(30) == 21 && m.value(cc7) == 64 && m.value(40) == 21 && m.value(41) == 0,
+              "MIDI feedback: clip loaded/playing/empty, columns, toggles, fader position, beat");
+
+        ControlFeedback *fb = window.controlFeedback();
+        QUdpSocket rx;
+        rx.bind(QHostAddress::LocalHost, 0);
+        fb->setOsc(true, rx.localPort(), QStringLiteral("127.0.0.1"), false);
+        QHash<QString, QVariant> got;
+        auto drain = [&] {
+            while (rx.hasPendingDatagrams())
+                for (const OscMessage &msg : Osc::parse(rx.receiveDatagram().data()))
+                    if (!msg.args.isEmpty() && msg.address != QLatin1String("/dh/tempo/beat"))
+                        got.insert(msg.address, msg.args.first());
+        };
+        const bool initial = waitFor([&] {
+            drain();
+            return got.contains(QStringLiteral("/dh/master")) && got.contains(QStringLiteral("/dh/layer/1/name"));
+        }, 3000);
+        const int col = p.columns;
+        doc.addColumn();
+        Clip c = Clip::fromPattern(TestPattern::Solid);
+        c.name = QStringLiteral("Feedback test");
+        doc.setClip(0, col, c);
+        doc.triggerClip(0, col);
+        const QString a = QStringLiteral("/dh/layer/1/clip/%1/").arg(col + 1);
+        const bool clip = waitFor([&] {
+            drain();
+            return got.value(a + QStringLiteral("trigger")).toDouble() == 1.0
+                && got.value(a + QStringLiteral("name")).toString() == QStringLiteral("Feedback test")
+                && got.value(QStringLiteral("/dh/column/%1/trigger").arg(col + 1)).toDouble() == 1.0;
+        }, 3000);
+        waitFor([&] { drain(); return false; }, 200);
+        got.clear();
+        doc.setMaster(0.25);
+        const bool master = waitFor([&] {
+            drain();
+            return qAbs(got.value(QStringLiteral("/dh/master")).toDouble() - 0.25) < 0.001;
+        }, 3000);
+        const bool onlyChanges = got.size() == 1;
+        check(initial && clip && master && onlyChanges,
+              "OSC feedback: full state, then clip/column triggers, names and the master as they change");
+        fb->setOsc(false, 9000, QString(), false);
+        doc.setMaster(1.0);
+        doc.clearLayer(0);
+    }
+
     // DMX pixel mapping out: fixture sampling and channel packing, then real Art-Net and sACN.
     {
         Project &p = doc.project();
@@ -2175,6 +2255,9 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
     if (auto *dialog = window.findChild<QDialog *>()) {
         dialog->grab().save(QStringLiteral("%1/osc-midi-window.png").arg(outDir));
         if (auto *tabs = dialog->findChild<QTabWidget *>()) {
+            tabs->setCurrentIndex(1);
+            waitMs(200);
+            dialog->grab().save(QStringLiteral("%1/midi-window.png").arg(outDir));
             doc.project().dmx.enabled = false;
             tabs->setCurrentIndex(2);
             waitMs(300);

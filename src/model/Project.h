@@ -378,6 +378,15 @@ struct ControlMapping {
     QString midiText() const;
 };
 
+// What learned MIDI controls show on the controller (button LEDs, motor faders, LED rings): the
+// note velocity / CC value sent for each state. Pad controllers pick colours by velocity.
+struct MidiFeedback {
+    bool enabled = true;
+    int offValue = 0;      // empty slot, toggle off
+    int loadedValue = 1;   // a clip is there (or a column has clips) but is not playing
+    int activeValue = 127; // playing, toggle on, the beat (tap tempo)
+};
+
 enum class DmxProtocol { ArtNet = 0, Sacn = 1 };
 
 // Where Display Hawk sits in a lighting desk's DMX patch (Art-Net or sACN). Channels from
@@ -486,6 +495,7 @@ struct Project {
     QVector<Layer> layers;
     double master = 1.0; // playback state
     QVector<ControlMapping> controls; // MIDI mappings for this show
+    MidiFeedback midiFeedback;
     QVector<EffectInstance> compEffects; // applied to the whole composition, before the master
     DmxPatch dmx;
     AudioReactiveSettings audioReactive;

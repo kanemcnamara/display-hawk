@@ -3,6 +3,7 @@
 #include <QDialog>
 
 class ControlRouter;
+class ControlFeedback;
 class WebRemote;
 class Document;
 class QCheckBox;
@@ -19,7 +20,8 @@ class ControlDialog : public QDialog
 {
     Q_OBJECT
 public:
-    ControlDialog(Document *doc, ControlRouter *router, WebRemote *web, QWidget *parent = nullptr);
+    ControlDialog(Document *doc, ControlRouter *router, ControlFeedback *feedback, WebRemote *web,
+                  QWidget *parent = nullptr);
 
     // Adds a mapping for `action` (layer/column 0-based) and starts learning it.
     void learnNew(int action, int layer, int column, int param = 0);
@@ -27,6 +29,8 @@ public:
 private:
     void refreshOsc();
     void refreshDevices();
+    void refreshOutputs();
+    void refreshFeedback();
     void refreshMappings();
     void refreshDmx();
     void refreshDmxValues();
@@ -34,6 +38,10 @@ private:
 
     Document *m_doc;
     ControlRouter *m_router;
+    ControlFeedback *m_feedback;
+    QListWidget *m_outputs;
+    QCheckBox *m_fbEnabled;
+    QSpinBox *m_fbOff, *m_fbLoaded, *m_fbActive;
     QCheckBox *m_oscEnabled;
     QSpinBox *m_oscPort;
     QLabel *m_oscStatus;

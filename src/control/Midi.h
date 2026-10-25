@@ -49,4 +49,24 @@ private:
     std::unique_ptr<Backend> d;
 };
 
+// MIDI output to the chosen devices (controller feedback: button LEDs, motor faders, LED rings).
+class MidiOutput : public QObject
+{
+    Q_OBJECT
+public:
+    explicit MidiOutput(QObject *parent = nullptr);
+    ~MidiOutput() override;
+
+    QStringList availableDevices() const;
+    void setOpenDevices(const QStringList &names);
+    QStringList openDevices() const;
+    // A channel message (note on/off, CC) to every open device.
+    void send(quint8 status, quint8 data1, quint8 data2);
+
+    struct Backend;
+
+private:
+    std::unique_ptr<Backend> d;
+};
+
 Q_DECLARE_METATYPE(MidiMessage)
