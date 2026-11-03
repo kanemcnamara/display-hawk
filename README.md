@@ -283,3 +283,9 @@ src/media    MediaSource (video via Qt Multimedia, still images, HAP); HapPlayer
              MovReader (QuickTime sample tables), Snappy
 src/ui       MainWindow, CanvasView (editors), ClipDeck, OutputWindow, IdentifyOverlay, PropertyPanel
 ```
+
+## Licence
+
+Display Hawk is free and open source under the [MIT licence](LICENSE).
+
+It is built with Qt 6 and FFmpeg (both LGPL, dynamically linked, so you can swap in your own builds) and includes the BSD-licensed Spout2 and Syphon SDKs. The installers ship `LICENSE`, `THIRD_PARTY_NOTICES.md` and the `LICENSES/` folder. **Help → About Display Hawk** in the app links to them. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for every bundled component, its licence and where to get its source code.

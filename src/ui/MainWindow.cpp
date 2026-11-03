@@ -49,6 +49,7 @@
 #include <QAudioDevice>
 #include <QMediaDevices>
 #include <QApplication>
+#include "version.h"
 #include <QCloseEvent>
 #include <QComboBox>
 #include <QDateTime>
@@ -442,6 +443,30 @@ void MainWindow::buildActions()
     QMenu *view = menuBar()->addMenu(tr("&View"));
     view->addAction(m_setupAction);
     view->addAction(tr("Reset layout"), this, [this] { restoreState(m_defaultState); });
+
+    QMenu *help = menuBar()->addMenu(tr("&Help"));
+    QAction *about = help->addAction(tr("&About Display Hawk"), this, [this] {
+        // The notices ship beside the .exe on Windows and in Contents/Resources on macOS.
+        const QString dir = QCoreApplication::applicationDirPath();
+        QString notices = dir + QStringLiteral("/THIRD_PARTY_NOTICES.md");
+        if (!QFileInfo::exists(notices))
+            notices = dir + QStringLiteral("/../Resources/THIRD_PARTY_NOTICES.md");
+        const QString noticesLink = QFileInfo::exists(notices)
+            ? QStringLiteral("<a href=\"%1\">%2</a>")
+                  .arg(QUrl::fromLocalFile(QFileInfo(notices).canonicalFilePath()).toString(), tr("Third-party notices"))
+            : tr("Third-party notices: THIRD_PARTY_NOTICES.md in the source code");
+        QMessageBox::about(this, tr("About Display Hawk"),
+            tr("<h3>Display Hawk %1</h3>"
+               "<p>Media server for LED walls.</p>"
+               "<p>Copyright &copy; 2026 Kane McNamara. Released under the MIT licence.</p>"
+               "<p>Built with Qt %2 (LGPLv3) and FFmpeg (LGPLv2.1+), which you may replace with your own "
+               "builds, Spout2 (BSD-2-Clause) and Syphon (BSD-3-Clause).<br>"
+               "NDI&reg; is a registered trademark of Vizrt NDI AB (<a href=\"https://ndi.video\">ndi.video</a>).</p>"
+               "<p>%3</p>")
+                .arg(QStringLiteral(DH_VERSION_STRING), QString::fromLatin1(qVersion()), noticesLink));
+    });
+    about->setMenuRole(QAction::AboutRole);
+    help->addAction(tr("About &Qt"), qApp, &QApplication::aboutQt)->setMenuRole(QAction::AboutQtRole);
 
     QToolBar *tb = addToolBar(tr("Main"));
     tb->setObjectName(QStringLiteral("main"));

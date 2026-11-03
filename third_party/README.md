@@ -1,6 +1,6 @@
 # Third-party code
 
-Vendored unmodified (except where noted) so Display Hawk builds with no extra downloads.
+Vendored unmodified (except where noted) so Display Hawk builds with no extra downloads. Their copyright notices are reproduced in `../THIRD_PARTY_NOTICES.md`, which ships with the installers.
 
 | Folder | Project | Version | Licence |
 | --- | --- | --- | --- |
