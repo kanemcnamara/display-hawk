@@ -198,7 +198,7 @@ Each clip (select it in the deck) has:
 Each layer has a **transition** time and **style** (crossfade, wipes, pushes in four directions, zoom), and **autopilot**: move to the next or a random clip when a movie reaches its end (or completes a loop), or after a set time for stills, patterns and live inputs.
 ## Using it
 
-Two windows, as in Resolume:
+Two windows:
 
 - The **main window** is for running the show: the **Clip Deck** on top (tempo, crossfader, master and blackout in its bar), and along the bottom **Properties** (tabs for the *Composition*: groups and composition effects; the selected *Layer*; the selected *Clip*), the **Output** monitor (the composition as it goes out), the clip **Preview** and the **Media** browser. Docks can be moved, tabbed or closed; *View → Reset layout* puts them back.
 - **Output → Output Setup…** (Ctrl/Cmd+Shift+O) opens the setup in a window of its own: the tree of walls, screens and slices, the input and output maps and their properties. Set it up, close it, and the main window has the room. It reopens where it was, and is reopened at launch if it was open when the app closed. Undo, save, live and the add/delete shortcuts work in both windows.
