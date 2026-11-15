@@ -24,7 +24,7 @@ jobs:
         include:
           - os: windows-2022
             arch: win64_msvc2022_64
-          - os: macos-14
+          - os: macos-15
             arch: clang_64
     runs-on: ${{ matrix.os }}
     steps:
@@ -41,7 +41,7 @@ jobs:
         if: runner.os == 'Windows'
 
       - name: Install Ninja
-        run: pip install ninja
+        run: pip install ninja || brew install ninja
 
       - name: Version
         id: version
