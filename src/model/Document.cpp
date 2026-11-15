@@ -534,6 +534,26 @@ void Document::setEffectParam(int layer, int effect, int param, double value)
     emit changed();
 }
 
+void Document::setLayerTransform(int layer, double posX, double posY, double scale, double rotation)
+{
+    if (layer < 0 || layer >= m_project.layers.size())
+        return;
+    auto set = [&](Layer &l) {
+        l.posX = posX;
+        l.posY = posY;
+        l.scaleBy = qBound(0.01, scale, 20.0);
+        l.rotation = rotation;
+    };
+    Layer &l = m_project.layers[layer];
+    set(l);
+    // Like effect parameters: the undo baseline follows, so a fader move is not an undo step.
+    for (Layer &c : m_committed.layers)
+        if (c.id == l.id)
+            set(c);
+    setModified(true);
+    emit changed();
+}
+
 void Document::setLayerPlayback(int layer, double opacity, bool bypass, bool solo)
 {
     if (layer < 0 || layer >= m_project.layers.size())

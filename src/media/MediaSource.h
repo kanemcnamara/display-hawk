@@ -3,6 +3,7 @@
 #include "media/HapDecoder.h"
 #include "media/HapPlayer.h"
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QObject>
 #include <QVideoFrame>
@@ -15,9 +16,11 @@ class QCamera;
 class QMediaCaptureSession;
 class QMediaPlayer;
 class QThread;
+class QTimer;
 class QVideoSink;
 
-// Loads a still image, plays a HAP movie (GPU-compressed frames, read on a worker thread),
+// Loads a still image, plays an animated image (GIF, animated WebP: decoded once, then timed here
+// like a movie), plays a HAP movie (GPU-compressed frames, read on a worker thread),
 // decodes any other video through Qt Multimedia, or shows a live input: a camera / capture card
 // ("capture:<device id>") or an NDI source ("ndi:<source name>"). Frames are pushed out through signals that may be
 // emitted from other threads; connect with Qt::DirectConnection to thread-safe receivers.
@@ -70,6 +73,9 @@ private:
     void stopLive();
     void openCapture(const QString &deviceId);
     void openNdi(const QString &sourceName);
+    bool openAnimation(const QString &path); // false: not animated (a still image)
+    void animTick();
+    void animRestart();
 
     QMediaPlayer *m_player = nullptr;
     QVideoSink *m_sink = nullptr;
@@ -90,4 +96,16 @@ private:
     void applyPlayerPlayback();
     void onPlayerPosition(qint64 ms);
     void syncSoundtrack(); // HAP: keeps the audio-only decoder at the pictures' position and speed
+
+    // Animated images: every frame (RGBA8888) and when it ends, in ms from the start.
+    QVector<QImage> m_animFrames;
+    QVector<int> m_animEnds;
+    QTimer *m_animTimer = nullptr;
+    QElapsedTimer m_animClock;
+    qint64 m_animLast = 0;
+    double m_animPos = 0.0; // ms into the animation
+    int m_animDir = 1;
+    int m_animShown = -1;
+    bool m_animPlaying = false;
+    bool isAnim() const { return !m_animFrames.isEmpty(); }
 };

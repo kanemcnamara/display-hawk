@@ -98,6 +98,12 @@ private:
     // Layer
     QLineEdit *m_layerName;
     QDoubleSpinBox *m_layerOpacity, *m_layerVolume;
+    QDoubleSpinBox *m_layerX, *m_layerY, *m_layerScale, *m_layerRotation;
+    struct LayerRemote {
+        QDoubleSpinBox *spin;
+        QString osc, range;
+    };
+    QVector<LayerRemote> m_layerTransformRemote;
     QComboBox *m_layerBlend, *m_layerTarget;
     QSpinBox *m_layerTransition;
     QCheckBox *m_layerBypass, *m_layerSolo;

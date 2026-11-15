@@ -536,15 +536,44 @@ QString controlActionName(ControlAction a)
     case ControlAction::Crossfader: return QStringLiteral("Crossfader (A/B)");
     case ControlAction::CueGo: return QStringLiteral("Cue GO");
     case ControlAction::CueBack: return QStringLiteral("Cue back");
+    case ControlAction::LayerPositionX: return QStringLiteral("Layer position X");
+    case ControlAction::LayerPositionY: return QStringLiteral("Layer position Y");
+    case ControlAction::LayerScale: return QStringLiteral("Layer scale");
+    case ControlAction::LayerRotation: return QStringLiteral("Layer rotation");
     }
     return {};
+}
+
+double layerTransformFromNormalized(const Project &p, ControlAction a, double v)
+{
+    v = qBound(0.0, v, 1.0);
+    switch (a) {
+    case ControlAction::LayerPositionX: return (v - 0.5) * 2.0 * p.compWidth;
+    case ControlAction::LayerPositionY: return (v - 0.5) * 2.0 * p.compHeight;
+    case ControlAction::LayerScale: return qMax(0.01, v * 2.0);
+    case ControlAction::LayerRotation: return (v - 0.5) * 360.0;
+    default: return 0.0;
+    }
+}
+
+double layerTransformNormalized(const Project &p, const Layer &l, ControlAction a)
+{
+    double v = 0.0;
+    switch (a) {
+    case ControlAction::LayerPositionX: v = 0.5 + l.posX / (2.0 * qMax(1, p.compWidth)); break;
+    case ControlAction::LayerPositionY: v = 0.5 + l.posY / (2.0 * qMax(1, p.compHeight)); break;
+    case ControlAction::LayerScale: v = l.scaleBy / 2.0; break;
+    case ControlAction::LayerRotation: v = 0.5 + l.rotation / 360.0; break;
+    default: break;
+    }
+    return qBound(0.0, v, 1.0);
 }
 
 bool controlActionUsesLayer(ControlAction a)
 {
     return a == ControlAction::TriggerClip || a == ControlAction::LayerOpacity || a == ControlAction::LayerBypass
            || a == ControlAction::LayerSolo || a == ControlAction::ClearLayer || a == ControlAction::LayerVolume
-           || a == ControlAction::EffectParam;
+           || a == ControlAction::EffectParam || isLayerTransformAction(a);
 }
 
 bool controlActionUsesColumn(ControlAction a)
@@ -1001,6 +1030,7 @@ QJsonObject Project::toJson() const
                                     {"autopilotSeconds", l.autopilotSeconds},
                                     {"activeColumn", l.activeColumn},
                                     {"effects", effectsToJson(l.effects)},
+                                    {"transform", QJsonArray{l.posX, l.posY, l.scaleBy, l.rotation}},
                                     {"clips", clipArr}});
     }
     root["deck"] = QJsonObject{{"columns", columns}, {"layers", layerArr}};
@@ -1206,6 +1236,12 @@ Project Project::fromJson(const QJsonObject &root)
             l.autopilotSeconds = qBound(0.5, o["autopilotSeconds"].toDouble(10.0), 3600.0);
             l.activeColumn = o["activeColumn"].toInt(-1);
             l.effects = effectsFromJson(o["effects"].toArray());
+            if (const QJsonArray t = o["transform"].toArray(); t.size() >= 4) {
+                l.posX = t[0].toDouble();
+                l.posY = t[1].toDouble();
+                l.scaleBy = qBound(0.01, t[2].toDouble(1.0), 20.0);
+                l.rotation = t[3].toDouble();
+            }
             for (const QJsonValue &cv : o["clips"].toArray())
                 l.clips.append(clipFromJson(cv.toObject()));
             p.layers.append(l);

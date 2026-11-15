@@ -196,6 +196,12 @@ QHash<int, int> ControlFeedback::midiState(const Project &p, bool live, bool bea
         case ControlAction::Crossfader: v = scaled(p.crossfader); break;
         case ControlAction::LayerOpacity: v = l ? scaled(l->opacity) : 0; break;
         case ControlAction::LayerVolume: v = l ? scaled(l->volume) : 0; break;
+        case ControlAction::LayerPositionX:
+        case ControlAction::LayerPositionY:
+        case ControlAction::LayerScale:
+        case ControlAction::LayerRotation:
+            v = l ? scaled(layerTransformNormalized(p, *l, c.action)) : 0;
+            break;
         case ControlAction::EffectParam: {
             const double n = effectParamNormalized(p, c.layer, c.column, c.param);
             v = n < 0 ? 0 : scaled(n);

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
+#include <QtMath>
 #include <rhi/qrhi_platform.h>
 
 namespace {
@@ -1216,13 +1217,18 @@ void RenderThread::renderComposition(QRhiCommandBuffer *cb)
         lp.texFlipY = m_rhi->isYUpInFramebuffer();
         lp.opacity = float(opacity);
         lp.blend = blendNeedsShader(layer.blend) ? RhiQuad::Blend::Normal : RhiQuad::fromLayer(layer.blend);
+        QVector<RhiQuad::Params> layerQuad{lp};
+        // The layer's own transform, about the centre of its (upright) area.
+        if (layer.hasTransform())
+            transformDraws(layerQuad, 0, QRectF(target).center(), layer.scaleBy, QPointF(layer.posX, layer.posY),
+                           layer.rotation, {});
         // Clips were fitted into the wall as if it were upright; the layer turns with the wall.
         if (layer.targetWall >= 0 && layer.targetWall < p.walls.size() && p.walls[layer.targetWall].rotated()) {
             const LedWall &w = p.walls[layer.targetWall];
-            lp.dstAngle = w.angle;
-            lp.pivot = QRectF(w.rect()).center();
+            const QPointF c = QRectF(w.rect()).center();
+            transformDraws(layerQuad, 0, c, 1.0, {}, w.angle, {});
         }
-        mixLayer(cb, groupMix ? *groupMix : m_compMix, lp, layer.blend, compSize);
+        mixLayer(cb, groupMix ? *groupMix : m_compMix, layerQuad.first(), layer.blend, compSize);
     }
     closeGroup();
 
@@ -1419,8 +1425,19 @@ void RenderThread::transformDraws(QVector<RhiQuad::Params> &draws, int from, con
         if (qp.dstAngle != 0.0)
             qp.pivot = centre + (qp.pivot - centre) * scale + offset;
         if (rotation != 0.0) {
+            // Turning about the moved centre. A quad already turned about its own pivot (a clip's
+            // rotation, inside a turned layer) keeps that pivot, carried round with the quad.
+            const QPointF turnAbout = centre + offset;
+            if (qp.dstAngle == 0.0) {
+                qp.pivot = turnAbout;
+            } else {
+                const double a = qDegreesToRadians(rotation), cs = std::cos(a), sn = std::sin(a);
+                const QPointF d = qp.pivot - turnAbout;
+                const QPointF moved = turnAbout + QPointF(cs * d.x() - sn * d.y(), sn * d.x() + cs * d.y());
+                qp.dst.translate(moved - qp.pivot);
+                qp.pivot = moved;
+            }
             qp.dstAngle += rotation;
-            qp.pivot = centre + offset;
         }
         if (!scissor.isNull()) { // a wipe; zero width at its start
             qp.clip = qp.clip.isEmpty() ? scissor.toRect() : qp.clip.intersected(scissor.toRect());

@@ -123,6 +123,8 @@ public:
     void setQuantizer(const std::function<int(int beats)> &msUntil) { m_quantizer = msUntil; }
     // Live control of an effect parameter (OSC/MIDI): no undo step per message. layer -1 = composition.
     void setEffectParam(int layer, int effect, int param, double value);
+    // Live control of a layer's transform (OSC/MIDI), in its own units: no undo step per message.
+    void setLayerTransform(int layer, double posX, double posY, double scale, double rotation);
 
     // Undo works on whole-project snapshots. Rapid edits (drags, typing) are grouped: a step is
     // committed when commitUndo() is called (e.g. on mouse release) or after a short pause.

@@ -26,6 +26,7 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMenu>
 #include <QMediaDevices>
 #include <QPushButton>
 #include <QScreen>
@@ -456,6 +457,47 @@ QWidget *PropertyPanel::buildLayerPage()
     f->addRow(QString(), row({m_layerBypass, m_layerSolo}));
     v->addWidget(box);
 
+    // Transform of the whole layer, after its effects.
+    auto *ltf = new QGroupBox(tr("Transform"));
+    auto *ltl = new QFormLayout(ltf);
+    m_layerX = makeDouble(-100000, 100000, 0, QStringLiteral(" px"));
+    m_layerY = makeDouble(-100000, 100000, 0, QStringLiteral(" px"));
+    m_layerScale = makeDouble(1, 2000, 0, QStringLiteral(" %"));
+    m_layerRotation = makeDouble(-360, 360, 1, QStringLiteral("\u00B0"));
+    ltf->setToolTip(tr("Moves, scales and turns the whole layer (all its clips, after the layer's effects) "
+                       "about the centre of its area"));
+    auto *resetLayerTransform = new QPushButton(tr("Reset"));
+    ltl->addRow(tr("Position"), row({m_layerX, m_layerY}));
+    ltl->addRow(tr("Scale / rotate"), row({m_layerScale, m_layerRotation}));
+    ltl->addRow(QString(), row({resetLayerTransform}));
+    v->addWidget(ltf);
+    // Remote control: OSC address in the tooltip, right-click to learn a MIDI control.
+    const struct {
+        QDoubleSpinBox *spin;
+        ControlAction action;
+        const char *osc;
+        const char *range;
+    } remote[] = {
+        {m_layerX, ControlAction::LayerPositionX, "position/x", QT_TR_NOOP("0.5 = centred")},
+        {m_layerY, ControlAction::LayerPositionY, "position/y", QT_TR_NOOP("0.5 = centred")},
+        {m_layerScale, ControlAction::LayerScale, "scale", QT_TR_NOOP("0..1 = 0..200 %")},
+        {m_layerRotation, ControlAction::LayerRotation, "rotation", QT_TR_NOOP("0..1 = -180..180\u00B0")},
+    };
+    for (const auto &r : remote) {
+        QDoubleSpinBox *spin = r.spin;
+        const ControlAction action = r.action;
+        const QString osc = QString::fromLatin1(r.osc), range = tr(r.range);
+        spin->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(spin, &QWidget::customContextMenuRequested, this, [this, spin, action](const QPoint &pos) {
+            QMenu m;
+            m.addAction(tr("Learn MIDI control..."), this, [this, action] {
+                emit midiLearnRequested(int(action), m_sel.layer, 0, 0);
+            });
+            m.exec(spin->mapToGlobal(pos));
+        });
+        m_layerTransformRemote.append({spin, osc, range});
+    }
+
     auto *fx = new QGroupBox(tr("Effects"));
     auto *fxl = new QVBoxLayout(fx);
     m_layerFx = new EffectChainEditor(m_doc);
@@ -502,6 +544,22 @@ QWidget *PropertyPanel::buildLayerPage()
     connect(m_layerTransition, &QSpinBox::valueChanged, this, [this](int ms) {
         if (!m_refreshing)
             editLayer([&](Layer &l) { l.transitionMs = ms; });
+    });
+    auto layerNumber = [this](QDoubleSpinBox *spin, const std::function<void(Layer &, double)> &set) {
+        connect(spin, &QDoubleSpinBox::valueChanged, this, [this, set](double v) {
+            if (!m_refreshing)
+                editLayer([&](Layer &l) { set(l, v); });
+        });
+    };
+    layerNumber(m_layerX, [](Layer &l, double v) { l.posX = v; });
+    layerNumber(m_layerY, [](Layer &l, double v) { l.posY = v; });
+    layerNumber(m_layerScale, [](Layer &l, double v) { l.scaleBy = v / 100.0; });
+    layerNumber(m_layerRotation, [](Layer &l, double v) { l.rotation = v; });
+    connect(resetLayerTransform, &QPushButton::clicked, this, [this] {
+        editLayer([](Layer &l) {
+            l.posX = l.posY = l.rotation = 0.0;
+            l.scaleBy = 1.0;
+        });
     });
     // Opacity, bypass and solo are performance controls: not undo steps.
     auto playback = [this] {
@@ -551,6 +609,14 @@ void PropertyPanel::refreshLayer()
     m_autopilot->setCurrentIndex(int(l->autopilot));
     setValue(m_autopilotSeconds, l->autopilotSeconds);
     m_autopilotSeconds->setEnabled(l->autopilot != ::Autopilot::Off);
+    for (const LayerRemote &r : m_layerTransformRemote)
+        r.spin->setToolTip(tr("OSC: /dh/layer/%1/%2 f 0..1 (%3)\nRight-click to learn a MIDI control")
+                               .arg(m_sel.layer + 1)
+                               .arg(r.osc, r.range));
+    setValue(m_layerX, l->posX);
+    setValue(m_layerY, l->posY);
+    setValue(m_layerScale, l->scaleBy * 100.0);
+    setValue(m_layerRotation, l->rotation);
     m_layerBypass->setChecked(l->bypass);
     m_layerSolo->setChecked(l->solo);
     const Project &p = m_doc->project();

@@ -191,9 +191,11 @@ Display Hawk loads **ISF** (Interactive Shader Format, isf.video) shaders: put `
 Each clip (select it in the deck) has:
 
 - **Trigger**: *Retrigger* restarts it, *Toggle* stops it when triggered again, *Piano* plays it only while the mouse button, MIDI note or OSC value (1, then 0) is held.
-- **Playback** (movies): *At the end*: loop, bounce, play once and hold, or play once and clear the layer. *Speed* 0.05x to 8x, *Reverse*, *In / out* points (looping and play-once respect them), and a *Position* bar to scrub. Reverse and bounce need HAP movies (frame-exact); other formats play forwards and bounce loops. Playing movies show their progress (and in/out range) under their thumbnail in the deck.
+- **Playback** (movies): *At the end*: loop, bounce, play once and hold, or play once and clear the layer. *Speed* 0.05x to 8x, *Reverse*, *In / out* points (looping and play-once respect them), and a *Position* bar to scrub. Reverse and bounce need HAP movies (frame-exact); other formats play forwards and bounce loops. **Animated GIFs** (and animated WebP) play like movies, with all of these controls, reverse and bounce included; they are decoded into memory once (up to 1 GB, beyond which only the first part plays). Playing movies show their progress (and in/out range) under their thumbnail in the deck.
 - **Transform**: position, scale, rotation and opacity within the layer's area.
 - **Clip effects**: an effect chain of its own, applied before the layer mixes the clip.
+
+Each layer has its own **Transform** too (layer properties): position, scale and rotation of the whole layer about the centre of its area, applied after the layer's effects and before it is blended, so it moves every clip on the layer (and whatever their transforms do) as one picture. On a rotated wall it turns with the wall. Live control: OSC `/dh/layer/<l>/position/x`, `/position/y`, `/scale` and `/rotation` take 0..1 with 0.5 as the resting value (centred, 100 %, upright); position spans minus to plus the composition size, scale 0..200 %, rotation -180..180°. The same four are MIDI-mappable (right-click a field → *Learn MIDI control*, or *Layer position X* etc. in the OSC & MIDI window), send motor-fader feedback, and like effect parameters change the show without adding undo steps.
 
 Each layer has a **transition** time and **style** (crossfade, wipes, pushes in four directions, zoom), and **autopilot**: move to the next or a random clip when a movie reaches its end (or completes a loop), or after a set time for stills, patterns and live inputs.
 ## Using it

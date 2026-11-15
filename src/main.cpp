@@ -434,6 +434,20 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         }
         sender.writeDatagram(bundle, QHostAddress::LocalHost, quint16(router->oscPort()));
         check(waitFor([&] { return p.master > 0.99 && p.layers[0].opacity > 0.99; }, 3000), "OSC bundle");
+        // Layer transform: 0..1 around a centre of 0.5; live control is not an undo step.
+        const bool couldUndo = doc.canUndo();
+        send(QStringLiteral("/dh/layer/1/position/x"), {0.75});
+        send(QStringLiteral("/dh/layer/1/scale"), {0.25});
+        send(QStringLiteral("/dh/layer/1/rotation"), {0.75});
+        const bool transformed = waitFor([&] {
+            const Layer &l = p.layers[0];
+            return qAbs(l.posX - p.compWidth / 2.0) < 0.5 && qAbs(l.scaleBy - 0.5) < 0.001 && qAbs(l.rotation - 90.0) < 0.01;
+        }, 3000);
+        check(transformed && doc.canUndo() == couldUndo, "OSC layer position, scale and rotation (no undo step)");
+        send(QStringLiteral("/dh/layer/1/position/x"), {0.5});
+        send(QStringLiteral("/dh/layer/1/scale"), {0.5});
+        send(QStringLiteral("/dh/layer/1/rotation"), {0.5});
+        check(waitFor([&] { return !p.layers[0].hasTransform(); }, 3000), "OSC 0.5 puts the layer back");
         window.showControls(); // the OSC & MIDI window with the mappings learned below
         router->setOsc(false, 0, nullptr, false);
     }
@@ -1371,6 +1385,58 @@ static int runSelfTest(QApplication &app, Document &doc, RenderEngine &engine, M
         save(previews[0], "clip-transform");
         check(scaled && moved, "clip transform scales and moves the clip");
         p.layers[0].clips[col + 1].posX = 0.0;
+
+        // Layer transform: the same for the whole layer, and a turn empties the corners.
+        p.layers[0].scaleBy = 0.5;
+        doc.notifyChanged();
+        const bool layerScaled = waitFor([&] { return qGray(at(0.05, 0.05).rgb()) < 10 && near(at(0.5, 0.5), 0, 0, 255); });
+        p.layers[0].scaleBy = 1.0;
+        p.layers[0].posX = p.compWidth / 2.0;
+        doc.notifyChanged();
+        const bool layerMoved = waitFor([&] { return qGray(at(0.25, 0.5).rgb()) < 10 && near(at(0.75, 0.5), 0, 0, 255); });
+        p.layers[0].posX = 0.0;
+        p.layers[0].rotation = 45.0;
+        doc.notifyChanged();
+        const bool layerTurned = waitFor([&] { return qGray(at(0.02, 0.02).rgb()) < 10 && near(at(0.5, 0.5), 0, 0, 255); });
+        save(previews[0], "layer-transform");
+        check(layerScaled && layerMoved && layerTurned, "layer transform scales, moves and turns the layer");
+        p.layers[0].rotation = 0.0;
+        doc.notifyChanged();
+
+        // Animated GIF: two 1x1 frames, red then blue, 100 ms each, play in a loop.
+        {
+            QByteArray gif("GIF89a\x01\x00\x01\x00\x80\x00\x00", 13); // 1x1, 2-colour global table
+            gif.append("\xff\x00\x00\x00\x00\x00", 6);                 // red, black
+            gif.append("\x21\xff\x0bNETSCAPE2.0\x03\x01\x00\x00\x00", 19); // loop forever
+            for (const char *colour : {"\xff\x00\x00", "\x00\x00\xff"}) {
+                gif.append("\x21\xf9\x04\x00\x0a\x00\x00\x00", 8);           // 100 ms
+                gif.append("\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x80", 10); // 1x1, local table
+                gif.append(colour, 3);
+                gif.append("\x00\x00\x00", 3);
+                gif.append("\x02\x02\x44\x01\x00", 5); // LZW: one pixel of colour 0
+            }
+            gif.append('\x3b');
+            const QString gifPath = QDir::temp().filePath(QStringLiteral("displayhawk-selftest.gif"));
+            QFile f(gifPath);
+            if (f.open(QIODevice::WriteOnly)) {
+                f.write(gif);
+                f.close();
+            }
+            doc.setClip(0, col, Clip::fromMedia(gifPath));
+            p.layers[0].clips[col].scale = ScaleMode::Stretch;
+            doc.notifyChanged();
+            doc.triggerClip(0, col);
+            const bool gotRed = waitFor([&] { return near(at(0.5, 0.5), 255, 0, 0); }, 3000);
+            const bool gotBlue = gotRed && waitFor([&] { return near(at(0.5, 0.5), 0, 0, 255); }, 3000);
+            const bool again = gotBlue && waitFor([&] { return near(at(0.5, 0.5), 255, 0, 0); }, 3000);
+            const MediaSource *gm = engine.mediaFor(p.layers[0].clips[col].id);
+            check(gotRed && gotBlue && again && gm && gm->isVideo() && gm->durationSeconds() > 0.15,
+                  "animated GIF plays its frames in a loop");
+            doc.setClip(0, col, red);
+            doc.notifyChanged();
+            doc.triggerClip(0, col + 1);
+            QFile::remove(gifPath);
+        }
 
         // Clip effects: invert on the clip turns blue to yellow.
         p.layers[0].clips[col + 1].effects = {makeEffect(QStringLiteral("invert"))};

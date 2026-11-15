@@ -304,6 +304,12 @@ struct Layer {
     int activeColumn = -1; // playback state: which clip is playing, -1 = none
     QVector<Clip> clips;   // one slot per column
     QVector<EffectInstance> effects; // applied to the layer before it is blended
+    // Transform of the whole layer (after its effects, before it is blended), like a clip's: offset
+    // in pixels, scale and clockwise rotation about the centre of the layer's area.
+    double posX = 0.0, posY = 0.0;
+    double scaleBy = 1.0;
+    double rotation = 0.0;
+    bool hasTransform() const { return posX != 0.0 || posY != 0.0 || scaleBy != 1.0 || rotation != 0.0; }
 
     const Clip *activeClip() const;
 };
@@ -366,9 +372,22 @@ enum class ControlAction {
     Crossfader,     // continuous: 0 = A, 1 = B
     CueGo,          // trigger: the next cue
     CueBack,        // trigger: back one cue (fires it again)
+    LayerPositionX, // continuous (layer): 0..1 = minus to plus the composition width, 0.5 = centred
+    LayerPositionY, // continuous (layer): the same with the height
+    LayerScale,     // continuous (layer): 0..1 = 0..200 %, 0.5 = 100 %
+    LayerRotation,  // continuous (layer): 0..1 = -180..180 degrees, 0.5 = upright
 };
-constexpr int kControlActionCount = int(ControlAction::CueBack) + 1;
+constexpr int kControlActionCount = int(ControlAction::LayerRotation) + 1;
 QString controlActionName(ControlAction a);
+inline bool isLayerTransformAction(ControlAction a)
+{
+    return a >= ControlAction::LayerPositionX && a <= ControlAction::LayerRotation;
+}
+struct Layer;
+struct Project;
+// A layer transform action's value as a controller sends it (0..1) and back.
+double layerTransformFromNormalized(const Project &p, ControlAction a, double v);
+double layerTransformNormalized(const Project &p, const Layer &l, ControlAction a);
 bool controlActionUsesLayer(ControlAction a);
 bool controlActionUsesColumn(ControlAction a);
 

@@ -31,6 +31,10 @@ Kind kindOf(ControlAction a)
     case ControlAction::AudioMaster:
     case ControlAction::EffectParam:
     case ControlAction::Crossfader:
+    case ControlAction::LayerPositionX:
+    case ControlAction::LayerPositionY:
+    case ControlAction::LayerScale:
+    case ControlAction::LayerRotation:
         return Kind::Continuous;
     case ControlAction::AudioMute:
     case ControlAction::Blackout:
@@ -196,6 +200,14 @@ void ControlRouter::handleOsc(const OscMessage &m, const QString &from)
             apply(ControlAction::LayerOpacity, layer, 0, value, Mode::Value);
         else if (what == QLatin1String("volume") && hasArg)
             apply(ControlAction::LayerVolume, layer, 0, value, Mode::Value);
+        else if (what == QLatin1String("position") && p.value(4) == QLatin1String("x") && hasArg)
+            apply(ControlAction::LayerPositionX, layer, 0, value, Mode::Value);
+        else if (what == QLatin1String("position") && p.value(4) == QLatin1String("y") && hasArg)
+            apply(ControlAction::LayerPositionY, layer, 0, value, Mode::Value);
+        else if (what == QLatin1String("scale") && hasArg)
+            apply(ControlAction::LayerScale, layer, 0, value, Mode::Value);
+        else if (what == QLatin1String("rotation") && hasArg)
+            apply(ControlAction::LayerRotation, layer, 0, value, Mode::Value);
         else if (what == QLatin1String("bypass"))
             apply(ControlAction::LayerBypass, layer, 0, value, toggleMode);
         else if (what == QLatin1String("solo"))
@@ -354,6 +366,22 @@ void ControlRouter::apply(ControlAction action, int layer, int column, double va
     case ControlAction::LayerVolume:
         if (layerOk)
             m_doc->setLayerVolume(layer, value);
+        break;
+    case ControlAction::LayerPositionX:
+    case ControlAction::LayerPositionY:
+    case ControlAction::LayerScale:
+    case ControlAction::LayerRotation:
+        if (layerOk) {
+            Layer l = p.layers[layer];
+            const double v = layerTransformFromNormalized(p, action, value);
+            switch (action) {
+            case ControlAction::LayerPositionX: l.posX = v; break;
+            case ControlAction::LayerPositionY: l.posY = v; break;
+            case ControlAction::LayerScale: l.scaleBy = v; break;
+            default: l.rotation = v; break;
+            }
+            m_doc->setLayerTransform(layer, l.posX, l.posY, l.scaleBy, l.rotation);
+        }
         break;
     case ControlAction::AudioMaster:
         m_doc->setAudioMaster(value);
@@ -647,6 +675,9 @@ QString ControlRouter::oscReference()
         "<tt>/dh/layer/2/clip/4/trigger</tt><br>"
         "<tt>/dh/layer/2/opacity</tt> f 0..1 &nbsp; <tt>/dh/layer/2/bypass</tt> [0|1] &nbsp; "
         "<tt>/dh/layer/2/solo</tt> [0|1] &nbsp; <tt>/dh/layer/2/clear</tt> &nbsp; <tt>/dh/layer/2/volume</tt> f 0..1<br>"
+        "<tt>/dh/layer/2/position/x</tt>, <tt>/position/y</tt>, <tt>/scale</tt>, <tt>/rotation</tt> f 0..1 "
+        "(0.5 = centred, 100 %, upright; position spans plus/minus the composition size, scale 0..200 %, "
+        "rotation -180..180&deg;)<br>"
         "<tt>/dh/audio/master</tt> f 0..1 &nbsp; <tt>/dh/audio/mute</tt> [0|1]<br>"
         "Toggles without an argument flip. Triggers ignore 0 (button release).");
 }

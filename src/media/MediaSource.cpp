@@ -15,15 +15,24 @@
 #include <QImageReader>
 #include <QMediaPlayer>
 #include <QThread>
+#include <QTimer>
 #include <QUrl>
 #include <QVideoSink>
+
+#include <algorithm>
+#include <cmath>
 
 MediaSource::MediaSource(QObject *parent)
     : QObject(parent)
     , m_player(new QMediaPlayer(this))
     , m_sink(new QVideoSink(this))
     , m_audio(new QAudioOutput(this))
+    , m_animTimer(new QTimer(this))
 {
+    // Animated images: GIF delays are in hundredths of a second, so a 5 ms tick is close enough.
+    m_animTimer->setTimerType(Qt::PreciseTimer);
+    m_animTimer->setInterval(5);
+    connect(m_animTimer, &QTimer::timeout, this, &MediaSource::animTick);
     m_player->setVideoSink(m_sink);
     m_player->setAudioOutput(m_audio);
     m_audio->setVolume(0.0f); // the engine ramps it up when the clip plays
@@ -87,7 +96,9 @@ void MediaSource::open(const QString &path)
     }
 
     const QByteArray suffix = QFileInfo(path).suffix().toLower().toLatin1();
-    if (QImageReader::supportedImageFormats().contains(suffix)) {
+    if (QImageReader::supportedImageFormats().contains(suffix) && openAnimation(path)) {
+        // An animated image: plays like a movie.
+    } else if (QImageReader::supportedImageFormats().contains(suffix)) {
         QImageReader reader(path);
         reader.setAutoTransform(true);
         const QImage image = reader.read();
@@ -139,6 +150,111 @@ void MediaSource::open(const QString &path)
         m_player->play();
     }
     emit stateChanged();
+}
+
+bool MediaSource::openAnimation(const QString &path)
+{
+    QImageReader reader(path);
+    reader.setAutoTransform(true);
+    if (!reader.supportsAnimation() || reader.imageCount() == 1)
+        return false;
+    // Decode every frame once (GIF frames build on each other, so they cannot be read out of order),
+    // up to a memory budget; longer animations play their first part.
+    constexpr qint64 kBudget = qint64(1) << 30;
+    qint64 bytes = 0;
+    int at = 0;
+    QVector<QImage> frames;
+    QVector<int> ends;
+    while (reader.canRead()) {
+        QImage frame = reader.read();
+        if (frame.isNull())
+            break;
+        const int delay = reader.nextImageDelay();
+        frame = frame.convertToFormat(QImage::Format_RGBA8888); // what the renderer uploads
+        bytes += frame.sizeInBytes();
+        if (!frames.isEmpty() && bytes > kBudget) {
+            qWarning("%s: animation too large to hold in memory, playing its first %d frames",
+                     qPrintable(QFileInfo(path).fileName()), int(frames.size()));
+            break;
+        }
+        at += delay > 10 ? delay : 100; // browsers show frames of 0-10 ms for 100 ms; so do we
+        frames.append(frame);
+        ends.append(at);
+    }
+    if (frames.size() < 2)
+        return false; // not animated after all: read again as a still
+    m_animFrames = frames;
+    m_animEnds = ends;
+    m_isVideo = true;
+    m_animPlaying = true;
+    m_animClock.start();
+    m_animLast = 0;
+    animRestart();
+    m_animTimer->start();
+    return true;
+}
+
+void MediaSource::animRestart()
+{
+    const double total = m_animEnds.isEmpty() ? 0.0 : m_animEnds.last();
+    m_animDir = m_params.reverse ? -1 : 1;
+    m_animPos = m_params.reverse ? qMax(m_params.in, m_params.out) * total - 0.001 : m_params.in * total;
+    m_animShown = -1;
+    m_endedReported = false;
+    animTick();
+}
+
+void MediaSource::animTick()
+{
+    if (!isAnim())
+        return;
+    const qint64 now = m_animClock.isValid() ? m_animClock.elapsed() : 0;
+    const qint64 dt = now - m_animLast;
+    m_animLast = now;
+    const double total = m_animEnds.last();
+    const double in = qBound(0.0, m_params.in, 1.0) * total;
+    const double out = qMax(in + 1.0, qBound(0.0, m_params.out, 1.0) * total);
+    const double len = out - in;
+    const bool once = m_params.mode == PlayMode::OnceHold || m_params.mode == PlayMode::OnceClear;
+    if (m_animPlaying)
+        m_animPos += m_animDir * double(dt) * qBound(0.05, m_params.speed, 8.0);
+    auto finish = [this](double at) {
+        m_animPos = at;
+        m_animPlaying = false;
+        if (!m_endedReported) {
+            m_endedReported = true;
+            emit ended();
+        }
+        emit stateChanged();
+    };
+    if (m_animPos >= out) {
+        if (once) {
+            finish(out - 0.001);
+        } else if (m_params.mode == PlayMode::Bounce) {
+            m_animPos = qMax(in, out - 0.001 - std::fmod(m_animPos - out, len));
+            m_animDir = -1;
+        } else {
+            m_animPos = in + std::fmod(m_animPos - in, len);
+            emit looped();
+        }
+    } else if (m_animPos < in) {
+        if (once) {
+            finish(in);
+        } else if (m_params.mode == PlayMode::Bounce) {
+            m_animPos = qMin(out - 0.001, in + std::fmod(in - m_animPos, len));
+            m_animDir = 1;
+            emit looped();
+        } else {
+            m_animPos = out - 0.001 - std::fmod(in - m_animPos, len);
+            emit looped();
+        }
+    }
+    const auto it = std::upper_bound(m_animEnds.cbegin(), m_animEnds.cend(), int(m_animPos));
+    const int shown = qBound(0, int(it - m_animEnds.cbegin()), int(m_animFrames.size()) - 1);
+    if (shown != m_animShown) {
+        m_animShown = shown;
+        emit stillImage(m_animFrames[shown]);
+    }
 }
 
 void MediaSource::openCapture(const QString &deviceId)
@@ -254,6 +370,10 @@ void MediaSource::stopHap()
 void MediaSource::close()
 {
     m_isVideo = false;
+    m_animTimer->stop();
+    m_animFrames.clear();
+    m_animEnds.clear();
+    m_animPlaying = false;
     stopHap();
     stopLive();
     m_player->stop();
@@ -267,7 +387,10 @@ void MediaSource::play()
 {
     if (m_hap)
         QMetaObject::invokeMethod(m_hap, &HapPlayer::play);
-    if (m_isVideo && !isLive())
+    if (isAnim()) {
+        m_animPlaying = true;
+        emit stateChanged();
+    } else if (m_isVideo && !isLive())
         m_player->play();
 }
 
@@ -275,14 +398,20 @@ void MediaSource::pause()
 {
     if (m_hap)
         QMetaObject::invokeMethod(m_hap, &HapPlayer::pause);
-    if (m_isVideo && !isLive())
+    if (isAnim()) {
+        m_animPlaying = false;
+        emit stateChanged();
+    } else if (m_isVideo && !isLive())
         m_player->pause();
 }
 
 void MediaSource::restart()
 {
     m_endedReported = false;
-    if (m_hap) {
+    if (isAnim()) {
+        m_animPlaying = true;
+        animRestart();
+    } else if (m_hap) {
         QMetaObject::invokeMethod(m_hap, &HapPlayer::restart);
         syncSoundtrack();
     } else if (m_isVideo && !isLive()) {
@@ -295,8 +424,13 @@ void MediaSource::setPlayback(const PlaybackParams &params)
 {
     if (params == m_params)
         return;
+    const bool reverseChanged = params.reverse != m_params.reverse;
     m_params = params;
-    if (m_hap) {
+    if (isAnim()) {
+        if (reverseChanged)
+            m_animDir = params.reverse ? -1 : 1;
+        animTick(); // keeps to new in/out points
+    } else if (m_hap) {
         QMetaObject::invokeMethod(m_hap, [hap = m_hap, params] { hap->setParams(params); });
         syncSoundtrack();
     } else if (m_isVideo && !isLive()) {
@@ -359,7 +493,11 @@ void MediaSource::syncSoundtrack()
 void MediaSource::seek(double fraction)
 {
     fraction = qBound(0.0, fraction, 1.0);
-    if (m_hap) {
+    if (isAnim()) {
+        m_animPos = fraction * m_animEnds.last();
+        m_endedReported = false;
+        animTick();
+    } else if (m_hap) {
         QMetaObject::invokeMethod(m_hap, [hap = m_hap, fraction] { hap->seek(fraction); });
         if (m_player->hasAudio())
             m_player->setPosition(qint64(fraction * m_player->duration()));
@@ -370,6 +508,8 @@ void MediaSource::seek(double fraction)
 
 double MediaSource::position() const
 {
+    if (isAnim())
+        return qBound(0.0, m_animPos / m_animEnds.last(), 1.0);
     if (m_hap)
         return m_hap->position();
     if (m_isVideo && !isLive() && m_player->duration() > 0)
@@ -379,6 +519,8 @@ double MediaSource::position() const
 
 double MediaSource::durationSeconds() const
 {
+    if (isAnim())
+        return m_animEnds.last() / 1000.0;
     if (m_hap)
         return m_hap->durationSeconds();
     if (m_isVideo && !isLive())
@@ -416,6 +558,8 @@ bool MediaSource::isPlaying() const
 {
     if (isLive())
         return m_error.isEmpty();
+    if (isAnim())
+        return m_animPlaying;
     if (m_hap)
         return m_hapPlaying;
     return m_isVideo && m_player->playbackState() == QMediaPlayer::PlayingState;

@@ -20,6 +20,8 @@ class QUdpSocket;
 //   /dh/column/<c>/trigger         /dh/layer/<l>/clip/<c>/trigger
 //   /dh/layer/<l>/opacity <0..1>   /dh/layer/<l>/bypass [0|1]   /dh/layer/<l>/solo [0|1]
 //   /dh/layer/<l>/clear           /dh/layer/<l>/volume <0..1>
+//   /dh/layer/<l>/position/x <0..1>  /dh/layer/<l>/position/y <0..1>  (0.5 = centred)
+//   /dh/layer/<l>/scale <0..1> (0.5 = 100 %)  /dh/layer/<l>/rotation <0..1> (0.5 = upright)
 //   /dh/audio/master <0..1>        /dh/audio/mute [0|1]
 // Toggles without an argument flip; triggers ignore a 0 argument (button release).
 class ControlRouter : public QObject
